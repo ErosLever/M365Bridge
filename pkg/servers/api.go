@@ -320,13 +320,22 @@ func (api *APIServer) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Advertised context/output hints so harnesses do not pre-truncate prompts
+	// or output. M365 enforces its own server-side limits regardless; these are
+	// client-facing hints only, overridable via M365_CONTEXT_WINDOW and
+	// M365_MAX_OUTPUT_TOKENS.
+	contextWindow := api.config.ContextWindowTokens
+	maxOutput := api.config.MaxOutputTokens
+
 	modelList := []map[string]any{}
 	for _, cfg := range models.ModelRegistry {
 		modelList = append(modelList, map[string]any{
-			"id":       cfg.OpenAIID,
-			"object":   "model",
-			"created":  1700000000,
-			"owned_by": "microsoft",
+			"id":                cfg.OpenAIID,
+			"object":            "model",
+			"created":           1700000000,
+			"owned_by":          "microsoft",
+			"context_window":    contextWindow,
+			"max_output_tokens": maxOutput,
 		})
 	}
 
@@ -3328,10 +3337,18 @@ func writeResponsesUpstreamEmptyError(w http.ResponseWriter, stream bool, respon
 // This allows clients that cannot send custom headers/body fields (e.g. Droid
 // CLI) to encode a session ID directly in the model name, e.g.
 // "gpt5.5-reasoning:dev-test-session-001".
+//
+// An empty model key defaults to "gpt5.5-reasoning", the reasoning tone that is
+// reliable for tool calling, rather than falling back to the "auto" (Magic)
+// tone. This keeps the text endpoints consistent with the conversation and
+// image routes, which already default empty models to the same key.
 func parseModelSessionID(model string) (modelKey, sessionID string) {
 	modelKey, sessionID, found := strings.Cut(model, ":")
 	if !found {
-		return model, ""
+		modelKey = model
+	}
+	if modelKey == "" {
+		modelKey = "gpt5.5-reasoning"
 	}
 	return modelKey, sessionID
 }

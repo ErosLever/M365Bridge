@@ -42,3 +42,23 @@ func TestResponsesInputToMessagesPreservesFunctionCallOutputID(t *testing.T) {
 		t.Fatalf("message content = %q, want call ID and output", messages[0].Content)
 	}
 }
+
+func TestParseModelSessionIDDefaultsEmptyModel(t *testing.T) {
+	cases := []struct {
+		in          string
+		wantKey     string
+		wantSession string
+	}{
+		{"", "gpt5.5-reasoning", ""},
+		{":dev-session", "gpt5.5-reasoning", "dev-session"},
+		{"gpt5.5-reasoning", "gpt5.5-reasoning", ""},
+		{"quick:s1", "quick", "s1"},
+		{"claude", "claude", ""},
+	}
+	for _, c := range cases {
+		key, session := parseModelSessionID(c.in)
+		if key != c.wantKey || session != c.wantSession {
+			t.Fatalf("parseModelSessionID(%q) = (%q, %q), want (%q, %q)", c.in, key, session, c.wantKey, c.wantSession)
+		}
+	}
+}

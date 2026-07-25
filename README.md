@@ -302,14 +302,14 @@ Then follow Steps 3-6 above.
 
 ### CLI Flags
 
-| Flag            | Type   | Default | Description                                                              |
-|-----------------|--------|---------|--------------------------------------------------------------------------|
-| `-i`            | bool   | false   | Interactive mode (multi-turn conversation)                               |
+| Flag            | Type   | Default | Description                                                                                                                                                                        |
+|-----------------|--------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `-i`            | bool   | false   | Interactive mode (multi-turn conversation)                                                                                                                                         |
 | `--model`       | string | `auto`  | Model to use: `auto`, `quick`, `reasoning`, `gpt5.5`, `gpt5.5-reasoning`, `gpt5.6-reasoning`, `claude`, `claude-sonnet`, `claude-opus`, `claude-fable`, `claude-sonnet-4-20250514` |
-| `--reasoning`   | bool   | false   | Use reasoning mode                                                       |
-| `--no-stream`   | bool   | false   | Disable streaming, print full response at once                           |
-| `--list-models` | bool   | false   | List all available models and exit                                       |
-| `--version`     | bool   | false   | Show version and exit                                                    |
+| `--reasoning`   | bool   | false   | Use reasoning mode                                                                                                                                                                 |
+| `--no-stream`   | bool   | false   | Disable streaming, print full response at once                                                                                                                                     |
+| `--list-models` | bool   | false   | List all available models and exit                                                                                                                                                 |
+| `--version`     | bool   | false   | Show version and exit                                                                                                                                                              |
 
 Positional argument (if no flag consumes it): the query text for single query mode.
 
@@ -465,23 +465,23 @@ print(resp.choices[0].message.content)
 
 ## API Endpoints
 
-| Endpoint                      | Description                                         |
-|-------------------------------|-----------------------------------------------------|
-| `POST /v1/chat/completions`   | OpenAI Chat Completions (streaming + non-streaming) |
-| `POST /v1/completions`        | OpenAI text completion (streaming + non-streaming)  |
-| `POST /v1/responses`          | OpenAI Responses API (streaming + non-streaming)    |
-| `POST /v1/responses/compact`  | OpenAI Responses Compact API (Codex remote compaction) |
-| `POST /v1/messages`           | Anthropic Messages format (dedicated SSE handlers)  |
-| `POST /v1/messages/count_tokens` | Anthropic input token counting                   |
-| `POST /v1/complete`           | Anthropic Complete (FIM)                            |
-| `POST /v1/images/generations` | OpenAI Images API: generate from text (JSON body)   |
-| `POST /v1/images/edits`       | OpenAI Images API: edit existing image (multipart)  |
-| `GET /v1/conversations`       | List M365 conversations (requires M365 web cookies) |
-| `POST /v1/conversations`      | Create a conversation with an initial message       |
-| `PATCH /v1/conversations/{id}` | Rename a conversation with `{ "name": "..." }`  |
-| `DELETE /v1/conversations/{id}` | Permanently delete a conversation                  |
-| `GET /v1/models`              | Model list                                          |
-| `GET /health`                 | Health check (no auth required)                     |
+| Endpoint                         | Description                                            |
+|----------------------------------|--------------------------------------------------------|
+| `POST /v1/chat/completions`      | OpenAI Chat Completions (streaming + non-streaming)    |
+| `POST /v1/completions`           | OpenAI text completion (streaming + non-streaming)     |
+| `POST /v1/responses`             | OpenAI Responses API (streaming + non-streaming)       |
+| `POST /v1/responses/compact`     | OpenAI Responses Compact API (Codex remote compaction) |
+| `POST /v1/messages`              | Anthropic Messages format (dedicated SSE handlers)     |
+| `POST /v1/messages/count_tokens` | Anthropic input token counting                         |
+| `POST /v1/complete`              | Anthropic Complete (FIM)                               |
+| `POST /v1/images/generations`    | OpenAI Images API: generate from text (JSON body)      |
+| `POST /v1/images/edits`          | OpenAI Images API: edit existing image (multipart)     |
+| `GET /v1/conversations`          | List M365 conversations (requires M365 web cookies)    |
+| `POST /v1/conversations`         | Create a conversation with an initial message          |
+| `PATCH /v1/conversations/{id}`   | Rename a conversation with `{ "name": "..." }`         |
+| `DELETE /v1/conversations/{id}`  | Permanently delete a conversation                      |
+| `GET /v1/models`                 | Model list                                             |
+| `GET /health`                    | Health check (no auth required)                        |
 
 ## Models
 
@@ -503,17 +503,17 @@ All model selection is via the `tone` field sent to the M365 backend. The `Overr
 
 ### Which model should I use?
 
-| Use case                                     | Model              |
-|----------------------------------------------|--------------------|
-| General purpose, let backend decide          | `auto`             |
-| Fast responses, simple questions             | `quick`            |
-| Complex reasoning, multi-step problems       | `reasoning`        |
-| GPT-5.5 chat                                 | `gpt5.5`           |
-| GPT-5.5 with deep thinking                   | `gpt5.5-reasoning` |
-| GPT-5.6 with deep thinking (latest)          | `gpt5.6-reasoning` |
-| Claude Sonnet 4.6 (Anthropic)                | `claude-sonnet`    |
-| Claude Opus 4.6 (Anthropic, most capable)    | `claude-opus`      |
-| Claude Fable tone                            | `claude-fable`     |
+| Use case                                  | Model              |
+|-------------------------------------------|--------------------|
+| General purpose, let backend decide       | `auto`             |
+| Fast responses, simple questions          | `quick`            |
+| Complex reasoning, multi-step problems    | `reasoning`        |
+| GPT-5.5 chat                              | `gpt5.5`           |
+| GPT-5.5 with deep thinking                | `gpt5.5-reasoning` |
+| GPT-5.6 with deep thinking (latest)       | `gpt5.6-reasoning` |
+| Claude Sonnet 4.6 (Anthropic)             | `claude-sonnet`    |
+| Claude Opus 4.6 (Anthropic, most capable) | `claude-opus`      |
+| Claude Fable tone                         | `claude-fable`     |
 
 `gpt5.5-reasoning` produces `reasoning_content` output containing the model's thinking process. OpenAI endpoints expose this as `reasoning_content`; Anthropic endpoints expose it as a `thinking` content block before the `text` block. Claude models do not produce reasoning content.
 
@@ -530,6 +530,17 @@ This is equivalent to setting `X-Session-Id: my-session-001` header or `session_
 ### External Model Names
 
 Clients that send model names not in the registry (e.g. `claude-sonnet-4-20250514`, `gpt-4o`, `o1`) will fall back to the `auto` model. The proxy accepts any model string — unknown names do not cause errors, they just use the default model.
+
+A request that sends no model (empty `model` field, or only a `:session-id` suffix) defaults to `gpt5.5-reasoning`, the reasoning tone that is reliable for tool calling, rather than `auto`.
+
+### Advertised Context Window
+
+Each entry in `GET /v1/models` advertises `context_window` and `max_output_tokens` hints so client harnesses do not pre-truncate prompts or output. These are client-facing hints only; M365 enforces its own server-side limits regardless. Both default to `1000000` and are overridable:
+
+| Variable                 | Default   | Description                                            |
+|--------------------------|-----------|--------------------------------------------------------|
+| `M365_CONTEXT_WINDOW`    | `1000000` | Advertised context window token count in `/v1/models`. |
+| `M365_MAX_OUTPUT_TOKENS` | `1000000` | Advertised maximum output token count in `/v1/models`. |
 
 ## Tool Calling
 
@@ -644,32 +655,32 @@ When enabled, tools explicitly included in a request are recognized and executed
 
 ### Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `M365_ENABLE_CODE_TOOLS` | `0` | Main gate. Set to `1` to enable local tool execution. |
-| `M365_AUTO_EXPOSE_TOOLS` | `0` | Set to `1` to inject all built-in tool schemas when the client does not provide them. |
-| `M365_WORKSPACE_DIR` | `.` | Existing directory that confines file and Git operations. |
-| `M365_CODE_TOOL_TIMEOUT` | `30s` | Timeout for each command or test execution. Accepts Go duration syntax, such as `10s` or `2m`. |
-| `M365_CODE_TOOL_MAX_OUTPUT` | `1048576` | Maximum captured command output in bytes. Longer output is truncated. |
-| `M365_CODE_TOOL_MAX_READ_BYTES` | `1048576` | Maximum number of bytes returned by a file read. |
-| `M365_CODE_TOOL_MAX_ITERATIONS` | `10` | Maximum model/tool loop iterations per request. |
+| Variable                        | Default   | Description                                                                                    |
+|---------------------------------|-----------|------------------------------------------------------------------------------------------------|
+| `M365_ENABLE_CODE_TOOLS`        | `0`       | Main gate. Set to `1` to enable local tool execution.                                          |
+| `M365_AUTO_EXPOSE_TOOLS`        | `0`       | Set to `1` to inject all built-in tool schemas when the client does not provide them.          |
+| `M365_WORKSPACE_DIR`            | `.`       | Existing directory that confines file and Git operations.                                      |
+| `M365_CODE_TOOL_TIMEOUT`        | `30s`     | Timeout for each command or test execution. Accepts Go duration syntax, such as `10s` or `2m`. |
+| `M365_CODE_TOOL_MAX_OUTPUT`     | `1048576` | Maximum captured command output in bytes. Longer output is truncated.                          |
+| `M365_CODE_TOOL_MAX_READ_BYTES` | `1048576` | Maximum number of bytes returned by a file read.                                               |
+| `M365_CODE_TOOL_MAX_ITERATIONS` | `10`      | Maximum model/tool loop iterations per request.                                                |
 
 Set these variables in `data/.env`. For Docker, `M365_WORKSPACE_DIR` must refer to a directory that already exists inside the container. The provided Compose file mounts only `./data` at `/app/data`; it does not expose a host source workspace.
 
 ### Available Tools
 
-| Tool | Operation |
-|------|-----------|
-| `list_files` | List files and directories under a workspace path. |
-| `read_file` | Read a file, subject to the configured byte limit. |
-| `write_file` | Create or replace a file inside the workspace. |
-| `search_files` | Search workspace file contents. |
-| `git_status` | Show workspace Git status. |
-| `git_diff` | Show workspace Git changes. |
-| `git_log` | Show recent workspace Git history. |
+| Tool            | Operation                                                        |
+|-----------------|------------------------------------------------------------------|
+| `list_files`    | List files and directories under a workspace path.               |
+| `read_file`     | Read a file, subject to the configured byte limit.               |
+| `write_file`    | Create or replace a file inside the workspace.                   |
+| `search_files`  | Search workspace file contents.                                  |
+| `git_status`    | Show workspace Git status.                                       |
+| `git_diff`      | Show workspace Git changes.                                      |
+| `git_log`       | Show recent workspace Git history.                               |
 | `shell_command` | Run a shell command with the workspace as its working directory. |
-| `apply_patch` | Apply a unified patch inside the workspace. |
-| `run_tests` | Run a test command with the configured timeout and output limit. |
+| `apply_patch`   | Apply a unified patch inside the workspace.                      |
+| `run_tests`     | Run a test command with the configured timeout and output limit. |
 
 ### Security Requirements
 
@@ -737,22 +748,22 @@ curl http://127.0.0.1:8000/v1/responses \
 
 The streaming endpoint emits typed SSE events:
 
-| Event | Description |
-|-------|-------------|
-| `response.created` | Response object created (status: in_progress) |
-| `response.in_progress` | Response is being generated |
-| `response.output_item.added` | New output item added (message, reasoning, or function_call) |
-| `response.content_part.added` | Content part added to message item |
-| `response.output_text.delta` | Text delta |
-| `response.output_text.done` | Text complete |
-| `response.content_part.done` | Content part complete |
-| `response.output_item.done` | Output item complete |
-| `response.reasoning_summary_text.delta` | Reasoning/thinking delta |
-| `response.reasoning_summary_text.done` | Reasoning complete |
-| `response.function_call_arguments.delta` | Tool call arguments delta |
-| `response.function_call_arguments.done` | Tool call arguments complete |
-| `response.completed` | Full response object (status: completed) |
-| `response.failed` | Error occurred (status: failed) |
+| Event                                    | Description                                                  |
+|------------------------------------------|--------------------------------------------------------------|
+| `response.created`                       | Response object created (status: in_progress)                |
+| `response.in_progress`                   | Response is being generated                                  |
+| `response.output_item.added`             | New output item added (message, reasoning, or function_call) |
+| `response.content_part.added`            | Content part added to message item                           |
+| `response.output_text.delta`             | Text delta                                                   |
+| `response.output_text.done`              | Text complete                                                |
+| `response.content_part.done`             | Content part complete                                        |
+| `response.output_item.done`              | Output item complete                                         |
+| `response.reasoning_summary_text.delta`  | Reasoning/thinking delta                                     |
+| `response.reasoning_summary_text.done`   | Reasoning complete                                           |
+| `response.function_call_arguments.delta` | Tool call arguments delta                                    |
+| `response.function_call_arguments.done`  | Tool call arguments complete                                 |
+| `response.completed`                     | Full response object (status: completed)                     |
+| `response.failed`                        | Error occurred (status: failed)                              |
 
 ## Responses Compact API
 
@@ -863,15 +874,15 @@ The proxy exposes M365 Copilot's  image generation as OpenAI Images API endpoint
 
 Both endpoints accept the following parameters:
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `prompt` | string | (required) | The text prompt for image generation/editing |
-| `n` | int | 1 | Number of images to generate (M365 generates one per request) |
-| `size` | string | `1024x1024` | Image size hint (appended to prompt as natural language) |
-| `quality` | string | `standard` | Quality hint (appended to prompt; `standard` is skipped) |
-| `style` | string | `natural` | Style hint (appended to prompt; `natural` is skipped) |
-| `response_format` | string | `url` | Response format: `url` returns a data URL (base64), `b64_json` returns base64 in a separate field |
-| `session_id` | string | (optional) | Session ID for conversation continuity |
+| Parameter         | Type   | Default     | Description                                                                                       |
+|-------------------|--------|-------------|---------------------------------------------------------------------------------------------------|
+| `prompt`          | string | (required)  | The text prompt for image generation/editing                                                      |
+| `n`               | int    | 1           | Number of images to generate (M365 generates one per request)                                     |
+| `size`            | string | `1024x1024` | Image size hint (appended to prompt as natural language)                                          |
+| `quality`         | string | `standard`  | Quality hint (appended to prompt; `standard` is skipped)                                          |
+| `style`           | string | `natural`   | Style hint (appended to prompt; `natural` is skipped)                                             |
+| `response_format` | string | `url`       | Response format: `url` returns a data URL (base64), `b64_json` returns base64 in a separate field |
+| `session_id`      | string | (optional)  | Session ID for conversation continuity                                                            |
 
 ### Response Format
 

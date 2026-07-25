@@ -112,6 +112,8 @@ type Config struct {
 	CodeToolMaxOutput     int64
 	CodeToolMaxReadBytes  int64
 	CodeToolMaxIterations int
+	ContextWindowTokens   int
+	MaxOutputTokens       int
 }
 
 // LoadConfig loads configuration from .env file and environment variables.
@@ -133,6 +135,8 @@ func LoadConfig() *Config {
 		CodeToolMaxOutput:     getEnvInt64("M365_CODE_TOOL_MAX_OUTPUT", 1<<20),
 		CodeToolMaxReadBytes:  getEnvInt64("M365_CODE_TOOL_MAX_READ_BYTES", 1<<20),
 		CodeToolMaxIterations: getEnvInt("M365_CODE_TOOL_MAX_ITERATIONS", 10),
+		ContextWindowTokens:   getEnvInt("M365_CONTEXT_WINDOW", 1_000_000),
+		MaxOutputTokens:       getEnvInt("M365_MAX_OUTPUT_TOKENS", 1_000_000),
 	}
 
 	logging.Infof("LoadConfig: tenantID=%s userOID=%s clientID=%s apiKeys=%d", cfg.TenantID, cfg.UserOID, cfg.ClientID[:min(8, len(cfg.ClientID))]+"...", len(cfg.APIKeys))

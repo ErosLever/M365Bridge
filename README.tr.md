@@ -302,14 +302,14 @@ Sonra yukarıdaki Adım 3-6'yı izleyin.
 
 ### CLI Bayrakları
 
-| Bayrak          | Tip    | Varsayılan | Açıklama                                                                       |
-|-----------------|--------|------------|--------------------------------------------------------------------------------|
-| `-i`            | bool   | false      | Etkileşimli mod (çok turlu sohbet)                                             |
+| Bayrak          | Tip    | Varsayılan | Açıklama                                                                                                                                                                                 |
+|-----------------|--------|------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `-i`            | bool   | false      | Etkileşimli mod (çok turlu sohbet)                                                                                                                                                       |
 | `--model`       | string | `auto`     | Kullanılacak model: `auto`, `quick`, `reasoning`, `gpt5.5`, `gpt5.5-reasoning`, `gpt5.6-reasoning`, `claude`, `claude-sonnet`, `claude-opus`, `claude-fable`, `claude-sonnet-4-20250514` |
-| `--reasoning`   | bool   | false      | Akıl yürütme modunu kullan                                                     |
-| `--no-stream`   | bool   | false      | Akışı devre dışı bırak, tam yanıtı tek seferde yazdır                          |
-| `--list-models` | bool   | false      | Tüm kullanılabilir modelleri listele ve çık                                    |
-| `--version`     | bool   | false      | Sürümü göster ve çık                                                           |
+| `--reasoning`   | bool   | false      | Akıl yürütme modunu kullan                                                                                                                                                               |
+| `--no-stream`   | bool   | false      | Akışı devre dışı bırak, tam yanıtı tek seferde yazdır                                                                                                                                    |
+| `--list-models` | bool   | false      | Tüm kullanılabilir modelleri listele ve çık                                                                                                                                              |
+| `--version`     | bool   | false      | Sürümü göster ve çık                                                                                                                                                                     |
 
 Konumsal argüman (hiçbir bayrak tüketmezse): tek sorgu modu için sorgu metni.
 
@@ -465,23 +465,23 @@ print(resp.choices[0].message.content)
 
 ## API Uç Noktaları
 
-| Uç Nokta                      | Açıklama                                          |
-|-------------------------------|---------------------------------------------------|
-| `POST /v1/chat/completions`   | OpenAI Chat Completions (akışlı + akışsız)        |
-| `POST /v1/completions`        | OpenAI metin tamamlama (akışlı + akışsız)         |
-| `POST /v1/responses`          | OpenAI Responses API (akışlı + akışsız)           |
-| `POST /v1/responses/compact`  | OpenAI Responses Compact API (Codex uzaktan sıkıştırma) |
-| `POST /v1/messages`           | Anthropic Messages formatı (özel SSE işleyiciler) |
-| `POST /v1/messages/count_tokens` | Anthropic girdi token'larını sayar              |
-| `POST /v1/complete`           | Anthropic Complete (FIM)                          |
-| `POST /v1/images/generations` | OpenAI Images API: metinden üret (JSON body)      |
-| `POST /v1/images/edits`       | OpenAI Images API: görseli düzenle (multipart)    |
-| `GET /v1/conversations`       | M365 konuşmalarını listeler (M365 web cookies gerekir) |
-| `POST /v1/conversations`      | İlk mesajla yeni bir konuşma oluşturur           |
-| `PATCH /v1/conversations/{id}` | Konuşmayı `{ "name": "..." }` ile yeniden adlandırır |
-| `DELETE /v1/conversations/{id}` | Konuşmayı kalıcı olarak siler                    |
-| `GET /v1/models`              | Model listesi                                     |
-| `GET /health`                 | Sağlık kontrolü (kimlik doğrulama gerektirmez)    |
+| Uç Nokta                         | Açıklama                                                |
+|----------------------------------|---------------------------------------------------------|
+| `POST /v1/chat/completions`      | OpenAI Chat Completions (akışlı + akışsız)              |
+| `POST /v1/completions`           | OpenAI metin tamamlama (akışlı + akışsız)               |
+| `POST /v1/responses`             | OpenAI Responses API (akışlı + akışsız)                 |
+| `POST /v1/responses/compact`     | OpenAI Responses Compact API (Codex uzaktan sıkıştırma) |
+| `POST /v1/messages`              | Anthropic Messages formatı (özel SSE işleyiciler)       |
+| `POST /v1/messages/count_tokens` | Anthropic girdi token'larını sayar                      |
+| `POST /v1/complete`              | Anthropic Complete (FIM)                                |
+| `POST /v1/images/generations`    | OpenAI Images API: metinden üret (JSON body)            |
+| `POST /v1/images/edits`          | OpenAI Images API: görseli düzenle (multipart)          |
+| `GET /v1/conversations`          | M365 konuşmalarını listeler (M365 web cookies gerekir)  |
+| `POST /v1/conversations`         | İlk mesajla yeni bir konuşma oluşturur                  |
+| `PATCH /v1/conversations/{id}`   | Konuşmayı `{ "name": "..." }` ile yeniden adlandırır    |
+| `DELETE /v1/conversations/{id}`  | Konuşmayı kalıcı olarak siler                           |
+| `GET /v1/models`                 | Model listesi                                           |
+| `GET /health`                    | Sağlık kontrolü (kimlik doğrulama gerektirmez)          |
 
 ## Modeller
 
@@ -503,17 +503,17 @@ Tüm model seçimi, M365 backend'ine gönderilen `tone` alanı ile yapılır. T�
 
 ### Hangi modeli kullanmalıyım?
 
-| Kullanım senaryosu                            | Model              |
-|-----------------------------------------------|--------------------|
-| Genel amaçlı, backend karar versin            | `auto`             |
-| Hızlı yanıtlar, basit sorular                 | `quick`            |
-| Karmaşık akıl yürütme, çok adımlı problemler  | `reasoning`        |
-| GPT-5.5 sohbet                                | `gpt5.5`           |
-| GPT-5.5 derin düşünme                         | `gpt5.5-reasoning` |
-| GPT-5.6 derin düşünme (en yeni)               | `gpt5.6-reasoning` |
-| Claude Sonnet 4.6 (Anthropic)                 | `claude-sonnet`    |
-| Claude Opus 4.6 (Anthropic, en yetenekli)     | `claude-opus`      |
-| Claude Fable tone                             | `claude-fable`     |
+| Kullanım senaryosu                           | Model              |
+|----------------------------------------------|--------------------|
+| Genel amaçlı, backend karar versin           | `auto`             |
+| Hızlı yanıtlar, basit sorular                | `quick`            |
+| Karmaşık akıl yürütme, çok adımlı problemler | `reasoning`        |
+| GPT-5.5 sohbet                               | `gpt5.5`           |
+| GPT-5.5 derin düşünme                        | `gpt5.5-reasoning` |
+| GPT-5.6 derin düşünme (en yeni)              | `gpt5.6-reasoning` |
+| Claude Sonnet 4.6 (Anthropic)                | `claude-sonnet`    |
+| Claude Opus 4.6 (Anthropic, en yetenekli)    | `claude-opus`      |
+| Claude Fable tone                            | `claude-fable`     |
 
 `gpt5.5-reasoning`, modelin düşünme sürecini içeren `reasoning_content` çıktısı üretir. OpenAI endpoint'leri bunu `reasoning_content` olarak; Anthropic endpoint'leri `text` bloğundan önce bir `thinking` içerik bloğu olarak gösterir. Claude modelleri düşünme içeriği üretmez.
 
@@ -530,6 +530,17 @@ Bu, `X-Session-Id: my-session-001` header'ı veya istek gövdesinde `session_id:
 ### Harici Model Adları
 
 Kayıtta olmayan model adları gönderen istemciler (ör. `claude-sonnet-4-20250514`, `gpt-4o`, `o1`) `auto` modeline düşer. Proxy herhangi bir model dizesini kabul eder — bilinmeyen adlar hata vermez, sadece varsayılan modeli kullanır.
+
+Hiç model göndermeyen bir istek (boş `model` alanı veya yalnızca `:session-id` eki) `auto` yerine, tool calling için güvenilir reasoning tone'u olan `gpt5.5-reasoning`'e düşer.
+
+### İlan Edilen Context Window
+
+`GET /v1/models` içindeki her kayıt, istemci harness'lerinin prompt'u veya çıktıyı önden kırpmaması için `context_window` ve `max_output_tokens` ipuçlarını ilan eder. Bunlar yalnızca istemciye yönelik ipuçlarıdır; M365 kendi sunucu tarafı limitlerini yine de uygular. İkisi de varsayılan `1000000`'dır ve override edilebilir:
+
+| Değişken                 | Varsayılan | Açıklama                                                     |
+|--------------------------|------------|--------------------------------------------------------------|
+| `M365_CONTEXT_WINDOW`    | `1000000`  | `/v1/models` içinde ilan edilen context window token sayısı. |
+| `M365_MAX_OUTPUT_TOKENS` | `1000000`  | `/v1/models` içinde ilan edilen maksimum çıktı token sayısı. |
 
 ## Tool Calling (Araç Çağırma)
 
@@ -644,32 +655,32 @@ M365Bridge, sunucuda kısıtlı bir yerel coding işlemleri kümesi çalıştır
 
 ### Yapılandırma
 
-| Değişken | Varsayılan | Açıklama |
-|----------|------------|----------|
-| `M365_ENABLE_CODE_TOOLS` | `0` | Ana gate. Yerel araç çalıştırmayı etkinleştirmek için `1` yapın. |
-| `M365_AUTO_EXPOSE_TOOLS` | `0` | İstemci araç sağlamadığında tüm built-in tool şemalarını eklemek için `1` yapın. |
-| `M365_WORKSPACE_DIR` | `.` | Dosya ve Git işlemlerini sınırlayan mevcut dizin. |
-| `M365_CODE_TOOL_TIMEOUT` | `30s` | Her command veya test çalıştırması için timeout. `10s` ya da `2m` gibi Go duration sözdizimini kabul eder. |
-| `M365_CODE_TOOL_MAX_OUTPUT` | `1048576` | Yakalanan command çıktısının byte cinsinden üst sınırı. Daha uzun çıktı kırpılır. |
-| `M365_CODE_TOOL_MAX_READ_BYTES` | `1048576` | Bir file read işleminin döndürebileceği azami byte sayısı. |
-| `M365_CODE_TOOL_MAX_ITERATIONS` | `10` | İstek başına model/tool loop iteration üst sınırı. |
+| Değişken                        | Varsayılan | Açıklama                                                                                                   |
+|---------------------------------|------------|------------------------------------------------------------------------------------------------------------|
+| `M365_ENABLE_CODE_TOOLS`        | `0`        | Ana gate. Yerel araç çalıştırmayı etkinleştirmek için `1` yapın.                                           |
+| `M365_AUTO_EXPOSE_TOOLS`        | `0`        | İstemci araç sağlamadığında tüm built-in tool şemalarını eklemek için `1` yapın.                           |
+| `M365_WORKSPACE_DIR`            | `.`        | Dosya ve Git işlemlerini sınırlayan mevcut dizin.                                                          |
+| `M365_CODE_TOOL_TIMEOUT`        | `30s`      | Her command veya test çalıştırması için timeout. `10s` ya da `2m` gibi Go duration sözdizimini kabul eder. |
+| `M365_CODE_TOOL_MAX_OUTPUT`     | `1048576`  | Yakalanan command çıktısının byte cinsinden üst sınırı. Daha uzun çıktı kırpılır.                          |
+| `M365_CODE_TOOL_MAX_READ_BYTES` | `1048576`  | Bir file read işleminin döndürebileceği azami byte sayısı.                                                 |
+| `M365_CODE_TOOL_MAX_ITERATIONS` | `10`       | İstek başına model/tool loop iteration üst sınırı.                                                         |
 
 Bu değişkenleri `data/.env` içine ekleyin. Docker kullanırken `M365_WORKSPACE_DIR`, container içinde zaten var olan bir dizini göstermelidir. Sağlanan Compose dosyası yalnızca `./data` dizinini `/app/data` konumuna mount eder; host kaynak workspace'ini açmaz.
 
 ### Kullanılabilir Araçlar
 
-| Araç | İşlem |
-|------|-------|
-| `list_files` | Workspace içindeki bir path altında bulunan dosya ve dizinleri listeler. |
-| `read_file` | Yapılandırılmış byte sınırına tabi olarak dosya okur. |
-| `write_file` | Workspace içinde dosya oluşturur veya mevcut dosyanın yerini alır. |
-| `search_files` | Workspace dosyalarının içeriğinde arama yapar. |
-| `git_status` | Workspace Git durumunu gösterir. |
-| `git_diff` | Workspace Git değişikliklerini gösterir. |
-| `git_log` | Workspace içindeki yakın Git geçmişini gösterir. |
-| `shell_command` | Workspace'i çalışma dizini olarak kullanıp shell command çalıştırır. |
-| `apply_patch` | Workspace içinde unified patch uygular. |
-| `run_tests` | Yapılandırılmış timeout ve output sınırıyla bir test command çalıştırır. |
+| Araç            | İşlem                                                                    |
+|-----------------|--------------------------------------------------------------------------|
+| `list_files`    | Workspace içindeki bir path altında bulunan dosya ve dizinleri listeler. |
+| `read_file`     | Yapılandırılmış byte sınırına tabi olarak dosya okur.                    |
+| `write_file`    | Workspace içinde dosya oluşturur veya mevcut dosyanın yerini alır.       |
+| `search_files`  | Workspace dosyalarının içeriğinde arama yapar.                           |
+| `git_status`    | Workspace Git durumunu gösterir.                                         |
+| `git_diff`      | Workspace Git değişikliklerini gösterir.                                 |
+| `git_log`       | Workspace içindeki yakın Git geçmişini gösterir.                         |
+| `shell_command` | Workspace'i çalışma dizini olarak kullanıp shell command çalıştırır.     |
+| `apply_patch`   | Workspace içinde unified patch uygular.                                  |
+| `run_tests`     | Yapılandırılmış timeout ve output sınırıyla bir test command çalıştırır. |
 
 ### Güvenlik Gereksinimleri
 
@@ -863,15 +874,15 @@ Proxy, M365 Copilot'un  görsel üretimini OpenAI Images API uç noktaları olar
 
 Her iki uç nokta aşağıdaki parametreleri kabul eder:
 
-| Parametre         | Tip    | Varsayılan  | Açıklama                                                                                       |
-|-------------------|--------|-------------|------------------------------------------------------------------------------------------------|
-| `prompt`          | string | (zorunlu)   | Görsel üretimi/düzenleme için metin prompt'u                                                   |
-| `n`               | int    | 1           | Üretilecek görsel sayısı (M365 her istek için bir tane üretir)                                 |
-| `size`            | string | `1024x1024` | Görsel boyut ipucu (prompt'a doğal dil olarak eklenir)                                         |
-| `quality`         | string | `standard`  | Kalite ipucu (prompt'a eklenir; `standard` atlanır)                                            |
-| `style`           | string | `natural`   | Stil ipucu (prompt'a eklenir; `natural` atlanır)                                               |
-| `response_format` | string | `url`       | Yanıt formatı: `url` data URL (base64) döndürür, `b64_json` base64'ü ayrı alanda döndürür      |
-| `session_id`      | string | (opsiyonel) | Konuşma sürekliliği için session ID                                                            |
+| Parametre         | Tip    | Varsayılan  | Açıklama                                                                                  |
+|-------------------|--------|-------------|-------------------------------------------------------------------------------------------|
+| `prompt`          | string | (zorunlu)   | Görsel üretimi/düzenleme için metin prompt'u                                              |
+| `n`               | int    | 1           | Üretilecek görsel sayısı (M365 her istek için bir tane üretir)                            |
+| `size`            | string | `1024x1024` | Görsel boyut ipucu (prompt'a doğal dil olarak eklenir)                                    |
+| `quality`         | string | `standard`  | Kalite ipucu (prompt'a eklenir; `standard` atlanır)                                       |
+| `style`           | string | `natural`   | Stil ipucu (prompt'a eklenir; `natural` atlanır)                                          |
+| `response_format` | string | `url`       | Yanıt formatı: `url` data URL (base64) döndürür, `b64_json` base64'ü ayrı alanda döndürür |
+| `session_id`      | string | (opsiyonel) | Konuşma sürekliliği için session ID                                                       |
 
 ### Yanıt Formatı
 
