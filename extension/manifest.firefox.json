@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "M365Bridge Provisioner",
+  "version": "0.1.0",
+  "description": "Explicitly provision M365Bridge from your Microsoft 365 browser session.",
+  "permissions": [
+    "cookies",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://login.microsoftonline.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "action": {
+    "default_title": "Provision M365Bridge",
+    "default_popup": "popup.html"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "m365bridge-provisioner@localhost",
+      "strict_min_version": "109.0"
+    }
+  }
+}

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>M365Bridge Provisioner</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">LOCAL SESSION HANDOFF</p>
+        <h1>M365Bridge</h1>
+        <p class="intro">Send the required Microsoft login cookies directly to your bridge.</p>
+      </header>
+
+      <form id="provision-form">
+        <label for="endpoint">Bridge endpoint</label>
+        <input id="endpoint" name="endpoint" type="url" value="http://127.0.0.1:8230" required spellcheck="false">
+
+        <label for="secret">Provisioning secret</label>
+        <input id="secret" name="secret" type="password" required autocomplete="off">
+
+        <aside>
+          <strong>Destination</strong>
+          <span id="destination">http://127.0.0.1:8230/provision/v1/session</span>
+        </aside>
+
+        <button id="provision" type="submit">Provision M365Bridge</button>
+      </form>
+
+      <p id="status" role="status" aria-live="polite">Cookies are read only when you press the button.</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
