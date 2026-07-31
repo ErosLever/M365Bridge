@@ -1,12 +1,5 @@
 # M365Bridge
 
-[![CI](https://github.com/KilimcininKorOglu/M365Bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/KilimcininKorOglu/M365Bridge/actions/workflows/ci.yml)
-[![Release](https://github.com/KilimcininKorOglu/M365Bridge/actions/workflows/release.yml/badge.svg)](https://github.com/KilimcininKorOglu/M365Bridge/actions/workflows/release.yml)
-[![Version](https://img.shields.io/github/v/release/KilimcininKorOglu/M365Bridge)](https://github.com/KilimcininKorOglu/M365Bridge/releases)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/KilimcininKorOglu/M365Bridge/pkgs/container/m365bridge)
-
-**English** | **[Türkçe](README.tr.md)**
-
 A Go implementation that converts Microsoft 365 Copilot's WebSocket interface to OpenAI/Anthropic compatible HTTP API.
 
 ## Architecture
@@ -38,44 +31,13 @@ Your App -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Backend
 
 ## Installation
 
-```bash
-git clone https://github.com/KilimcininKorOglu/M365Bridge
-cd M365Bridge
-go mod download
-go build -o bin/m365-bridge ./cmd/cli
-```
-
-### Pre-built Binaries
-
-Download the latest binary for your platform from [GitHub Releases](https://github.com/KilimcininKorOglu/M365Bridge/releases):
-
-| Platform                    | File                            |
-|-----------------------------|---------------------------------|
-| Linux amd64                 | `m365-bridge-linux-amd64`       |
-| Linux arm64                 | `m365-bridge-linux-arm64`       |
-| macOS amd64 (Intel)         | `m365-bridge-darwin-amd64`      |
-| macOS arm64 (Apple Silicon) | `m365-bridge-darwin-arm64`      |
-| Windows amd64               | `m365-bridge-windows-amd64.exe` |
-| Windows arm64               | `m365-bridge-windows-arm64.exe` |
-
-```bash
-# Example: Linux amd64
-wget https://github.com/KilimcininKorOglu/M365Bridge/releases/latest/download/m365-bridge-linux-amd64
-chmod +x m365-bridge-linux-amd64
-./m365-bridge-linux-amd64 serve --port 8000
-```
-
-### Docker
-
-The easiest way to run M365Bridge is with Docker. The pre-built image is available on GitHub Container Registry.
-
 #### Step 1: Create the provisioning secret
 
 Generate a high-entropy secret inside the `data/` directory:
 
 ```bash
 mkdir -p data
-python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > data/provision-secret
+head -c 24 /dev/urandom | base64 > data/provision-secret
 chmod 600 data/provision-secret
 ```
 
@@ -89,7 +51,7 @@ Package the browser extension:
 node extension/package.js
 ```
 
-For Docker, use the published image or build it locally:
+Build the docker image locally:
 
 ```bash
 docker compose build
@@ -98,6 +60,7 @@ docker compose build
 For a native installation, build the binary instead:
 
 ```bash
+go mod download
 go build -o bin/m365-bridge ./cmd/cli
 ```
 
