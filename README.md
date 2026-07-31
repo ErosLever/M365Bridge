@@ -246,6 +246,46 @@ Each session maps to a unique M365 conversation. Session ID is resolved in prior
 
 The hash fallback allows standard OpenAI clients (like Claude Code) that cannot send custom headers to have separate conversations automatically, as long as their first user message differs.
 
+### OpenCode
+
+Create or update the global OpenCode configuration file at `~/.config/opencode/opencode.json` (or `~/.config/opencode/opencode.jsonc`) with the following provider configuration:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "m365bridge": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "m365bridge",
+      "options": {
+        "baseURL": "http://localhost:8230/v1",
+        "apiKey": "****************"
+      },
+      "models": {
+        "gpt-5.6-reasoning": {
+          "name": "gpt-5.6-reasoning",
+          "capabilities": {
+            "tools": true,
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
+          "limit": {
+            "context": 200000,
+            "output": 50000
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Replace the masked API key with your configured M365Bridge API key (if defined). Quit and restart OpenCode after changing its configuration, then start it directly with this provider and model:
+
+```bash
+opencode -m m365bridge/gpt-5.6-reasoning
+```
+
 ### Python Client (OpenAI SDK)
 
 ```python
