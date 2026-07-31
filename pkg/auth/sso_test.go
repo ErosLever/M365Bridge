@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,24 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestIdentityFromAccessToken(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"oid":"new-oid","tid":"new-tenant"}`))
+	oid, tenant, err := identityFromAccessToken("header." + payload + ".signature")
+	if err != nil {
+		t.Fatalf("extract identity: %v", err)
+	}
+	if oid != "new-oid" || tenant != "new-tenant" {
+		t.Fatalf("identity = %q, %q", oid, tenant)
+	}
+}
+
+func TestIdentityFromAccessTokenRequiresOIDAndTID(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"oid":"only-oid"}`))
+	if _, _, err := identityFromAccessToken("header." + payload + ".signature"); err == nil {
+		t.Fatal("accepted access token without tid")
+	}
+}
 
 func TestAcquireDesignerTokenReacquiresExpiredBrokerToken(t *testing.T) {
 	useTemporaryWorkingDirectory(t)
@@ -74,6 +93,47 @@ func TestAcquireDesignerTokenDoesNotReacquireTransientFailure(t *testing.T) {
 	_, _, err := tm.acquireDesignerToken()
 	if !errors.Is(err, transientErr) {
 		t.Fatalf("expected transient error, got %v", err)
+	}
+}
+
+func TestSetSSOCookiesStoresValidatedCopyInMemory(t *testing.T) {
+	useTemporaryWorkingDirectory(t)
+	tm := NewTokenManager("tenant", "client", "scope", "refresh", "cache")
+	cookies := []SSOCookie{{Name: "ESTSAUTH", Value: "secret", Domain: ".login.microsoftonline.com"}}
+
+	if err := tm.SetSSOCookies(cookies); err != nil {
+		t.Fatalf("set SSO cookies: %v", err)
+	}
+	cookies[0].Value = "changed"
+
+	store, err := tm.loadSSOCookies()
+	if err != nil {
+		t.Fatalf("load SSO cookies: %v", err)
+	}
+	if len(store.Cookies) != 1 || store.Cookies[0].Value != "secret" {
+		t.Fatalf("runtime cookie store was not copied: %#v", store.Cookies)
+	}
+	if _, err := os.Stat(ssoCookiesFile); !os.IsNotExist(err) {
+		t.Fatalf("runtime provisioning wrote cookies to disk: %v", err)
+	}
+}
+
+func TestSetSSOCookiesRejectsUnexpectedCookie(t *testing.T) {
+	tm := NewTokenManager("tenant", "client", "scope", "refresh", "cache")
+	err := tm.SetSSOCookies([]SSOCookie{{Name: "Other", Value: "secret"}})
+	if !errors.Is(err, ErrInvalidSSOCookies) {
+		t.Fatalf("expected invalid SSO cookies, got %v", err)
+	}
+}
+
+func TestSetSSOCookiesRejectsDuplicateCookie(t *testing.T) {
+	tm := NewTokenManager("tenant", "client", "scope", "refresh", "cache")
+	err := tm.SetSSOCookies([]SSOCookie{
+		{Name: "ESTSAUTH", Value: "first"},
+		{Name: "ESTSAUTH", Value: "second"},
+	})
+	if !errors.Is(err, ErrInvalidSSOCookies) {
+		t.Fatalf("expected invalid SSO cookies, got %v", err)
 	}
 }
 

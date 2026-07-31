@@ -101,6 +101,9 @@ func (c *M365Client) UploadFile(base64Data, mediaType, fileName, conversationID,
 		logging.Errorf("UploadFile: failed to get token: %v", err)
 		return nil, fmt.Errorf("failed to get token: %w", err)
 	}
+	if currentOID, currentTenant := c.tokenManager.Identity(); currentOID != "" && currentTenant != "" {
+		userOID, tenantID = currentOID, currentTenant
+	}
 
 	dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, base64Data)
 
@@ -172,6 +175,9 @@ func (c *M365Client) dialConnection(conversationID, userOID, tenantID string) (*
 	if err != nil {
 		logging.Errorf("dialConnection: failed to get token: %v", err)
 		return nil, "", "", fmt.Errorf("failed to get token: %w", err)
+	}
+	if currentOID, currentTenant := c.tokenManager.Identity(); currentOID != "" && currentTenant != "" {
+		userOID, tenantID = currentOID, currentTenant
 	}
 
 	hexSID := strings.ReplaceAll(uuid.New().String(), "-", "")

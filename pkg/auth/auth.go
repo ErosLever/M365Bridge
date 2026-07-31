@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/crypto"
@@ -41,6 +42,7 @@ type TokenCache struct {
 
 // TokenManager handles OAuth2 token lifecycle management.
 type TokenManager struct {
+	identityMu             sync.RWMutex
 	tenant                 string
 	clientID               string
 	scope                  string
@@ -48,6 +50,8 @@ type TokenManager struct {
 	cacheFile              string
 	tokenURL               string
 	userOID                string
+	ssoCookiesMu           sync.RWMutex
+	ssoCookies             *SSOCookieStore
 	designerTokenRequest   func(string) (string, int, error)
 	brokerTokenAcquisition func() (string, error)
 }
@@ -66,7 +70,30 @@ func NewTokenManager(tenant, clientID, scope, refreshFile, cacheFile string) *To
 
 // SetUserOID sets the user object ID for broker token requests.
 func (tm *TokenManager) SetUserOID(oid string) {
+	tm.identityMu.Lock()
 	tm.userOID = oid
+	tm.identityMu.Unlock()
+}
+
+// Identity returns the current user object ID and tenant ID as one coherent pair.
+func (tm *TokenManager) Identity() (string, string) {
+	tm.identityMu.RLock()
+	defer tm.identityMu.RUnlock()
+	return tm.userOID, tm.tenant
+}
+
+func (tm *TokenManager) setIdentity(oid, tenant string) {
+	tm.identityMu.Lock()
+	tm.userOID = oid
+	tm.tenant = tenant
+	tm.tokenURL = fmt.Sprintf(tokenURLTemplate, tenant)
+	tm.identityMu.Unlock()
+}
+
+func (tm *TokenManager) currentTokenURL() string {
+	tm.identityMu.RLock()
+	defer tm.identityMu.RUnlock()
+	return tm.tokenURL
 }
 
 // Get returns a valid access token, refreshing if necessary.
@@ -99,7 +126,7 @@ func (tm *TokenManager) Refresh() (string, error) {
 	data.Set("grant_type", "refresh_token")
 	data.Set("scope", tm.scope)
 
-	req, err := http.NewRequest("POST", tm.tokenURL, bytes.NewBufferString(data.Encode()))
+	req, err := http.NewRequest("POST", tm.currentTokenURL(), bytes.NewBufferString(data.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("%w: failed to create request", ErrRefreshFailed)
 	}
@@ -123,7 +150,7 @@ func (tm *TokenManager) Refresh() (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		errMsg := string(body)
 		// If refresh token expired (AADSTS700084), try SSO cookie re-auth as fallback
-		if strings.Contains(errMsg, "AADSTS700084") && hasSSOCookies() {
+		if strings.Contains(errMsg, "AADSTS700084") && tm.hasSSOCookies() {
 			logging.Warn("TokenManager.Refresh: refresh token expired (AADSTS700084), falling back to SSO cookie re-auth")
 			return tm.reauthWithSSO()
 		}
@@ -189,7 +216,7 @@ func (tm *TokenManager) GetTokenForScopeAndClient(scope, clientID string) (strin
 	data.Set("grant_type", "refresh_token")
 	data.Set("scope", scope)
 
-	req, err := http.NewRequest("POST", tm.tokenURL, bytes.NewBufferString(data.Encode()))
+	req, err := http.NewRequest("POST", tm.currentTokenURL(), bytes.NewBufferString(data.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("%w: failed to create request", ErrRefreshFailed)
 	}

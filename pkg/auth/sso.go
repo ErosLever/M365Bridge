@@ -38,6 +38,13 @@ const (
 // ErrM365CookiesUnavailable indicates that no cookies for the M365 web app are stored.
 var ErrM365CookiesUnavailable = errors.New("M365 web app cookies unavailable")
 
+var ErrInvalidSSOCookies = errors.New("invalid SSO cookies")
+
+var allowedSSOCookieNames = map[string]struct{}{
+	"ESTSAUTH":           {},
+	"ESTSAUTHPERSISTENT": {},
+}
+
 // SSOCookie represents a browser cookie used by M365 authentication or web APIs.
 type SSOCookie struct {
 	Name     string `json:"name"`
@@ -165,8 +172,138 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) (returnErr erro
 	return nil
 }
 
-// loadSSOCookies reads and decrypts SSO cookies from disk.
+// SetSSOCookies replaces the runtime SSO cookie set. Runtime cookies are kept
+// only in memory and take precedence over the legacy encrypted file store.
+func (tm *TokenManager) SetSSOCookies(cookies []SSOCookie) error {
+	validated, err := validateSSOCookies(cookies)
+	if err != nil {
+		return err
+	}
+
+	tm.ssoCookiesMu.Lock()
+	tm.ssoCookies = &SSOCookieStore{Cookies: validated, CapturedAt: time.Now()}
+	tm.ssoCookiesMu.Unlock()
+	return nil
+}
+
+// ProvisionSSOCookies validates a staged cookie set by completing the existing
+// primary and broker SSO flows. A failed validation restores the previous set.
+func (tm *TokenManager) ProvisionSSOCookies(cookies []SSOCookie) error {
+	validated, err := validateSSOCookies(cookies)
+	if err != nil {
+		return err
+	}
+
+	tm.ssoCookiesMu.Lock()
+	previous := cloneSSOCookieStore(tm.ssoCookies)
+	tm.ssoCookies = &SSOCookieStore{Cookies: validated, CapturedAt: time.Now()}
+	tm.ssoCookiesMu.Unlock()
+
+	accessToken, err := tm.reauthWithSSO()
+	if err != nil {
+		tm.restoreSSOCookies(previous)
+		return fmt.Errorf("validate primary SSO session: %w", err)
+	}
+	oid, tenant, err := identityFromAccessToken(accessToken)
+	if err != nil {
+		tm.restoreSSOCookies(previous)
+		return fmt.Errorf("validate primary SSO identity: %w", err)
+	}
+	if _, err := tm.acquireBrokerRefreshTokenViaSSOForTenant(tenant); err != nil {
+		tm.restoreSSOCookies(previous)
+		return fmt.Errorf("validate broker SSO session: %w", err)
+	}
+
+	tm.setIdentity(oid, tenant)
+	return nil
+}
+
+func identityFromAccessToken(token string) (string, string, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return "", "", fmt.Errorf("invalid access token")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", fmt.Errorf("decode access token claims: %w", err)
+	}
+	var claims struct {
+		OID string `json:"oid"`
+		TID string `json:"tid"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", "", fmt.Errorf("parse access token claims: %w", err)
+	}
+	claims.OID = strings.TrimSpace(claims.OID)
+	claims.TID = strings.TrimSpace(claims.TID)
+	if claims.OID == "" || claims.TID == "" {
+		return "", "", fmt.Errorf("access token is missing oid or tid claim")
+	}
+	return claims.OID, claims.TID, nil
+}
+
+func validateSSOCookies(cookies []SSOCookie) ([]SSOCookie, error) {
+	if len(cookies) == 0 || len(cookies) > len(allowedSSOCookieNames) {
+		return nil, fmt.Errorf("%w: expected one or two allowlisted cookies", ErrInvalidSSOCookies)
+	}
+
+	seen := make(map[string]struct{}, len(cookies))
+	validated := make([]SSOCookie, 0, len(cookies))
+	for _, cookie := range cookies {
+		if _, ok := allowedSSOCookieNames[cookie.Name]; !ok {
+			return nil, fmt.Errorf("%w: cookie name is not allowed", ErrInvalidSSOCookies)
+		}
+		if _, duplicate := seen[cookie.Name]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate cookie name", ErrInvalidSSOCookies)
+		}
+		if cookie.Value == "" || len(cookie.Value) > 16384 || strings.ContainsAny(cookie.Value, "\r\n;") {
+			return nil, fmt.Errorf("%w: invalid cookie value", ErrInvalidSSOCookies)
+		}
+
+		domain := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(cookie.Domain)), ".")
+		if domain != "" && domain != "login.microsoftonline.com" {
+			return nil, fmt.Errorf("%w: invalid cookie domain", ErrInvalidSSOCookies)
+		}
+
+		seen[cookie.Name] = struct{}{}
+		validated = append(validated, SSOCookie{
+			Name:     cookie.Name,
+			Value:    cookie.Value,
+			Path:     "/",
+			Domain:   "login.microsoftonline.com",
+			Secure:   true,
+			HttpOnly: cookie.HttpOnly,
+		})
+	}
+
+	return validated, nil
+}
+
+func cloneSSOCookieStore(store *SSOCookieStore) *SSOCookieStore {
+	if store == nil {
+		return nil
+	}
+	copyStore := *store
+	copyStore.Cookies = append([]SSOCookie(nil), store.Cookies...)
+	return &copyStore
+}
+
+func (tm *TokenManager) restoreSSOCookies(store *SSOCookieStore) {
+	tm.ssoCookiesMu.Lock()
+	tm.ssoCookies = cloneSSOCookieStore(store)
+	tm.ssoCookiesMu.Unlock()
+}
+
+// loadSSOCookies reads runtime cookies first, then falls back to the encrypted
+// file store retained for existing installations and the setup wizard.
 func (tm *TokenManager) loadSSOCookies() (*SSOCookieStore, error) {
+	tm.ssoCookiesMu.RLock()
+	runtimeStore := cloneSSOCookieStore(tm.ssoCookies)
+	tm.ssoCookiesMu.RUnlock()
+	if runtimeStore != nil {
+		return runtimeStore, nil
+	}
+
 	data, err := os.ReadFile(ssoCookiesFile)
 	if err != nil {
 		return nil, fmt.Errorf("SSO cookies file not found: %w", err)
@@ -185,8 +322,14 @@ func (tm *TokenManager) loadSSOCookies() (*SSOCookieStore, error) {
 	return &store, nil
 }
 
-// hasSSOCookies checks if SSO cookies are available on disk.
-func hasSSOCookies() bool {
+// hasSSOCookies checks the runtime store before the legacy encrypted file.
+func (tm *TokenManager) hasSSOCookies() bool {
+	tm.ssoCookiesMu.RLock()
+	hasRuntimeCookies := tm.ssoCookies != nil && len(tm.ssoCookies.Cookies) > 0
+	tm.ssoCookiesMu.RUnlock()
+	if hasRuntimeCookies {
+		return true
+	}
 	_, err := os.Stat(ssoCookiesFile)
 	return err == nil
 }
@@ -289,7 +432,8 @@ func (tm *TokenManager) reauthWithSSO() (string, error) {
 	// Build authorize URL for silent auth using SSO cookies
 	// sso_reload=True tells the server to use SSO cookies and skip the BssoInterrupt page.
 	// prompt=none breaks SSO cookie recognition, so we omit it.
-	authorizeURL := fmt.Sprintf(authorizeURLTemplate, tm.tenant)
+	_, tenant := tm.Identity()
+	authorizeURL := fmt.Sprintf(authorizeURLTemplate, tenant)
 	params := url.Values{
 		"client_id":             {tm.clientID},
 		"response_type":         {"code"},
@@ -656,9 +800,10 @@ func (tm *TokenManager) acquireDesignerToken() (string, int, error) {
 
 // requestDesignerToken exchanges a broker refresh token for a designer access token.
 func (tm *TokenManager) requestDesignerToken(refreshToken string) (string, int, error) {
+	userOID, tenant := tm.Identity()
 	// Build the broker token URL with query parameters
 	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token?brk_client_id=%s&brk_redirect_uri=%s&client_id=%s&client-request-id=%s",
-		tm.tenant,
+		tenant,
 		designerClientID,
 		url.QueryEscape(defaultRedirectURI),
 		brokerClientID,
@@ -681,8 +826,8 @@ func (tm *TokenManager) requestDesignerToken(refreshToken string) (string, int, 
 	}
 
 	// X-AnchorMailbox helps AAD route the request to the correct token service
-	if tm.userOID != "" {
-		body.Set("X-AnchorMailbox", fmt.Sprintf("Oid:%s@%s", tm.userOID, tm.tenant))
+	if userOID != "" {
+		body.Set("X-AnchorMailbox", fmt.Sprintf("Oid:%s@%s", userOID, tenant))
 	}
 
 	// brk_ params go in both URL query and body (MSAL.js sends them in both)
@@ -750,6 +895,11 @@ func (tm *TokenManager) requestDesignerToken(refreshToken string) (string, int, 
 // the standard refresh token (issued for spalanding redirect URI) is not
 // compatible with the broker flow (which requires brk-multihub:// redirect URI).
 func (tm *TokenManager) acquireBrokerRefreshTokenViaSSO() (string, error) {
+	_, tenant := tm.Identity()
+	return tm.acquireBrokerRefreshTokenViaSSOForTenant(tenant)
+}
+
+func (tm *TokenManager) acquireBrokerRefreshTokenViaSSOForTenant(tenant string) (string, error) {
 	logging.Info("acquireBrokerRefreshTokenViaSSO: starting broker authorize flow via SSO cookies")
 	store, err := tm.loadSSOCookies()
 	if err != nil {
@@ -782,7 +932,7 @@ func (tm *TokenManager) acquireBrokerRefreshTokenViaSSO() (string, error) {
 		"sso_reload":            {"True"},
 	}
 
-	authorizeURL := fmt.Sprintf(authorizeURLTemplate, tm.tenant)
+	authorizeURL := fmt.Sprintf(authorizeURLTemplate, tenant)
 	authReq, err := http.NewRequest("GET", authorizeURL+"?"+params.Encode(), nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create broker authorize request: %w", err)
@@ -847,7 +997,7 @@ func (tm *TokenManager) acquireBrokerRefreshTokenViaSSO() (string, error) {
 			}
 			if authCode != "" {
 				logging.Info("acquireBrokerRefreshTokenViaSSO: obtained auth code, exchanging for broker tokens")
-				return tm.exchangeBrokerAuthCode(authCode, verifier)
+				return tm.exchangeBrokerAuthCode(authCode, verifier, tenant)
 			}
 		}
 
@@ -874,9 +1024,9 @@ func (tm *TokenManager) acquireBrokerRefreshTokenViaSSO() (string, error) {
 
 // exchangeBrokerAuthCode exchanges an authorization code for a broker
 // refresh token and designerapp access token.
-func (tm *TokenManager) exchangeBrokerAuthCode(authCode, verifier string) (string, error) {
+func (tm *TokenManager) exchangeBrokerAuthCode(authCode, verifier, tenant string) (string, error) {
 	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token?brk_client_id=%s&brk_redirect_uri=%s&client_id=%s&client-request-id=%s",
-		tm.tenant,
+		tenant,
 		designerClientID,
 		url.QueryEscape(defaultRedirectURI),
 		brokerClientID,

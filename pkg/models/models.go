@@ -105,6 +105,9 @@ type Config struct {
 	ClientID              string
 	Scope                 string
 	APIKeys               []string
+	ProvisionSecret       string
+	ProvisionSecretFile   string
+	ProvisionOrigins      []string
 	EnableCodeTools       bool
 	AutoExposeTools       bool
 	WorkspaceDir          string
@@ -128,6 +131,9 @@ func LoadConfig() *Config {
 		ClientID:              getEnvWithDefault("M365_CLIENT_ID", DefaultClientID),
 		Scope:                 DefaultScope,
 		APIKeys:               parseAPIKeys(os.Getenv("M365_API_KEYS"), os.Getenv("M365_API_KEY")),
+		ProvisionSecret:       strings.TrimSpace(os.Getenv("M365_PROVISION_SECRET")),
+		ProvisionSecretFile:   strings.TrimSpace(os.Getenv("M365_PROVISION_SECRET_FILE")),
+		ProvisionOrigins:      parseCSV(os.Getenv("M365_PROVISION_ORIGINS")),
 		EnableCodeTools:       getEnvBool("M365_ENABLE_CODE_TOOLS", false),
 		AutoExposeTools:       getEnvBool("M365_AUTO_EXPOSE_TOOLS", false),
 		WorkspaceDir:          getEnvWithDefault("M365_WORKSPACE_DIR", "."),
@@ -141,6 +147,16 @@ func LoadConfig() *Config {
 
 	logging.Infof("LoadConfig: tenantID=%s userOID=%s clientID=%s apiKeys=%d", cfg.TenantID, cfg.UserOID, cfg.ClientID[:min(8, len(cfg.ClientID))]+"...", len(cfg.APIKeys))
 	return cfg
+}
+
+func parseCSV(value string) []string {
+	var values []string
+	for item := range strings.SplitSeq(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			values = append(values, item)
+		}
+	}
+	return values
 }
 
 // parseAPIKeys builds the API key list from M365_API_KEYS (comma-separated)

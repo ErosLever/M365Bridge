@@ -1,6 +1,7 @@
 # Build artifacts
 bin/
 m365-bridge
+extension/dist/
 
 # Data files (includes .env, tokens, cache, setup.json)
 data/

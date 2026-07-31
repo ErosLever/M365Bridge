@@ -69,7 +69,54 @@ chmod +x m365-bridge-linux-amd64
 
 The easiest way to run M365Bridge is with Docker. The pre-built image is available on GitHub Container Registry.
 
-#### Step 1: Create docker-compose.yml
+#### Step 1: Create the provisioning secret
+
+Generate a high-entropy secret inside the `data/` directory:
+
+```bash
+mkdir -p data
+python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > data/provision-secret
+chmod 600 data/provision-secret
+```
+
+Keep `data/provision-secret` private. The browser extension uses this secret to authenticate session provisioning requests.
+
+#### Step 2: Build M365Bridge and package the extension
+
+Package the browser extension:
+
+```bash
+node extension/package.js
+```
+
+For Docker, use the published image or build it locally:
+
+```bash
+docker compose build
+```
+
+For a native installation, build the binary instead:
+
+```bash
+go build -o bin/m365-bridge ./cmd/cli
+```
+
+#### Step 3: Install the extension and record its origin
+
+Load `extension/dist/chromium` as an unpacked extension in Chromium, or load `extension/dist/firefox/manifest.json` as a temporary add-on in Firefox.
+
+Record the origin assigned by the browser. It will look like `chrome-extension://<extension-id>` or `moz-extension://<extension-id>`. M365Bridge uses this exact origin to restrict provisioning requests.
+
+#### Step 4: Configure and start M365Bridge
+
+Create a project-level `.env` file using the extension origin from Step 3:
+
+```dotenv
+M365_PROVISION_SECRET_FILE=/app/data/provision-secret
+M365_PROVISION_ORIGINS=chrome-extension://<extension-id>
+```
+
+Multiple exact extension origins can be supplied as a comma-separated list. Arbitrary web origins are rejected.
 
 Create a `docker-compose.yml` file in your project directory:
 
@@ -80,201 +127,39 @@ services:
     container_name: m365bridge
     ports:
       - "8230:8000"
+    environment:
+      M365_PROVISION_SECRET_FILE: ${M365_PROVISION_SECRET_FILE:-}
+      M365_PROVISION_ORIGINS: ${M365_PROVISION_ORIGINS:-}
     volumes:
       - ./data:/app/data
     restart: unless-stopped
 ```
 
-#### Step 2: Start the container
+Start the container:
 
 ```bash
 docker compose up -d
 ```
 
-The API will be available at `http://localhost:8230`.
+The bridge and provisioning endpoint are now available at `http://localhost:8230`. Browser provisioning requires either `M365_PROVISION_SECRET` or `M365_PROVISION_SECRET_FILE`. If neither is configured, `/provision/v1/session` returns `404 Not Found` and the extension cannot authenticate M365Bridge. The existing `8230:8000` mapping serves both API and provisioning requests.
 
-#### Step 3: Get your authentication token from the browser
+#### Step 5: Provision the Microsoft 365 session
 
-The server needs a refresh token from your Microsoft 365 Copilot session. Extract it as follows:
+Sign in to [https://m365.cloud.microsoft](https://m365.cloud.microsoft) in the browser where the extension is installed. Open the extension, enter `http://127.0.0.1:8230` and the value from `data/provision-secret`, then select **Provision M365Bridge**.
 
-1. Open [https://m365.cloud.microsoft](https://m365.cloud.microsoft) in your browser and log in
-2. Press **F12** to open DevTools, go to **Console**
-3. Paste and run the following JavaScript code:
+The extension sends only the required Microsoft login cookies directly to M365Bridge. You do not need to paste JavaScript, inspect cookies in DevTools, create `setup.json`, or copy authentication values manually.
 
-<details>
-<summary>Click to expand the JavaScript extraction snippet</summary>
+M365Bridge validates the primary and broker authentication flows, obtains fresh tokens, and derives the current user OID and tenant ID from the access token. Provisioned cookies and the derived identity are kept in memory, so provision again after every container restart or whenever the Microsoft browser session changes.
 
-```javascript
-(async () => {
-// 1. Get oid/tenant
-let oid, tenant;
-for (const key of Object.keys(localStorage)) {
-  if (!key.includes('active-account-filters')) continue;
-  try {
-    const val = JSON.parse(localStorage.getItem(key));
-    if (val?.homeAccountId?.includes('.')) { [oid, tenant] = val.homeAccountId.split('.'); break; }
-  } catch(e) {}
-}
-if (!oid) {
-  const mk = Object.keys(localStorage).find(k => k.startsWith('msal.') && k.includes('|'));
-  if (mk) { const p = mk.split('|')[1]; if (p?.includes('.')) [oid, tenant] = p.split('.'); }
-}
-if (!oid || !tenant) return 'ERROR: No MSAL account found. Make sure you are logged in.';
+#### Step 6: Connect OpenCode or another client
 
-// 2. Install fetch interceptor to capture token response for the target client ID
-const targetClientID = '4765445b-32c6-49b0-83e6-1d93765276ca';
-const origFetch = window.fetch;
-let captured = false;
-window.fetch = async function(...args) {
-  const resp = await origFetch.apply(this, args);
-  const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-  if (url.includes('oauth2/v2.0/token') && !captured) {
-    try {
-      // Verify this request is for our target client ID
-      let bodyStr = '';
-      const init = args[1];
-      if (typeof init?.body === 'string') {
-        bodyStr = init.body;
-      } else if (init?.body instanceof URLSearchParams) {
-        bodyStr = init.body.toString();
-      } else if (init?.body instanceof ArrayBuffer || ArrayBuffer.isView(init?.body)) {
-        bodyStr = new TextDecoder().decode(init.body);
-      } else if (args[0] instanceof Request) {
-        bodyStr = await args[0].clone().text();
-      }
-      const isTarget = new URLSearchParams(bodyStr).get('client_id') === targetClientID;
-      if (isTarget) {
-        const clone = resp.clone();
-        const data = await clone.json();
-        if (data.refresh_token) {
-          captured = true;
-          const result = {oid, tenant, refresh_token: data.refresh_token};
-          try {
-            if (window.cookieStore) {
-              const cookies = await cookieStore.getAll();
-              const sso = cookies.filter(c => c.name === 'ESTSAUTH' || c.name === 'ESTSAUTHPERSISTENT');
-              if (sso.length > 0) result.sso_cookies = sso.map(c => ({name: c.name, value: c.value}));
-            }
-          } catch(e) {}
-          console.log('===== COPY THE COMPLETE JSON BELOW =====');
-          console.log(JSON.stringify(result, null, 2));
-        }
-      }
-    } catch(e) {}
-  }
-  return resp;
-};
+Configure OpenCode or any OpenAI-compatible client with this API base URL:
 
-// 3. Find MSAL instance and force token refresh
-let msal = null;
-const checked = new WeakSet();
-function findMsal(obj, depth) {
-  if (!obj || depth > 3 || typeof obj !== 'object' || checked.has(obj)) return null;
-  checked.add(obj);
-  try {
-    if (typeof obj.acquireTokenSilent === 'function' && typeof obj.getAllAccounts === 'function') return obj;
-    if (depth < 3) for (const k of Object.keys(obj)) {
-      try { const r = findMsal(obj[k], depth + 1); if (r) return r; } catch(e) {}
-    }
-  } catch(e) {}
-  return null;
-}
-for (const k of Object.getOwnPropertyNames(window)) {
-  try { msal = findMsal(window[k], 0); if (msal) break; } catch(e) {}
-}
-
-if (msal) {
-  const accounts = msal.getAllAccounts();
-  if (accounts.length > 0) {
-    try {
-      await msal.acquireTokenSilent({
-        account: accounts[0],
-        scopes: ['https://substrate.office.com/.default'],
-        forceRefresh: true
-      });
-    } catch(e) {}
-  }
-  return 'Token refresh triggered. Copy the JSON output above.';
-}
-return 'Interceptor installed but MSAL instance not found. Navigate within m365.cloud.microsoft to trigger a token refresh, then copy the JSON output.';
-})()
+```text
+http://127.0.0.1:8230/v1
 ```
 
-</details>
-
-4. The console will output: `===== COPY THE COMPLETE JSON BELOW =====`
-5. Copy the JSON output. It will look like this:
-
-```json
-{
-  "oid": "your-oid",
-  "tenant": "your-tenant",
-  "refresh_token": "your-refresh-token",
-  "sso_cookies": [
-    {"name": "ESTSAUTH", "value": "..."},
-    {"name": "ESTSAUTHPERSISTENT", "value": "..."}
-  ]
-}
-```
-
-> **Note:** SSO cookies are captured automatically if the `cookieStore` API is available (Chrome, Edge). If `sso_cookies` is missing from the output, see Step 4 below.
-
-#### Step 4 (Optional): Get SSO cookies manually
-
-If the script above did not capture SSO cookies automatically (e.g. Firefox, or third-party cookie restrictions), capture them manually:
-
-Microsoft SPA refresh tokens expire after **24 hours**. Without SSO cookies, you must repeat Step 3 every 24 hours. SSO cookies enable automatic renewal and last weeks/months.
-
-To capture SSO cookies:
-
-1. Open [https://login.microsoftonline.com](https://login.microsoftonline.com) in your browser (this is where the cookies live, not m365.cloud.microsoft)
-2. Press **F12** to open DevTools, go to **Application** > **Cookies** > `https://login.microsoftonline.com`
-3. Find and copy the values of these two cookies:
-   - `ESTSAUTH`
-   - `ESTSAUTHPERSISTENT`
-
-#### Step 5: Create setup.json
-
-Create a file at `data/setup.json` with the JSON from Step 3. If you captured SSO cookies manually in Step 4, add them to the `sso_cookies` array:
-
-**Without SSO cookies (must re-run setup every 24 hours):**
-
-```json
-{"oid":"your-oid","tenant":"your-tenant","refresh_token":"your-refresh-token"}
-```
-
-**With SSO cookies (automatic renewal, recommended):**
-
-```json
-{
-  "oid": "your-oid",
-  "tenant": "your-tenant",
-  "refresh_token": "your-refresh-token",
-  "sso_cookies": [
-    {"name": "ESTSAUTH", "value": "paste-estsauth-value-here"},
-    {"name": "ESTSAUTHPERSISTENT", "value": "paste-estsauthpersistent-value-here"}
-  ]
-}
-```
-
-#### Step 6: Run the setup wizard
-
-Run the setup wizard inside the container to encrypt and save your credentials:
-
-```bash
-docker exec -it m365bridge ./bin/m365-bridge setup-wizard
-```
-
-
-The wizard will:
-- Read `data/setup.json`
-- Encrypt the refresh token and SSO cookies with AES-256-GCM
-- Save environment variables to `data/.env`
-- Verify the token by exchanging it for an access token
-
-On success, the server is ready. The API is available at `http://localhost:8230`.
-
-> **Note:** If you did not capture SSO cookies, the refresh token will expire after 24 hours and the server will stop working. Re-run Steps 3, 5, and 6 to get a new token. With SSO cookies, the server automatically renews tokens when they expire.
+After provisioning succeeds, the client can use the chat, responses, models, and other compatible endpoints documented below.
 
 #### Alternative: docker run
 
@@ -289,13 +174,14 @@ docker run -d \
   ghcr.io/kilimcininkoroglu/m365bridge:latest
 ```
 
-Then follow Steps 3-6 above.
+Pass `M365_PROVISION_SECRET_FILE` and `M365_PROVISION_ORIGINS` to the container when using `docker run`, then continue with Steps 5 and 6 above.
 
 #### Notes
 
 - The `data/` directory stores tokens, cache, and configuration. It is created automatically on first run.
 - Port `8230` (host) maps to port `8000` (container). Change the host port in `docker-compose.yml` or the `-p` flag if needed.
 - The container starts with `serve --port 8000` by default.
+- Browser provisioning uses the existing server port and does not require another published port.
 - To build the image from source instead of using the pre-built one: `docker compose up --build -d`
 
 ## Usage
@@ -322,14 +208,6 @@ Starts the HTTP API server.
 | `--port`    | int  | 8000    | Port to listen on     |
 | `--version` | bool | false   | Show version and exit |
 
-### Subcommand: setup-wizard
-
-Runs the browser-based setup wizard. Reads JSON from file containing `oid`, `tenant`, and `refresh_token`.
-
-| Flag     | Type   | Default           | Description             |
-|----------|--------|-------------------|-------------------------|
-| `--file` | string | `data/setup.json` | Path to setup JSON file |
-
 ### Examples
 
 ```bash
@@ -351,8 +229,6 @@ Runs the browser-based setup wizard. Reads JSON from file containing `oid`, `ten
 # Start API server
 ./bin/m365-bridge serve --port 8000
 
-# Run setup wizard with custom file
-./bin/m365-bridge setup-wizard --file /path/to/setup.json
 ```
 
 ### API Server
@@ -390,7 +266,7 @@ When you start the server for the first time:
 4. On success, you will see: `Starting API server on port 8000`
 5. The first request may take slightly longer as it opens a WebSocket connection to `substrate.office.com`
 
-If the refresh token is missing or expired, the server will attempt SSO cookie re-authentication if `data/tokens/sso_cookies.json` exists. If SSO cookies are also missing or expired, the server will fail to start with a token refresh error. Re-run `./bin/m365-bridge setup-wizard` to extract fresh tokens and cookies.
+If authentication is missing or expired, open the browser extension and select **Provision M365Bridge**. The server validates the browser session, refreshes authentication, and updates the runtime OID and tenant ID automatically.
 
 ### Session Isolation
 
@@ -829,9 +705,9 @@ pkg/
   servers/
     api.go               # HTTP API server, all endpoints, max_tokens, token counting, session isolation
     cli.go               # CLI server, interactive mode
-  setup/wizard.go        # Browser-based setup wizard (JS snippet, token verify, data/.env save)
 go.mod                   # Module: github.com/KilimcininKorOglu/M365Bridge, Go 1.22
-data/                    # Runtime data (gitignored): tokens/, setup.json, cache/
+extension/               # Browser extension for secure M365 session provisioning
+data/                    # Runtime data (gitignored): tokens/, cache/, provisioning secret
 ```
 
 ## Dependencies
@@ -848,12 +724,12 @@ data/                    # Runtime data (gitignored): tokens/, setup.json, cache
 - Refresh tokens encrypted with AES-256-GCM before storage
 - SSO and M365 web cookies encrypted with AES-256-GCM before storage (`data/tokens/sso_cookies.json` and `data/tokens/m365_cookies.json`)
 - Legacy plaintext M365 cookie stores are encrypted automatically on first use
-- Encryption key stored in `data/tokens/encryption.key`; losing it makes encrypted credentials unreadable and requires rerunning the setup wizard
+- Encryption key stored in `data/tokens/encryption.key`; losing it makes encrypted credentials unreadable and requires provisioning the browser session again
 - Access tokens cached in `data/tokens/token_cache.json` (disk-persisted, ~1h expiry with 60s buffer)
 - Background token refresher proactively refreshes access token every 30 minutes in `serve` mode
 - SSO cookie auto-renewal silently re-authenticates when refresh token expires (24h SPA limit)
 - No credentials stored in code or repository
-- `data/` directory is gitignored (contains tokens, cache, setup.json)
+- `data/` directory is gitignored (contains tokens, cache, and the provisioning secret)
 - API key authentication protects all `/v1/*` endpoints when configured
 
 ## Image Input Support

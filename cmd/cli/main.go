@@ -65,10 +65,6 @@ func runServer(args []string) {
 
 	config := models.LoadConfig()
 
-	if config.TenantID == "" || config.UserOID == "" {
-		logging.Fatalf("Error: M365_TENANT_ID and M365_USER_OID environment variables are required")
-	}
-
 	tokenManager := auth.NewTokenManager(
 		config.TenantID,
 		config.ClientID,

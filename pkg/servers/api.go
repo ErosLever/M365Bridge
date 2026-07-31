@@ -146,6 +146,7 @@ type APIServer struct {
 	server       *http.Server
 	stopCh       chan struct{}
 	mu           sync.RWMutex
+	provision    *provisioningHandler
 }
 
 // NewAPIServer creates a new API server instance.
@@ -163,6 +164,12 @@ const tokenRefreshInterval = 30 * time.Minute
 // Start starts the HTTP server on the specified port.
 func (api *APIServer) Start(port int) error {
 	api.mu.Lock()
+	provision, err := newProvisioningHandler(api.config, api.tokenManager.ProvisionSSOCookies)
+	if err != nil {
+		api.mu.Unlock()
+		return fmt.Errorf("configure session provisioning: %w", err)
+	}
+	api.provision = provision
 	// Initialize request transports and optional local coding tools.
 	api.m365Client = client.NewM365Client(api.tokenManager)
 	if api.config.EnableCodeTools {
@@ -195,6 +202,9 @@ func (api *APIServer) Start(port int) error {
 	mux.HandleFunc("/v1/conversations", api.withAuth(api.handleConversations))
 	mux.HandleFunc("/v1/conversations/", api.withAuth(api.handleConversation))
 	mux.HandleFunc("/v1/models", api.handleModels)
+	mux.HandleFunc("/provision/v1/session", api.provision.ServeHTTP)
+	mux.HandleFunc("/v1/", api.handleOK)
+	mux.HandleFunc("/", api.handleOK)
 	mux.HandleFunc("/health", api.handleHealth)
 
 	api.server = &http.Server{
@@ -307,6 +317,12 @@ func (api *APIServer) Stop() error {
 func (api *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
+}
+
+// handleHealth handles health check requests.
+func (api *APIServer) handleOK(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	api.sendJSON(w, http.StatusOK, map[string]any{})
 }
 
 // handleModels handles model list requests.

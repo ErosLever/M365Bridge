@@ -5,6 +5,9 @@ services:
     container_name: m365bridge
     ports:
       - "8230:8000"
+    environment:
+      M365_PROVISION_SECRET_FILE: ${M365_PROVISION_SECRET_FILE:-}
+      M365_PROVISION_ORIGINS: ${M365_PROVISION_ORIGINS:-}
     volumes:
       - ./data:/app/data
     restart: unless-stopped
