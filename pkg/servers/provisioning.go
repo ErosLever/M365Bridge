@@ -1,7 +1,10 @@
 package servers
 
 import (
-	"crypto/subtle"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +25,8 @@ const (
 	provisionSecretMinLength = 32
 	provisionFailureLimit    = 5
 	provisionFailureWindow   = time.Minute
+	provisionFreshnessWindow = 2 * time.Minute
+	provisionAdditionalData  = "m365bridge-provision-v1"
 )
 
 type provisionFailure struct {
@@ -36,6 +41,7 @@ type provisioningHandler struct {
 	provision func([]auth.SSOCookie) error
 	mu        sync.Mutex
 	failures  map[string]provisionFailure
+	requests  map[string]time.Time
 }
 
 func newProvisioningHandler(config *models.Config, provision func([]auth.SSOCookie) error) (*provisioningHandler, error) {
@@ -43,6 +49,7 @@ func newProvisioningHandler(config *models.Config, provision func([]auth.SSOCook
 		origins:   make(map[string]struct{}, len(config.ProvisionOrigins)),
 		provision: provision,
 		failures:  make(map[string]provisionFailure),
+		requests:  make(map[string]time.Time),
 	}
 	for _, origin := range config.ProvisionOrigins {
 		if !validExtensionOrigin(origin) {
@@ -67,7 +74,8 @@ func newProvisioningHandler(config *models.Config, provision func([]auth.SSOCook
 	}
 
 	handler.enabled = true
-	handler.secret = []byte(secret)
+	key := sha256.Sum256([]byte(secret))
+	handler.secret = key[:]
 	return handler, nil
 }
 
@@ -108,7 +116,7 @@ func (handler *provisioningHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 			return
 		}
 		w.Header().Set("Access-Control-Allow-Methods", http.MethodPost)
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		w.Header().Set("Access-Control-Max-Age", "600")
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -127,25 +135,57 @@ func (handler *provisioningHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	provided := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-	if len(provided) != len(handler.secret) || subtle.ConstantTimeCompare([]byte(provided), handler.secret) != 1 {
-		handler.recordFailure(r.RemoteAddr)
-		logging.Warnf("Provisioning authorization failed from %s", r.RemoteAddr)
-		handler.sendError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	var request struct {
-		Cookies []auth.SSOCookie `json:"cookies"`
+	var envelope struct {
+		Version    int    `json:"version"`
+		Nonce      string `json:"nonce"`
+		Ciphertext string `json:"ciphertext"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, provisionBodyLimit))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
+	if err := decoder.Decode(&envelope); err != nil || envelope.Version != 1 {
 		handler.sendError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		handler.sendError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+
+	nonce, nonceErr := base64.StdEncoding.DecodeString(envelope.Nonce)
+	ciphertext, ciphertextErr := base64.StdEncoding.DecodeString(envelope.Ciphertext)
+	block, blockErr := aes.NewCipher(handler.secret)
+	var gcm cipher.AEAD
+	if blockErr == nil {
+		gcm, blockErr = cipher.NewGCM(block)
+	}
+	if nonceErr != nil || ciphertextErr != nil || blockErr != nil || len(nonce) != gcm.NonceSize() {
+		handler.rejectEncryptedRequest(w, r)
+		return
+	}
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, []byte(provisionAdditionalData))
+	if err != nil {
+		handler.rejectEncryptedRequest(w, r)
+		return
+	}
+
+	var request struct {
+		Cookies   []auth.SSOCookie `json:"cookies"`
+		IssuedAt  int64            `json:"issued_at"`
+		RequestID string           `json:"request_id"`
+	}
+	decoder = json.NewDecoder(strings.NewReader(string(plaintext)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		handler.rejectEncryptedRequest(w, r)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		handler.rejectEncryptedRequest(w, r)
+		return
+	}
+	issuedAt := time.UnixMilli(request.IssuedAt)
+	if request.RequestID == "" || time.Since(issuedAt) < -provisionFreshnessWindow || time.Since(issuedAt) > provisionFreshnessWindow || !handler.acceptRequestID(request.RequestID) {
+		handler.rejectEncryptedRequest(w, r)
 		return
 	}
 
@@ -162,6 +202,28 @@ func (handler *provisioningHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 	handler.clearFailures(r.RemoteAddr)
 	logging.Info("M365 browser session provisioned successfully")
 	handler.sendJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (handler *provisioningHandler) rejectEncryptedRequest(w http.ResponseWriter, r *http.Request) {
+	handler.recordFailure(r.RemoteAddr)
+	logging.Warnf("Provisioning decryption failed from %s", r.RemoteAddr)
+	handler.sendError(w, http.StatusUnauthorized, "unauthorized")
+}
+
+func (handler *provisioningHandler) acceptRequestID(id string) bool {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	now := time.Now()
+	for requestID, seenAt := range handler.requests {
+		if now.Sub(seenAt) > provisionFreshnessWindow {
+			delete(handler.requests, requestID)
+		}
+	}
+	if _, exists := handler.requests[id]; exists {
+		return false
+	}
+	handler.requests[id] = now
+	return true
 }
 
 func (handler *provisioningHandler) rateLimited(remote string) bool {

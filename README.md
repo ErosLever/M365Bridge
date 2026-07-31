@@ -110,7 +110,7 @@ The bridge and provisioning endpoint are now available at `http://localhost:8230
 
 Sign in to [https://m365.cloud.microsoft](https://m365.cloud.microsoft) in the browser where the extension is installed. Open the extension, enter `http://127.0.0.1:8230` and the value from `data/provision-secret`, then select **Provision M365Bridge**.
 
-The extension sends only the required Microsoft login cookies directly to M365Bridge. You do not need to paste JavaScript, inspect cookies in DevTools, create `setup.json`, or copy authentication values manually.
+The extension encrypts the required Microsoft login cookies with AES-GCM using a key derived from the provisioning secret. The raw secret and plaintext cookies are not sent over the network. Each request includes a short-lived timestamp and one-time request ID to reject stale or replayed payloads.
 
 M365Bridge validates the primary and broker authentication flows, obtains fresh tokens, and derives the current user OID and tenant ID from the access token. Provisioned cookies and the derived identity are kept in memory, so provision again after every container restart or whenever the Microsoft browser session changes.
 
@@ -126,18 +126,22 @@ After provisioning succeeds, the client can use the chat, responses, models, and
 
 #### Alternative: docker run
 
-If you prefer `docker run` instead of Docker Compose:
+If you prefer `docker run` instead of Docker Compose, build the image from the current source tree first:
 
 ```bash
+docker build -t m365bridge:local .
+
 docker run -d \
   --name m365bridge \
   -p 8230:8000 \
-  -v $(pwd)/data:/app/data \
+  -e M365_PROVISION_SECRET_FILE=/app/data/provision-secret \
+  -e M365_PROVISION_ORIGINS=chrome-extension://<extension-id> \
+  -v "$(pwd)/data:/app/data" \
   --restart unless-stopped \
-  ghcr.io/kilimcininkoroglu/m365bridge:latest
+  m365bridge:local
 ```
 
-Pass `M365_PROVISION_SECRET_FILE` and `M365_PROVISION_ORIGINS` to the container when using `docker run`, then continue with Steps 5 and 6 above.
+Replace `chrome-extension://<extension-id>` with the exact origin recorded in Step 3, then continue with Steps 5 and 6 above.
 
 #### Notes
 

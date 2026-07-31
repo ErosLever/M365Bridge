@@ -1,16 +1,57 @@
 package servers
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/auth"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/models"
 )
+
+func encryptedProvisioningBody(t *testing.T, secret string, issuedAt time.Time, requestID string, cookies []auth.SSOCookie) string {
+	t.Helper()
+	plaintext, err := json.Marshal(map[string]any{
+		"cookies":    cookies,
+		"issued_at":  issuedAt.UnixMilli(),
+		"request_id": requestID,
+	})
+	if err != nil {
+		t.Fatalf("marshal provisioning payload: %v", err)
+	}
+	key := sha256.Sum256([]byte(secret))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		t.Fatalf("create cipher: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("create GCM: %v", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	for i := range nonce {
+		nonce[i] = byte(i + 1)
+	}
+	ciphertext := gcm.Seal(nil, nonce, plaintext, []byte(provisionAdditionalData))
+	envelope, err := json.Marshal(map[string]any{
+		"version":    1,
+		"nonce":      base64.StdEncoding.EncodeToString(nonce),
+		"ciphertext": base64.StdEncoding.EncodeToString(ciphertext),
+	})
+	if err != nil {
+		t.Fatalf("marshal provisioning envelope: %v", err)
+	}
+	return string(envelope)
+}
 
 func TestNewProvisioningHandlerDisabledWithoutSecret(t *testing.T) {
 	handler, err := newProvisioningHandler(&models.Config{}, func([]auth.SSOCookie) error { return nil })
@@ -46,8 +87,9 @@ func TestNewProvisioningHandlerSecretFileTakesPrecedence(t *testing.T) {
 	if !handler.enabled {
 		t.Fatal("newProvisioningHandler() did not enable provisioning with a valid file secret")
 	}
-	if got := string(handler.secret); got != fileSecret {
-		t.Fatalf("handler secret = %q, want secret loaded from file", got)
+	wantKey := sha256.Sum256([]byte(fileSecret))
+	if got := string(handler.secret); got != string(wantKey[:]) {
+		t.Fatalf("handler key does not match the secret loaded from file")
 	}
 }
 
@@ -158,4 +200,57 @@ func TestProvisioningHandlerHTTPBoundary(t *testing.T) {
 			t.Fatalf("denied origin was reflected as %q", got)
 		}
 	})
+}
+
+func TestProvisioningHandlerEncryptedPayload(t *testing.T) {
+	const allowedOrigin = "chrome-extension://abcdefghijklmnop"
+	secret := strings.Repeat("s", provisionSecretMinLength)
+	var provisioned []auth.SSOCookie
+	handler, err := newProvisioningHandler(&models.Config{
+		ProvisionSecret:  secret,
+		ProvisionOrigins: []string{allowedOrigin},
+	}, func(cookies []auth.SSOCookie) error {
+		provisioned = cookies
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("create handler: %v", err)
+	}
+
+	cookies := []auth.SSOCookie{{Name: "ESTSAUTH", Value: "sensitive-cookie"}}
+	body := encryptedProvisioningBody(t, secret, time.Now(), "request-success", cookies)
+	request := httptest.NewRequest(http.MethodPost, "/provision/v1/session", strings.NewReader(body))
+	request.Header.Set("Origin", allowedOrigin)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if len(provisioned) != 1 || provisioned[0].Value != "sensitive-cookie" {
+		t.Fatalf("provisioned cookies = %#v", provisioned)
+	}
+	if strings.Contains(body, "sensitive-cookie") || strings.Contains(body, secret) {
+		t.Fatal("encrypted envelope exposed cookie or provisioning secret")
+	}
+
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{"wrong secret", encryptedProvisioningBody(t, strings.Repeat("x", provisionSecretMinLength), time.Now(), "request-wrong-key", cookies)},
+		{"stale", encryptedProvisioningBody(t, secret, time.Now().Add(-provisionFreshnessWindow-time.Second), "request-stale", cookies)},
+		{"replay", body},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/provision/v1/session", strings.NewReader(test.body))
+			request.Header.Set("Origin", allowedOrigin)
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+			}
+		})
+	}
 }

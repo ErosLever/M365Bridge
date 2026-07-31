@@ -25,6 +25,49 @@ function updateDestination() {
   }
 }
 
+function base64(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function randomID() {
+  return base64(crypto.getRandomValues(new Uint8Array(16)));
+}
+
+async function encryptProvisioningPayload(secret, cookies) {
+  const encoder = new TextEncoder();
+  const keyBytes = await crypto.subtle.digest("SHA-256", encoder.encode(secret));
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt"]
+  );
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = encoder.encode(JSON.stringify({
+    cookies,
+    issued_at: Date.now(),
+    request_id: randomID()
+  }));
+  const ciphertext = await crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv: nonce,
+      additionalData: encoder.encode("m365bridge-provision-v1")
+    },
+    key,
+    plaintext
+  );
+
+  return {
+    version: 1,
+    nonce: base64(nonce),
+    ciphertext: base64(new Uint8Array(ciphertext))
+  };
+}
+
 async function restoreSettings() {
   const saved = await extensionAPI.storage.local.get(["endpoint", "provisionSecret"]);
   if (saved.endpoint) endpointInput.value = saved.endpoint;
@@ -60,13 +103,13 @@ form.addEventListener("submit", async (event) => {
     }
 
     await extensionAPI.storage.local.set({ endpoint: endpointInput.value, provisionSecret: secret });
+    const envelope = await encryptProvisioningPayload(secret, required);
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${secret}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ cookies: required })
+      body: JSON.stringify(envelope)
     });
 
     if (!response.ok) {
