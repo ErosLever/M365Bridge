@@ -21,8 +21,8 @@ function readManifest(fileName) {
   }
 
   const permissions = new Set(manifest.permissions ?? []);
-  if (permissions.size !== 2 || !permissions.has("cookies") || !permissions.has("storage")) {
-    throw new Error(`${fileName}: permissions must contain only cookies and storage`);
+  if (permissions.size !== 3 || !permissions.has("cookies") || !permissions.has("storage") || !permissions.has("tabs")) {
+    throw new Error(`${fileName}: permissions must contain only cookies, storage, and tabs`);
   }
 
   return manifest;

@@ -8,6 +8,7 @@ services:
     environment:
       M365_PROVISION_SECRET_FILE: ${M365_PROVISION_SECRET_FILE:-}
       M365_PROVISION_ORIGINS: ${M365_PROVISION_ORIGINS:-}
+      M365_PROVISION_AUTHORITY: ${M365_PROVISION_AUTHORITY:-organizations}
     volumes:
       - ./data:/app/data
     restart: unless-stopped

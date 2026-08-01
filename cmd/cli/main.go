@@ -72,6 +72,9 @@ func runServer(args []string) {
 		defaultRefreshTokenFile,
 		defaultCacheFile,
 	)
+	if err := tokenManager.SetProvisionAuthority(config.ProvisionAuthority); err != nil {
+		logging.Fatalf("Invalid M365_PROVISION_AUTHORITY: %v", err)
+	}
 	tokenManager.SetUserOID(config.UserOID)
 
 	apiServer := servers.NewAPIServer(config, tokenManager)
@@ -147,6 +150,10 @@ func runCLI() {
 		defaultRefreshTokenFile,
 		defaultCacheFile,
 	)
+	if err := tokenManager.SetProvisionAuthority(config.ProvisionAuthority); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: invalid M365_PROVISION_AUTHORITY: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Create CLI server
 	cliServer := servers.NewCLIServer(config, tokenManager)

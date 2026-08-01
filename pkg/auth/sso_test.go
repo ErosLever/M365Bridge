@@ -29,6 +29,27 @@ func TestIdentityFromAccessTokenRequiresOIDAndTID(t *testing.T) {
 	}
 }
 
+func TestSetProvisionAuthority(t *testing.T) {
+	tenantID := "12345678-1234-1234-1234-123456789abc"
+	for _, authority := range []string{"organizations", "common", tenantID, " COMMON "} {
+		t.Run(authority, func(t *testing.T) {
+			tm := NewTokenManager("tenant", "client", "scope", "refresh", "cache")
+			if err := tm.SetProvisionAuthority(authority); err != nil {
+				t.Fatalf("SetProvisionAuthority(%q): %v", authority, err)
+			}
+		})
+	}
+
+	for _, authority := range []string{"", "consumers", "tenant/id", "12345678-1234-1234-1234-123456789abz"} {
+		t.Run("invalid "+authority, func(t *testing.T) {
+			tm := NewTokenManager("tenant", "client", "scope", "refresh", "cache")
+			if err := tm.SetProvisionAuthority(authority); err == nil {
+				t.Fatalf("SetProvisionAuthority(%q) succeeded", authority)
+			}
+		})
+	}
+}
+
 func TestAcquireDesignerTokenReacquiresExpiredBrokerToken(t *testing.T) {
 	useTemporaryWorkingDirectory(t)
 	tm := NewTokenManager("tenant", "client", "scope", "refresh", "cache")

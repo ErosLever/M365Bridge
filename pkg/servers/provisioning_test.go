@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -250,6 +252,46 @@ func TestProvisioningHandlerEncryptedPayload(t *testing.T) {
 			handler.ServeHTTP(recorder, request)
 			if recorder.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+			}
+		})
+	}
+}
+
+func TestProvisioningHandlerClassifiesProvisioningFailures(t *testing.T) {
+	const allowedOrigin = "chrome-extension://abcdefghijklmnop"
+	secret := strings.Repeat("s", provisionSecretMinLength)
+	cookies := []auth.SSOCookie{{Name: "ESTSAUTH", Value: "sensitive-cookie"}}
+
+	for _, test := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{"invalid cookies", fmt.Errorf("wrapped: %w", auth.ErrInvalidSSOCookies), http.StatusBadRequest, "invalid_request"},
+		{"session validation", errors.New("validate primary SSO session"), http.StatusBadGateway, "session_validation_failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler, err := newProvisioningHandler(&models.Config{
+				ProvisionSecret:  secret,
+				ProvisionOrigins: []string{allowedOrigin},
+			}, func([]auth.SSOCookie) error { return test.err })
+			if err != nil {
+				t.Fatalf("create handler: %v", err)
+			}
+
+			body := encryptedProvisioningBody(t, secret, time.Now(), "request-"+test.name, cookies)
+			request := httptest.NewRequest(http.MethodPost, "/provision/v1/session", strings.NewReader(body))
+			request.Header.Set("Origin", allowedOrigin)
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", recorder.Code, test.wantStatus, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), test.wantCode) {
+				t.Fatalf("response does not contain %q: %s", test.wantCode, recorder.Body.String())
 			}
 		})
 	}

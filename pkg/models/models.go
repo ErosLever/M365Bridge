@@ -108,6 +108,7 @@ type Config struct {
 	ProvisionSecret       string
 	ProvisionSecretFile   string
 	ProvisionOrigins      []string
+	ProvisionAuthority    string
 	EnableCodeTools       bool
 	AutoExposeTools       bool
 	WorkspaceDir          string
@@ -134,6 +135,7 @@ func LoadConfig() *Config {
 		ProvisionSecret:       strings.TrimSpace(os.Getenv("M365_PROVISION_SECRET")),
 		ProvisionSecretFile:   strings.TrimSpace(os.Getenv("M365_PROVISION_SECRET_FILE")),
 		ProvisionOrigins:      parseCSV(os.Getenv("M365_PROVISION_ORIGINS")),
+		ProvisionAuthority:    getEnvWithDefault("M365_PROVISION_AUTHORITY", "organizations"),
 		EnableCodeTools:       getEnvBool("M365_ENABLE_CODE_TOOLS", false),
 		AutoExposeTools:       getEnvBool("M365_AUTO_EXPOSE_TOOLS", false),
 		WorkspaceDir:          getEnvWithDefault("M365_WORKSPACE_DIR", "."),

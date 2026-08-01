@@ -159,12 +159,12 @@ func (handler *provisioningHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 		gcm, blockErr = cipher.NewGCM(block)
 	}
 	if nonceErr != nil || ciphertextErr != nil || blockErr != nil || len(nonce) != gcm.NonceSize() {
-		handler.rejectEncryptedRequest(w, r)
+		handler.rejectEncryptedRequest(w, r, "invalid envelope")
 		return
 	}
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, []byte(provisionAdditionalData))
 	if err != nil {
-		handler.rejectEncryptedRequest(w, r)
+		handler.rejectEncryptedRequest(w, r, "authentication failed")
 		return
 	}
 
@@ -176,21 +176,29 @@ func (handler *provisioningHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 	decoder = json.NewDecoder(strings.NewReader(string(plaintext)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
-		handler.rejectEncryptedRequest(w, r)
+		handler.rejectEncryptedRequest(w, r, "invalid encrypted payload 1")
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		handler.rejectEncryptedRequest(w, r)
+		handler.rejectEncryptedRequest(w, r, "invalid encrypted payload 2")
 		return
 	}
 	issuedAt := time.UnixMilli(request.IssuedAt)
-	if request.RequestID == "" || time.Since(issuedAt) < -provisionFreshnessWindow || time.Since(issuedAt) > provisionFreshnessWindow || !handler.acceptRequestID(request.RequestID) {
-		handler.rejectEncryptedRequest(w, r)
+	if age := time.Since(issuedAt); age < -provisionFreshnessWindow || age > provisionFreshnessWindow {
+		handler.rejectEncryptedRequest(w, r, "expired request")
+		return
+	}
+	if !handler.acceptRequestID(request.RequestID) {
+		handler.rejectEncryptedRequest(w, r, "replayed request")
+		return
+	}
+	if request.RequestID == "" {
+		handler.rejectEncryptedRequest(w, r, "invalid encrypted payload 3")
 		return
 	}
 
 	if err := handler.provision(request.Cookies); err != nil {
-		logging.Warn("M365 browser session provisioning failed")
+		logging.Warnf("M365 browser session provisioning failed: %v", err)
 		if errors.Is(err, auth.ErrInvalidSSOCookies) {
 			handler.sendError(w, http.StatusBadRequest, "invalid_request")
 			return
@@ -204,9 +212,9 @@ func (handler *provisioningHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 	handler.sendJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-func (handler *provisioningHandler) rejectEncryptedRequest(w http.ResponseWriter, r *http.Request) {
+func (handler *provisioningHandler) rejectEncryptedRequest(w http.ResponseWriter, r *http.Request, reason string) {
 	handler.recordFailure(r.RemoteAddr)
-	logging.Warnf("Provisioning decryption failed from %s", r.RemoteAddr)
+	logging.Warnf("Provisioning request rejected from %s: %s", r.RemoteAddr, reason)
 	handler.sendError(w, http.StatusUnauthorized, "unauthorized")
 }
 

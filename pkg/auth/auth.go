@@ -49,6 +49,7 @@ type TokenManager struct {
 	refreshFile            string
 	cacheFile              string
 	tokenURL               string
+	provisionAuthority     string
 	userOID                string
 	ssoCookiesMu           sync.RWMutex
 	ssoCookies             *SSOCookieStore
@@ -59,13 +60,25 @@ type TokenManager struct {
 // NewTokenManager creates a new TokenManager instance.
 func NewTokenManager(tenant, clientID, scope, refreshFile, cacheFile string) *TokenManager {
 	return &TokenManager{
-		tenant:      tenant,
-		clientID:    clientID,
-		scope:       scope,
-		refreshFile: refreshFile,
-		cacheFile:   cacheFile,
-		tokenURL:    fmt.Sprintf(tokenURLTemplate, tenant),
+		tenant:             tenant,
+		clientID:           clientID,
+		scope:              scope,
+		refreshFile:        refreshFile,
+		cacheFile:          cacheFile,
+		tokenURL:           fmt.Sprintf(tokenURLTemplate, tenant),
+		provisionAuthority: defaultProvisionAuthority,
 	}
+}
+
+// SetProvisionAuthority selects the Microsoft identity authority used only for
+// the initial browser provisioning flow.
+func (tm *TokenManager) SetProvisionAuthority(authority string) error {
+	authority = strings.ToLower(strings.TrimSpace(authority))
+	if !validProvisionAuthority(authority) {
+		return fmt.Errorf("invalid provisioning authority %q: expected organizations, common, or a tenant ID", authority)
+	}
+	tm.provisionAuthority = authority
+	return nil
 }
 
 // SetUserOID sets the user object ID for broker token requests.

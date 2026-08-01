@@ -5,7 +5,8 @@
   "description": "Explicitly provision M365Bridge from your Microsoft 365 browser session.",
   "permissions": [
     "cookies",
-    "storage"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "https://login.microsoftonline.com/*",

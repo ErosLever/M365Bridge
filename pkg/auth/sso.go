@@ -30,10 +30,29 @@ const (
 	// m365CookiesFile is the browser-exported M365 web cookie store.
 	m365CookiesFile = "data/tokens/m365_cookies.json"
 	// authorizeURLTemplate is the OAuth2 authorize endpoint for silent re-auth.
-	authorizeURLTemplate = "https://login.microsoftonline.com/%s/oauth2/v2.0/authorize"
+	authorizeURLTemplate      = "https://login.microsoftonline.com/%s/oauth2/v2.0/authorize"
+	defaultProvisionAuthority = "organizations"
 	// defaultRedirectURI is the redirect URI registered for the M365 Copilot SPA app.
 	defaultRedirectURI = "https://m365.cloud.microsoft/spalanding"
 )
+
+func validProvisionAuthority(authority string) bool {
+	if authority == "organizations" || authority == "common" {
+		return true
+	}
+	if len(authority) != 36 || authority[8] != '-' || authority[13] != '-' || authority[18] != '-' || authority[23] != '-' {
+		return false
+	}
+	for i, character := range authority {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			continue
+		}
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
 
 // ErrM365CookiesUnavailable indicates that no cookies for the M365 web app are stored.
 var ErrM365CookiesUnavailable = errors.New("M365 web app cookies unavailable")
@@ -405,7 +424,6 @@ func (tm *TokenManager) reauthWithSSO() (string, error) {
 		logging.Errorf("reauthWithSSO: no SSO cookies available: %v", err)
 		return "", fmt.Errorf("%w: no SSO cookies available: %v", ErrRefreshFailed, err)
 	}
-
 	logging.Debugf("reauthWithSSO: loaded %d SSO cookies captured at %s", len(store.Cookies), store.CapturedAt.Format(time.RFC3339))
 
 	// Build Cookie header string from SSO cookies
@@ -432,20 +450,18 @@ func (tm *TokenManager) reauthWithSSO() (string, error) {
 	// Build authorize URL for silent auth using SSO cookies
 	// sso_reload=True tells the server to use SSO cookies and skip the BssoInterrupt page.
 	// prompt=none breaks SSO cookie recognition, so we omit it.
-	_, tenant := tm.Identity()
-	authorizeURL := fmt.Sprintf(authorizeURLTemplate, tenant)
 	params := url.Values{
 		"client_id":             {tm.clientID},
 		"response_type":         {"code"},
 		"redirect_uri":          {defaultRedirectURI},
-		"scope":                 {tm.scope + " offline_access"},
+		"scope":                 {tm.scope},
 		"response_mode":         {"fragment"},
 		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},
 		"state":                 {"m365bridge-sso"},
 		"sso_reload":            {"True"},
 	}
-
+	authorizeURL := fmt.Sprintf(authorizeURLTemplate, tm.provisionAuthority)
 	authReq, err := http.NewRequest("GET", authorizeURL+"?"+params.Encode(), nil)
 	if err != nil {
 		return "", fmt.Errorf("%w: failed to create authorize request: %v", ErrRefreshFailed, err)
@@ -466,16 +482,24 @@ func (tm *TokenManager) reauthWithSSO() (string, error) {
 	for {
 		location := currentResp.Header.Get("Location")
 		if location == "" {
-			body, _ := io.ReadAll(currentResp.Body)
+			body, err := io.ReadAll(currentResp.Body)
+			if err != nil {
+				return "", fmt.Errorf("%w: read authorize response (status %d): %v", ErrRefreshFailed, currentResp.StatusCode, err)
+			}
 			bodyStr := string(body)
 			// Check for meta refresh redirect in HTML
 			if metaURL := extractMetaRefreshURL(bodyStr); metaURL != "" {
 				location = metaURL
 			} else {
-				if len(bodyStr) > 2000 {
-					bodyStr = bodyStr[:2000]
-				}
-				return "", fmt.Errorf("%w: no redirect from authorize (status %d): %s", ErrRefreshFailed, currentResp.StatusCode, bodyStr)
+				return "", fmt.Errorf(
+					"%w: no redirect from authorize (status %d, content-type %q, content-length %d, request-id %q): %s",
+					ErrRefreshFailed,
+					currentResp.StatusCode,
+					currentResp.Header.Get("Content-Type"),
+					len(body),
+					currentResp.Header.Get("Request-Id"),
+					summarizeBrokerAuthorizeResponse(bodyStr),
+				)
 			}
 		}
 
@@ -607,10 +631,11 @@ func (tm *TokenManager) exchangeAuthCode(authCode, verifier string) (string, err
 		"code":          {authCode},
 		"redirect_uri":  {defaultRedirectURI},
 		"code_verifier": {verifier},
-		"scope":         {tm.scope + " offline_access"},
+		"scope":         {tm.scope},
 	}
 
-	tokenReq, err := http.NewRequest("POST", tm.tokenURL, strings.NewReader(tokenData.Encode()))
+	tokenURL := fmt.Sprintf(tokenURLTemplate, tm.provisionAuthority)
+	tokenReq, err := http.NewRequest("POST", tokenURL, strings.NewReader(tokenData.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("%w: failed to create token request: %v", ErrRefreshFailed, err)
 	}

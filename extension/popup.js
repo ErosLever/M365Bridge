@@ -86,7 +86,19 @@ form.addEventListener("submit", async (event) => {
   try {
     const url = provisioningURL(endpointInput.value);
     const secret = secretInput.value;
-    const cookies = await extensionAPI.cookies.getAll({ domain: "login.microsoftonline.com" });
+    const [activeTab] = await extensionAPI.tabs.query({ active: true, currentWindow: true });
+    if (!activeTab?.id) {
+      throw new Error("Could not identify the active browser tab.");
+    }
+    const cookieStores = await extensionAPI.cookies.getAllCookieStores();
+    const activeStore = cookieStores.find((store) => store.tabIds.includes(activeTab.id));
+    if (!activeStore) {
+      throw new Error("Could not identify the active tab's cookie store.");
+    }
+    const cookies = await extensionAPI.cookies.getAll({
+      domain: "login.microsoftonline.com",
+      storeId: activeStore.id
+    });
     const required = cookies
       .filter((cookie) => cookie.name === "ESTSAUTH" || cookie.name === "ESTSAUTHPERSISTENT")
       .map((cookie) => ({
@@ -103,14 +115,20 @@ form.addEventListener("submit", async (event) => {
     }
 
     await extensionAPI.storage.local.set({ endpoint: endpointInput.value, provisionSecret: secret });
-    const envelope = await encryptProvisioningPayload(secret, required);
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(envelope)
-    });
+    let response;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      // Build the encrypted payload immediately before each request. If the
+      // laptop sleeps, retrying creates a fresh timestamp and request ID.
+      const envelope = await encryptProvisioningPayload(secret, required);
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(envelope)
+      });
+      if (response.status !== 401 || attempt === 1) break;
+    }
 
     if (!response.ok) {
       const failure = await response.json().catch(() => null);

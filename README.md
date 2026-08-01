@@ -66,9 +66,19 @@ go build -o bin/m365-bridge ./cmd/cli
 
 #### Step 3: Install the extension and record its origin
 
-Load `extension/dist/chromium` as an unpacked extension in Chromium, or load `extension/dist/firefox/manifest.json` as a temporary add-on in Firefox.
+The Chromium package supports Google Chrome, Microsoft Edge, and other compatible Chromium-based browsers. Load the same `extension/dist/chromium` directory in either browser:
+
+- **Google Chrome:** Open `chrome://extensions`, enable **Developer mode**, select **Load unpacked**, and choose `extension/dist/chromium`.
+- **Microsoft Edge:** Open `edge://extensions`, enable **Developer mode**, select **Load unpacked**, and choose `extension/dist/chromium`.
+- **Firefox:** Open `about:debugging#/runtime/this-firefox`, select **Load Temporary Add-on**, and choose `extension/dist/firefox/manifest.json`.
 
 Record the origin assigned by the browser. It will look like `chrome-extension://<extension-id>` or `moz-extension://<extension-id>`. M365Bridge uses this exact origin to restrict provisioning requests.
+
+Chrome and Edge assign extension IDs independently, even when they load the same package. If you use the extension in both browsers, add both exact origins to `M365_PROVISION_ORIGINS` as a comma-separated list:
+
+```dotenv
+M365_PROVISION_ORIGINS=chrome-extension://<chrome-extension-id>,chrome-extension://<edge-extension-id>
+```
 
 #### Step 4: Configure and start M365Bridge
 
@@ -77,6 +87,7 @@ Create a project-level `.env` file using the extension origin from Step 3:
 ```dotenv
 M365_PROVISION_SECRET_FILE=/app/data/provision-secret
 M365_PROVISION_ORIGINS=chrome-extension://<extension-id>
+M365_PROVISION_AUTHORITY=organizations
 ```
 
 Multiple exact extension origins can be supplied as a comma-separated list. Arbitrary web origins are rejected.
@@ -93,6 +104,7 @@ services:
     environment:
       M365_PROVISION_SECRET_FILE: ${M365_PROVISION_SECRET_FILE:-}
       M365_PROVISION_ORIGINS: ${M365_PROVISION_ORIGINS:-}
+      M365_PROVISION_AUTHORITY: ${M365_PROVISION_AUTHORITY:-organizations}
     volumes:
       - ./data:/app/data
     restart: unless-stopped
@@ -105,6 +117,8 @@ docker compose up -d
 ```
 
 The bridge and provisioning endpoint are now available at `http://localhost:8230`. Browser provisioning requires either `M365_PROVISION_SECRET` or `M365_PROVISION_SECRET_FILE`. If neither is configured, `/provision/v1/session` returns `404 Not Found` and the extension cannot authenticate M365Bridge. The existing `8230:8000` mapping serves both API and provisioning requests.
+
+`M365_PROVISION_AUTHORITY` controls the Microsoft identity authority used for the initial browser provisioning flow. It defaults to `organizations`; set it to `common` or an exact tenant ID when required. The tenant ID derived from the resulting access token still becomes the runtime authority after provisioning.
 
 #### Step 5: Provision the Microsoft 365 session
 
@@ -136,6 +150,7 @@ docker run -d \
   -p 8230:8000 \
   -e M365_PROVISION_SECRET_FILE=/app/data/provision-secret \
   -e M365_PROVISION_ORIGINS=chrome-extension://<extension-id> \
+  -e M365_PROVISION_AUTHORITY=organizations \
   -v "$(pwd)/data:/app/data" \
   --restart unless-stopped \
   m365bridge:local
