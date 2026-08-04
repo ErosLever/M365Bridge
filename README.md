@@ -44,7 +44,7 @@ head -c 24 /dev/urandom | base64 > data/provision-secret
 chmod 600 data/provision-secret
 ```
 
-Keep `data/provision-secret` private. The browser extension uses this secret to authenticate session provisioning requests.
+Keep `data/provision-secret` private. The browser extension uses this secret to encrypt and authenticate session provisioning requests.
 
 #### Step 2: Build M365Bridge and package the extension
 
