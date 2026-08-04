@@ -6,6 +6,7 @@ On top of the original [M365Bridge](https://github.com/KilimcininKorOglu/M365Bri
 ## Architecture
 
 Your Browser with M365 extension installed --(auth tokens)--> M365Bridge
+
 Your App --(OpenAI compatible API endpoints)--> M365Bridge --(SignalR)--> substrate.office.com --> M365 Copilot Backend
 
 ## Prerequisites
