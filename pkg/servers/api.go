@@ -1916,7 +1916,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 				// the model's reasoning is visible without exposing the mechanism.
 				if emit := thinkingFilter.Feed(chunk.Thinking); emit != "" {
 					if !thinkingBlockOpen {
-						api.sendAnthropicSSE(w, "content_block_start", map[string]any{"type": "content_block_start", "index": blockIndex, "content_block": map[string]any{"type": "thinking", "thinking": ""}})
+						api.sendAnthropicSSE(w, "content_block_start", map[string]any{"type": "content_block_start", "index": blockIndex, "content_block": map[string]any{"type": "thinking", "thinking": "", "signature": ""}})
 						thinkingBlockOpen = true
 					}
 					api.sendAnthropicSSE(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": blockIndex, "delta": map[string]any{"type": "thinking_delta", "thinking": emit}})
@@ -1928,7 +1928,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 				cbStart := map[string]any{
 					"type":          "content_block_start",
 					"index":         blockIndex,
-					"content_block": map[string]any{"type": "thinking", "thinking": ""},
+					"content_block": map[string]any{"type": "thinking", "thinking": "", "signature": ""},
 				}
 				api.sendAnthropicSSE(w, "content_block_start", cbStart)
 				thinkingBlockOpen = true
@@ -1948,7 +1948,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 		if toolCallingEnabled && !thinkingClosed {
 			if rem := thinkingFilter.Flush(); rem != "" {
 				if !thinkingBlockOpen {
-					api.sendAnthropicSSE(w, "content_block_start", map[string]any{"type": "content_block_start", "index": blockIndex, "content_block": map[string]any{"type": "thinking", "thinking": ""}})
+					api.sendAnthropicSSE(w, "content_block_start", map[string]any{"type": "content_block_start", "index": blockIndex, "content_block": map[string]any{"type": "thinking", "thinking": "", "signature": ""}})
 					thinkingBlockOpen = true
 				}
 				api.sendAnthropicSSE(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": blockIndex, "delta": map[string]any{"type": "thinking_delta", "thinking": rem}})
@@ -2015,7 +2015,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 	if toolCallingEnabled && !thinkingClosed {
 		if rem := thinkingFilter.Flush(); rem != "" {
 			if !thinkingBlockOpen {
-				api.sendAnthropicSSE(w, "content_block_start", map[string]any{"type": "content_block_start", "index": blockIndex, "content_block": map[string]any{"type": "thinking", "thinking": ""}})
+				api.sendAnthropicSSE(w, "content_block_start", map[string]any{"type": "content_block_start", "index": blockIndex, "content_block": map[string]any{"type": "thinking", "thinking": "", "signature": ""}})
 				thinkingBlockOpen = true
 			}
 			api.sendAnthropicSSE(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": blockIndex, "delta": map[string]any{"type": "thinking_delta", "thinking": rem}})
@@ -2267,7 +2267,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 
 	content := []map[string]any{}
 	if thinking != "" {
-		content = append(content, map[string]any{"type": "thinking", "thinking": thinking})
+		content = append(content, map[string]any{"type": "thinking", "thinking": thinking, "signature": ""})
 	}
 	if respText != "" {
 		content = append(content, map[string]any{"type": "text", "text": respText})
