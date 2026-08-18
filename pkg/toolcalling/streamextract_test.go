@@ -102,7 +102,7 @@ func TestContentStreamExtractorCommitsFinalParserCandidate(t *testing.T) {
 	final := ParseSimulatedResponseResponses(
 		extractor.ParseText(),
 		[]string{"read_nonce"},
-		nil,
+		ToolContracts{},
 	)
 	streamed += extractor.Commit([]string{"read_nonce"})
 

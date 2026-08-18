@@ -80,7 +80,7 @@ func TestParseSimulatedResponseDropsInventedFlatToolAndKeepsSafeContent(t *testi
 		}]
 	}`
 
-	result := ParseSimulatedResponse(raw, []string{"safe_tool"}, nil)
+	result := ParseSimulatedResponse(raw, []string{"safe_tool"}, ToolContracts{})
 
 	if len(result.ToolCalls) != 0 {
 		t.Fatalf("invented tool calls were not filtered: %#v", result.ToolCalls)
@@ -109,7 +109,7 @@ func TestParseSimulatedResponseAnthropicDropsInventedToolAndKeepsSafeText(t *tes
 		"stop_reason": "tool_use"
 	}`
 
-	result := ParseSimulatedResponseAnthropic(raw, []string{"safe_tool"}, nil)
+	result := ParseSimulatedResponseAnthropic(raw, []string{"safe_tool"}, ToolContracts{})
 
 	if len(result.ToolCalls) != 0 {
 		t.Fatalf("invented Anthropic tool calls were not filtered: %#v", result.ToolCalls)
@@ -140,7 +140,7 @@ func TestParseSimulatedResponseKeepsFlatFunctionCallNamespace(t *testing.T) {
 		}]
 	}`
 
-	result := ParseSimulatedResponse(raw, []string{"ctx_batch_execute"}, nil)
+	result := ParseSimulatedResponse(raw, []string{"ctx_batch_execute"}, ToolContracts{})
 
 	if len(result.ToolCalls) != 1 {
 		t.Fatalf("tool call count = %d, want 1", len(result.ToolCalls))
@@ -150,8 +150,8 @@ func TestParseSimulatedResponseKeepsFlatFunctionCallNamespace(t *testing.T) {
 	}
 }
 
-func agentRequiredByTool() map[string][]string {
-	return map[string][]string{"Agent": {"description", "prompt"}}
+func agentContracts() ToolContracts {
+	return ToolContracts{Required: map[string][]string{"Agent": {"description", "prompt"}}}
 }
 
 func TestParseSimulatedResponseDropsToolCallMissingRequiredArgs(t *testing.T) {
@@ -170,7 +170,7 @@ func TestParseSimulatedResponseDropsToolCallMissingRequiredArgs(t *testing.T) {
 		}]
 	}`
 
-	result := ParseSimulatedResponse(raw, []string{"Agent"}, agentRequiredByTool())
+	result := ParseSimulatedResponse(raw, []string{"Agent"}, agentContracts())
 
 	if len(result.ToolCalls) != 0 {
 		t.Fatalf("tool call with missing required arg was not dropped: %#v", result.ToolCalls)
@@ -199,7 +199,7 @@ func TestParseSimulatedResponseKeepsToolCallWithAllRequiredArgs(t *testing.T) {
 		}]
 	}`
 
-	result := ParseSimulatedResponse(raw, []string{"Agent"}, agentRequiredByTool())
+	result := ParseSimulatedResponse(raw, []string{"Agent"}, agentContracts())
 
 	if len(result.ToolCalls) != 1 {
 		t.Fatalf("valid tool call was dropped: %#v", result.ToolCalls)
@@ -217,7 +217,7 @@ func TestParseSimulatedResponseAnthropicDropsToolUseMissingRequiredArgs(t *testi
 		]
 	}`
 
-	result := ParseSimulatedResponseAnthropic(raw, []string{"Agent"}, agentRequiredByTool())
+	result := ParseSimulatedResponseAnthropic(raw, []string{"Agent"}, agentContracts())
 
 	if len(result.ToolCalls) != 0 {
 		t.Fatalf("Anthropic tool_use with missing required arg was not dropped: %#v", result.ToolCalls)
@@ -237,7 +237,7 @@ func TestParseSimulatedResponseAnthropicDropsToolUseWithEmptyRequiredArg(t *test
 		]
 	}`
 
-	result := ParseSimulatedResponseAnthropic(raw, []string{"Agent"}, agentRequiredByTool())
+	result := ParseSimulatedResponseAnthropic(raw, []string{"Agent"}, agentContracts())
 
 	if len(result.ToolCalls) != 0 {
 		t.Fatalf("tool_use with empty required arg was not dropped: %#v", result.ToolCalls)
@@ -307,13 +307,13 @@ func TestParseSimulatedResponseAnthropicReportsDroppedMissingArgs(t *testing.T) 
 		]
 	}`
 
-	result := ParseSimulatedResponseAnthropic(raw, []string{"Agent"}, agentRequiredByTool())
+	result := ParseSimulatedResponseAnthropic(raw, []string{"Agent"}, agentContracts())
 
 	if len(result.ToolCalls) != 0 {
 		t.Fatalf("expected the malformed tool_use to be dropped, got %#v", result.ToolCalls)
 	}
-	if want := []string{"Agent"}; strings.Join(result.DroppedMissingArgs, ",") != strings.Join(want, ",") {
-		t.Fatalf("DroppedMissingArgs = %v, want %v", result.DroppedMissingArgs, want)
+	if want := []string{"Agent"}; strings.Join(result.DroppedNames(), ",") != strings.Join(want, ",") {
+		t.Fatalf("DroppedNames() = %v, want %v", result.DroppedNames(), want)
 	}
 }
 
@@ -322,18 +322,18 @@ func TestParseSimulatedResponseReportsDroppedMissingArgs(t *testing.T) {
 		`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"Agent","arguments":"{\"description\":\"only one\"}"}}]}}]}` +
 		"\n```"
 
-	result := ParseSimulatedResponse(raw, []string{"Agent"}, agentRequiredByTool())
+	result := ParseSimulatedResponse(raw, []string{"Agent"}, agentContracts())
 
 	if len(result.ToolCalls) != 0 {
 		t.Fatalf("expected the malformed tool call to be dropped, got %#v", result.ToolCalls)
 	}
-	if want := []string{"Agent"}; strings.Join(result.DroppedMissingArgs, ",") != strings.Join(want, ",") {
-		t.Fatalf("DroppedMissingArgs = %v, want %v", result.DroppedMissingArgs, want)
+	if want := []string{"Agent"}; strings.Join(result.DroppedNames(), ",") != strings.Join(want, ",") {
+		t.Fatalf("DroppedNames() = %v, want %v", result.DroppedNames(), want)
 	}
 }
 
 func TestBuildRepairNoteNamesToolsAndRequiredFields(t *testing.T) {
-	note := BuildRepairNote([]string{"Agent", "Agent", ""}, agentRequiredByTool())
+	note := BuildRepairNote([]DroppedCall{{Name: "Agent"}, {Name: "Agent"}, {Name: ""}}, agentContracts())
 
 	for _, want := range []string{"RETRY", "Agent", "description", "prompt"} {
 		if !strings.Contains(note, want) {

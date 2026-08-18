@@ -757,9 +757,9 @@ func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, me
 		}
 		var simulated toolcalling.SimulatedResult
 		if provider == toolLoopAnthropic {
-			simulated = toolcalling.ParseSimulatedResponseAnthropic(text, toolNamesFromDefs(tools), toolcalling.RequiredArgsByTool(tools))
+			simulated = toolcalling.ParseSimulatedResponseAnthropic(text, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		} else {
-			simulated = toolcalling.ParseSimulatedResponse(text, toolNamesFromDefs(tools), toolcalling.RequiredArgsByTool(tools))
+			simulated = toolcalling.ParseSimulatedResponse(text, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		}
 		simulated = api.repairSimulatedToolCalls(provider, messages, cfg, tools, simulated)
 		if !simulated.HasPayload || len(simulated.ToolCalls) == 0 {
@@ -822,19 +822,19 @@ func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, me
 // returns the recovered result when the backend supplies valid tool calls, and
 // the original result otherwise so callers keep their existing fallback path.
 func (api *APIServer) repairSimulatedToolCalls(provider toolLoopProvider, messages []payload.Message, cfg models.ModelConfig, tools []toolcalling.ToolDef, sim toolcalling.SimulatedResult) toolcalling.SimulatedResult {
-	if len(sim.ToolCalls) > 0 || len(sim.DroppedMissingArgs) == 0 || len(messages) == 0 {
+	if len(sim.ToolCalls) > 0 || len(sim.DroppedCalls) == 0 || len(messages) == 0 {
 		return sim
 	}
 
-	requiredByTool := toolcalling.RequiredArgsByTool(tools)
-	note := toolcalling.BuildRepairNote(sim.DroppedMissingArgs, requiredByTool)
+	contracts := toolcalling.ContractsFor(tools)
+	note := toolcalling.BuildRepairNote(sim.DroppedCalls, contracts)
 	retry := make([]payload.Message, len(messages))
 	copy(retry, messages)
 	last := retry[len(retry)-1]
 	last.Content = last.Content + "\n\n" + note
 	retry[len(retry)-1] = last
 
-	logging.Warnf("repairSimulatedToolCalls: re-asking backend for tools missing required args: %v", sim.DroppedMissingArgs)
+	logging.Warnf("repairSimulatedToolCalls: re-asking backend for tools failed validation: %v", sim.DroppedCalls)
 	text, _, _, _, _, err := api.m365Client.ChatConversation(retry, cfg.Tone, cfg.Override, "", api.config.UserOID, api.config.TenantID, true)
 	if err != nil {
 		logging.Errorf("repairSimulatedToolCalls: retry failed: %v", err)
@@ -843,9 +843,9 @@ func (api *APIServer) repairSimulatedToolCalls(provider toolLoopProvider, messag
 
 	var retried toolcalling.SimulatedResult
 	if provider == toolLoopAnthropic {
-		retried = toolcalling.ParseSimulatedResponseAnthropic(text, toolNamesFromDefs(tools), requiredByTool)
+		retried = toolcalling.ParseSimulatedResponseAnthropic(text, toolNamesFromDefs(tools), contracts)
 	} else {
-		retried = toolcalling.ParseSimulatedResponse(text, toolNamesFromDefs(tools), requiredByTool)
+		retried = toolcalling.ParseSimulatedResponse(text, toolNamesFromDefs(tools), contracts)
 	}
 	if len(retried.ToolCalls) > 0 {
 		logging.Infof("repairSimulatedToolCalls: recovered %d tool call(s) after re-ask", len(retried.ToolCalls))
@@ -1503,7 +1503,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 	// Parse simulated tool calls from full text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
 	if toolCallingEnabled {
-		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.RequiredArgsByTool(tools))
+		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
@@ -1679,7 +1679,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 
 	// Parse simulated tool calls from response text if tool calling is enabled
 	if hasTools {
-		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.RequiredArgsByTool(tools))
+		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
@@ -1937,7 +1937,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 	// Parse simulated tool calls from full text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
 	if toolCallingEnabled {
-		sim := toolcalling.ParseSimulatedResponseAnthropic(fullText, toolNamesFromDefs(tools), toolcalling.RequiredArgsByTool(tools))
+		sim := toolcalling.ParseSimulatedResponseAnthropic(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		sim = api.repairSimulatedToolCalls(toolLoopAnthropic, messages, cfg, tools, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
@@ -2164,7 +2164,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 
 	// Parse simulated tool calls from response text if tool calling is enabled
 	if hasTools {
-		sim := toolcalling.ParseSimulatedResponseAnthropic(respText, toolNamesFromDefs(tools), toolcalling.RequiredArgsByTool(tools))
+		sim := toolcalling.ParseSimulatedResponseAnthropic(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		sim = api.repairSimulatedToolCalls(toolLoopAnthropic, messages, cfg, tools, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
@@ -2349,7 +2349,7 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 	// Parse simulated tool calls from buffered text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
 	if toolCallingEnabled {
-		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.RequiredArgsByTool(tools))
+		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
@@ -2432,7 +2432,7 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 
 	// Parse simulated tool calls from response text
 	if hasTools {
-		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.RequiredArgsByTool(tools))
+		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
@@ -3070,7 +3070,7 @@ func parseResponsesSimulation(text string, policy responsesToolPolicy) (response
 		content:      text,
 		finishReason: "stop",
 	}
-	simulated := toolcalling.ParseSimulatedResponseResponses(text, policy.allowedToolNames, toolcalling.RequiredArgsByTool(policy.tools))
+	simulated := toolcalling.ParseSimulatedResponseResponses(text, policy.allowedToolNames, toolcalling.ContractsFor(policy.tools))
 	if simulated.HasPayload {
 		result.content = simulated.Content
 		if len(simulated.ToolCalls) > 0 {
@@ -5049,7 +5049,7 @@ func (api *APIServer) nonStreamResponsesCompact(w http.ResponseWriter, messages 
 
 	// In simulated mode, extract plain content
 	if hasTools {
-		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.RequiredArgsByTool(tools))
+		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		if sim.HasPayload {
 			respText = sim.Content
 		}
@@ -5154,7 +5154,7 @@ func (api *APIServer) streamResponsesCompact(w http.ResponseWriter, messages []p
 
 	// In simulated mode, extract plain content
 	if hasTools {
-		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.RequiredArgsByTool(tools))
+		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		if sim.HasPayload {
 			fullText = sim.Content
 		}
