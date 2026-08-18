@@ -101,7 +101,7 @@ func SaveSSOCookies(cookies []SSOCookie) error {
 		}
 	}
 
-	return os.WriteFile(ssoCookiesFile, []byte(encrypted), 0600)
+	return atomicWriteFile(ssoCookiesFile, []byte(encrypted), 0600)
 }
 
 // SaveM365Cookies encrypts and stores browser cookies used by M365 web APIs.
@@ -582,15 +582,20 @@ func (e *designerOAuthError) isExpiredRefreshToken() bool {
 // refresh token is available.
 func (tm *TokenManager) GetDesignerToken() (string, error) {
 	// Check cache first
-	data, err := os.ReadFile(designerTokenCacheFile)
-	if err == nil {
-		var cache designerTokenCache
-		if json.Unmarshal(data, &cache) == nil {
-			if time.Now().Unix() < cache.ExpiresAt-60 {
-				logging.Debug("GetDesignerToken: cache hit")
-				return cache.AccessToken, nil
-			}
-		}
+	if token, ok := readDesignerTokenCache(); ok {
+		logging.Debug("GetDesignerToken: cache hit")
+		return token, nil
+	}
+
+	// The broker refresh token is single-use like the primary one, so only one
+	// goroutine may acquire at a time.
+	tm.designerMu.Lock()
+	defer tm.designerMu.Unlock()
+
+	// Re-check under the lock; a concurrent caller may have just filled it.
+	if token, ok := readDesignerTokenCache(); ok {
+		logging.Debug("GetDesignerToken: cache filled while waiting for designer lock")
+		return token, nil
 	}
 
 	logging.Info("GetDesignerToken: cache miss, acquiring new token")
@@ -607,10 +612,29 @@ func (tm *TokenManager) GetDesignerToken() (string, error) {
 		ExpiresAt:   time.Now().Add(time.Duration(expiresIn) * time.Second).Unix(),
 	}
 	cacheData, _ := json.Marshal(cache)
-	os.WriteFile(designerTokenCacheFile, cacheData, 0600)
+	if err := atomicWriteFile(designerTokenCacheFile, cacheData, 0600); err != nil {
+		logging.Errorf("GetDesignerToken: failed to write cache: %v", err)
+	}
 
 	logging.Infof("GetDesignerToken: success, expires_in=%d", expiresIn)
 	return token, nil
+}
+
+// readDesignerTokenCache returns the cached designerapp token when it is still
+// valid for at least 60 more seconds.
+func readDesignerTokenCache() (string, bool) {
+	data, err := os.ReadFile(designerTokenCacheFile)
+	if err != nil {
+		return "", false
+	}
+	var cache designerTokenCache
+	if json.Unmarshal(data, &cache) != nil {
+		return "", false
+	}
+	if time.Now().Unix() >= cache.ExpiresAt-60 {
+		return "", false
+	}
+	return cache.AccessToken, true
 }
 
 // acquireDesignerToken performs a broker refresh token request to obtain a
@@ -971,7 +995,7 @@ func (tm *TokenManager) writeBrokerRefreshToken(token string) error {
 		return fmt.Errorf("failed to create directory for broker refresh token: %w", err)
 	}
 
-	return os.WriteFile(designerBrokerRefreshFile, []byte(encrypted), 0600)
+	return atomicWriteFile(designerBrokerRefreshFile, []byte(encrypted), 0600)
 }
 
 // generateClientRequestID generates a UUID for the client-request-id parameter.
