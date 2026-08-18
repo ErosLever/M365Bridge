@@ -96,6 +96,12 @@ type Message struct {
 	Images      []ImageData         `json:"-"`
 	Annotations []MessageAnnotation `json:"-"`
 	ToolCallID  string              `json:"tool_call_id,omitempty"` // OpenAI tool role messages
+	// ToolCallIDs lists the tool call ids this assistant message announced and
+	// ToolResultIDs lists the ids it answers. The conversation payload flattens
+	// both into text, so the ids are kept here for the server to check that a
+	// result refers to a call the same request actually declared.
+	ToolCallIDs   []string `json:"-"`
+	ToolResultIDs []string `json:"-"`
 }
 
 // ImageData represents an image extracted from multimodal content.
@@ -137,12 +143,16 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	m.Role = raw.Role
 	m.Name = raw.Name
 	m.ToolCallID = raw.ToolCallID
+	if raw.Role == "tool" && raw.ToolCallID != "" {
+		m.ToolResultIDs = append(m.ToolResultIDs, raw.ToolCallID)
+	}
 
 	// Handle OpenAI assistant messages with tool_calls field
 	if len(raw.ToolCalls) > 0 {
 		var sb strings.Builder
 		for _, tc := range raw.ToolCalls {
 			fmt.Fprintf(&sb, "[Previous Tool Call: %s]\nArguments: %s\n\n", tc.Function.Name, tc.Function.Arguments)
+			m.ToolCallIDs = append(m.ToolCallIDs, tc.ID)
 		}
 		m.Content = strings.TrimSpace(sb.String())
 	}
@@ -207,6 +217,8 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 		case "tool_use":
 			// Anthropic assistant message: previous tool call
 			name, _ := block["name"].(string)
+			id, _ := block["id"].(string)
+			m.ToolCallIDs = append(m.ToolCallIDs, id)
 			input := block["input"]
 			if inputBytes, err := json.Marshal(input); err == nil {
 				m.Content += fmt.Sprintf("\n[Previous Tool Call: %s]\nArguments: %s\n", name, string(inputBytes))
@@ -214,6 +226,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 		case "tool_result":
 			// Anthropic user message: tool result
 			toolUseID, _ := block["tool_use_id"].(string)
+			m.ToolResultIDs = append(m.ToolResultIDs, toolUseID)
 			resultContent := ""
 			if c, ok := block["content"].(string); ok {
 				resultContent = c

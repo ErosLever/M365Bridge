@@ -901,6 +901,12 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	}
 	logging.Infof("handleChatCompletions: model=%s stream=%v tools=%d sid=%s", modelKey, req.Stream, len(req.Tools), modelSessionID)
 
+	if err := validateToolResultMessages(req.Messages); err != nil {
+		logging.Errorf("handleChatCompletions: %v", err)
+		api.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// Handle JSON mode
 	if req.ResponseFormat != nil {
 		if format, ok := req.ResponseFormat["type"].(string); ok && format == "json_object" {
@@ -1136,6 +1142,12 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 	// Map Anthropic model to internal model
 	cfg := models.LookupModel(modelKey)
 	logging.Infof("handleAnthropicMessages: model=%s stream=%v tools=%d sid=%s", modelKey, req.Stream, len(req.Tools), modelSessionID)
+
+	if err := validateToolResultMessages(req.Messages); err != nil {
+		logging.Errorf("handleAnthropicMessages: %v", err)
+		api.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	// Build chat messages with system prompt prepended. Claude Code can send
 	// Anthropic system as either a string or an array of text content blocks.
@@ -2742,6 +2754,41 @@ func injectSimulatedPromptAnthropic(messages *[]payload.Message, requestJSON, to
 	}
 }
 
+// validateToolResultMessages rejects a tool result that answers nothing. The
+// conversation payload flattens results into text, so an id the request never
+// declared would silently reach the model as a plausible-looking result and
+// desynchronize the client's own tool loop.
+//
+// When the request declares no tool calls at all, the id cannot be checked
+// against anything: a client that trimmed its history to stay under the
+// context window legitimately sends results whose calls are no longer present.
+// Only a missing id is rejected in that case.
+func validateToolResultMessages(messages []payload.Message) error {
+	known := make(map[string]bool)
+	for i := range messages {
+		for _, id := range messages[i].ToolCallIDs {
+			if id != "" {
+				known[id] = true
+			}
+		}
+	}
+
+	for i := range messages {
+		if messages[i].Role == "tool" && messages[i].ToolCallID == "" {
+			return errors.New(`a message with role "tool" is missing tool_call_id`)
+		}
+		for _, id := range messages[i].ToolResultIDs {
+			if id == "" {
+				return errors.New("a tool result is missing the id of the tool call it answers")
+			}
+			if len(known) > 0 && !known[id] {
+				return fmt.Errorf("tool result %q does not answer any tool call in this request", id)
+			}
+		}
+	}
+	return nil
+}
+
 // anthropicToolChoiceString normalizes the Anthropic tool_choice field to a
 // string ("any", "auto", "tool", or "") for prompt-building purposes.
 func anthropicToolChoiceString(toolChoice map[string]any) string {
@@ -3626,6 +3673,11 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 
 	// Convert Responses API input to payload.Message list
 	messages := responsesInputToMessages(req.Input)
+	if err := validateToolResultMessages(messages); err != nil {
+		logging.Errorf("handleResponses: %v", err)
+		api.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	// Prepend instructions as first user message (M365 has no system role)
 	if strings.TrimSpace(req.Instructions) != "" && len(messages) > 0 {
@@ -3754,7 +3806,8 @@ func responsesInputToMessages(input any) []payload.Message {
 					callID,
 					output,
 				),
-				ToolCallID: callID,
+				ToolCallID:    callID,
+				ToolResultIDs: []string{callID},
 			})
 			continue
 		}
@@ -3764,13 +3817,15 @@ func responsesInputToMessages(input any) []payload.Message {
 			name, _ := m["name"].(string)
 			namespace, _ := m["namespace"].(string)
 			args, _ := m["arguments"].(string)
+			callID, _ := m["call_id"].(string)
 			qualifiedName := name
 			if namespace != "" {
 				qualifiedName = namespace + "/" + name
 			}
 			messages = append(messages, payload.Message{
-				Role:    "assistant",
-				Content: fmt.Sprintf("Tool call: %s(%s)", qualifiedName, args),
+				Role:        "assistant",
+				Content:     fmt.Sprintf("Tool call: %s(%s)", qualifiedName, args),
+				ToolCallIDs: []string{callID},
 			})
 			continue
 		}
