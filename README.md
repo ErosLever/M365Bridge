@@ -544,6 +544,20 @@ Each entry in `GET /v1/models` advertises `context_window` and `max_output_token
 | `M365_CONTEXT_WINDOW`    | `1000000` | Advertised context window token count in `/v1/models`. |
 | `M365_MAX_OUTPUT_TOKENS` | `1000000` | Advertised maximum output token count in `/v1/models`. |
 
+### Model List Fields
+
+`GET /v1/models` lists each model once, keyed by its advertised id and sorted, so aliases such as `claude` and `claude-sonnet` do not appear twice. Each entry carries:
+
+| Field               | Description                                                                                     |
+|---------------------|-------------------------------------------------------------------------------------------------|
+| `owned_by`          | `anthropic-via-microsoft-365` for the Claude tones, `microsoft-365` for the rest.                 |
+| `context_window`    | The advertised window, from `M365_CONTEXT_WINDOW`.                                                |
+| `max_output_tokens` | The advertised output budget, from `M365_MAX_OUTPUT_TOKENS`.                                      |
+| `max_input_tokens`  | The window minus the output budget, or the full window when the output budget is not smaller.     |
+| `supports_tools`    | Always `true`; every model reaches caller-defined tools through the simulated tool calling layer. |
+
+The response also carries `reasoning_effort_presets`, the effort values the Responses API accepts.
+
 ### Conversation Quota
 
 M365 enforces a per-conversation message ceiling and reports the counters on its update frames. Every turn logs them, for example `ConvStream throttling: used=8 max=600 headroom=592`.
@@ -673,7 +687,12 @@ Response:
 ### Notes
 
 - Tool calling is always enabled — no configuration needed. Requests without `tools` are unaffected.
-- Tool calls that omit schema-required arguments are dropped, and the proxy performs a single corrective re-ask so agent clients never receive an unexecutable call. This works best for single-step tool calls; sustained multi-round agent loops (for example Claude Code's `/init` or sub-agent tasks) depend on the M365 backend model's own tool-use reliability and are not guaranteed.
+- Tool call arguments are validated against the declared JSON schema: `type`, `enum`, `required`, nested `properties`, and array `items`. A call that violates the contract is dropped, and the proxy performs a single corrective re-ask carrying the rejection reason so agent clients never receive an unexecutable call. This works best for single-step tool calls; sustained multi-round agent loops (for example Claude Code's `/init` or sub-agent tasks) depend on the M365 backend model's own tool-use reliability and are not guaranteed.
+- Under `additionalProperties: false`, arguments the schema does not declare are removed rather than rejected, so one stray field does not cost a round trip.
+- `tool_choice` is enforced when the response is parsed, not only asked for in the prompt. Under `"none"` no call is forwarded; when a specific function is pinned, a call to any other tool is dropped and re-asked.
+- Every tool call id is a fresh `call_<uuid>`. The backend's own ids repeat across turns, which clients reject as duplicates.
+- A tool result whose `tool_call_id` (OpenAI), `tool_use_id` (Anthropic), or `call_id` (Responses) is missing, or names a call the same request never declared, is rejected with HTTP 400. A request that declares no tool calls at all skips the id check, so a client that trimmed its history is not blocked.
+- When the backend answers a tool request with prose that denies the tools exist or claims to have run the work in its own sandbox, the proxy re-asks once with an explicit instruction. An ordinary text answer passes through untouched.
 - When M365 Copilot runs its own server-side tools (web search, code interpreter) and returns plain text instead of a simulated JSON payload, the response is returned as a normal text completion with `finish_reason: "stop"`.
 - `tool_result` messages (OpenAI) and `tool_use`/`tool_result` content blocks (Anthropic) in conversation history are converted to plain text before being sent to M365, since the M365 backend does not understand tool roles.
 - Streaming endpoints buffer the full response before parsing tool calls (tool call JSON may span multiple chunks).
@@ -725,7 +744,17 @@ Enabling these tools turns the API into a remote code and file access surface. *
 
 ## Responses API
 
-The `/v1/responses` endpoint implements the OpenAI Responses API format. It accepts `input` (string or array of typed items), `instructions`, `max_output_tokens`, `tools`, and `previous_response_id` for conversation continuity.
+The `/v1/responses` endpoint implements the OpenAI Responses API format. It accepts `input` (string or array of typed items), `instructions`, `max_output_tokens`, `tools`, `reasoning`, and `previous_response_id` for conversation continuity.
+
+### Reasoning Effort
+
+Codex CLI sends `reasoning: {"effort": ..., "summary": ...}`. The accepted effort values are `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`; anything else is rejected with HTTP 400 rather than ignored.
+
+M365 exposes no separate effort dial, so effort steers the only lever that exists: `medium` and above routes the request to the model's reasoning variant when the registry has one, for example `gpt5.5` to `gpt5.5-reasoning`. A model without a variant, or a key that already names one, is left unchanged. `summary` is accepted and not acted on.
+
+### Custom Tools
+
+A tool declared with `"type": "custom"` takes free-form text rather than JSON arguments. Its calls come back as `custom_tool_call` items with the text under `input`, and the matching `custom_tool_call` / `custom_tool_call_output` history items are read back on the next turn.
 
 ### Example (non-streaming)
 

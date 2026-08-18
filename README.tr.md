@@ -544,6 +544,20 @@ Hiç model göndermeyen bir istek (boş `model` alanı veya yalnızca `:session-
 | `M365_CONTEXT_WINDOW`    | `1000000`  | `/v1/models` içinde ilan edilen context window token sayısı. |
 | `M365_MAX_OUTPUT_TOKENS` | `1000000`  | `/v1/models` içinde ilan edilen maksimum çıktı token sayısı. |
 
+### Model Listesi Alanları
+
+`GET /v1/models` her modeli ilan edilen id'sine göre bir kez ve sıralı listeler; böylece `claude` ile `claude-sonnet` gibi takma adlar iki kez görünmez. Her kayıt şunları taşır:
+
+| Alan                | Açıklama                                                                                                       |
+|---------------------|------------------------------------------------------------------------------------------------------------------|
+| `owned_by`          | Claude tone'ları için `anthropic-via-microsoft-365`, diğerleri için `microsoft-365`.                                |
+| `context_window`    | `M365_CONTEXT_WINDOW` değerinden gelen ilan edilen pencere.                                                        |
+| `max_output_tokens` | `M365_MAX_OUTPUT_TOKENS` değerinden gelen ilan edilen çıktı bütçesi.                                               |
+| `max_input_tokens`  | Pencere eksi çıktı bütçesi; çıktı bütçesi pencereden küçük değilse pencerenin tamamı.                              |
+| `supports_tools`    | Her zaman `true`; her model, çağıranın tanımladığı tool'lara simüle tool calling katmanı üzerinden erişir.         |
+
+Yanıt ayrıca `reasoning_effort_presets` alanını taşır: Responses API'nin kabul ettiği effort değerleri.
+
 ### Konuşma Kotası
 
 M365, konuşma başına bir mesaj üst sınırı uygular ve sayaçları update frame'lerinde bildirir. Her tur bunları loglar, örneğin `ConvStream throttling: used=8 max=600 headroom=592`.
@@ -673,7 +687,12 @@ Yanıt:
 ### Notlar
 
 - Tool calling her zaman etkindir — yapılandırma gerekmez. `tools` olmayan istekler etkilenmez.
-- Şema tarafından zorunlu kılınan argümanları eksik bırakan araç çağrıları düşürülür ve proxy tek seferlik düzeltici bir yeniden-sorma yapar; böylece agent istemcileri çalıştırılamaz bir çağrı almaz. Bu, tek adımlı araç çağrılarında en iyi sonucu verir; çok turlu sürekli agent döngüleri (örneğin Claude Code'un `/init` komutu veya alt-agent görevleri) M365 backend modelinin kendi araç kullanım güvenilirliğine bağlıdır ve garanti edilmez.
+- Tool call argümanları, tanımlanan JSON şemasına göre doğrulanır: `type`, `enum`, `required`, iç içe `properties` ve dizi `items`. Sözleşmeyi ihlal eden çağrı düşürülür ve proxy, ret gerekçesini taşıyan tek seferlik düzeltici bir yeniden-sorma yapar; böylece agent istemcileri çalıştırılamaz bir çağrı almaz. Bu, tek adımlı araç çağrılarında en iyi sonucu verir; çok turlu sürekli agent döngüleri (örneğin Claude Code'un `/init` komutu veya alt-agent görevleri) M365 backend modelinin kendi araç kullanım güvenilirliğine bağlıdır ve garanti edilmez.
+- `additionalProperties: false` altında, şemanın tanımlamadığı argümanlar reddedilmek yerine silinir; böylece tek bir fazla alan bir tur maliyetine yol açmaz.
+- `tool_choice` yalnızca prompt'ta istenmez, yanıt ayrıştırılırken zorlanır. `"none"` altında hiçbir çağrı iletilmez; belirli bir fonksiyon pinlendiğinde başka bir tool'a yapılan çağrı düşürülür ve yeniden sorulur.
+- Her tool call id'si yeni bir `call_<uuid>` değeridir. Backend'in kendi id'leri turlar arasında tekrar eder ve istemciler bunları çift kayıt olarak reddeder.
+- `tool_call_id` (OpenAI), `tool_use_id` (Anthropic) veya `call_id` (Responses) alanı eksik olan ya da aynı istekte hiç tanımlanmamış bir çağrıyı işaret eden tool sonucu HTTP 400 ile reddedilir. Hiç tool call tanımlamayan bir istek id kontrolünü atlar; böylece geçmişini kısaltmış bir istemci engellenmez.
+- Backend, tool içeren bir isteği tool'ların var olmadığını söyleyen ya da işi kendi sandbox'ında çalıştırdığını iddia eden düz metinle yanıtladığında, proxy açık bir talimatla bir kez yeniden sorar. Sıradan bir metin yanıtı olduğu gibi geçer.
 - M365 Copilot kendi sunucu tarafı araçlarını çalıştırdığında (web araması, code interpreter) ve simüle JSON yerine düz metin döndürdüğünde, yanıt normal bir metin tamamlaması olarak `finish_reason: "stop"` ile döndürülür.
 - Konuşma geçmişindeki `tool_result` mesajları (OpenAI) ve `tool_use`/`tool_result` içerik blokları (Anthropic), M365 backend'i tool rollerini anlamadığı için M365'ye gönderilmeden önce düz metne dönüştürülür.
 - Streaming endpoint'leri, tool call'ları ayrıştırmadan önce tam yanıtı tampona alır (tool call JSON'u birden çok chunk'a yayılabilir).
@@ -725,7 +744,17 @@ Bu araçları etkinleştirmek, API'yi uzaktan kod ve dosya erişim yüzeyine dö
 
 ## Responses API
 
-`/v1/responses` uç noktası, OpenAI Responses API formatını uygular. `input` (string veya tipli öğe dizisi), `instructions`, `max_output_tokens`, `tools` ve konuşma sürekliliği için `previous_response_id` kabul eder.
+`/v1/responses` uç noktası, OpenAI Responses API formatını uygular. `input` (string veya tipli öğe dizisi), `instructions`, `max_output_tokens`, `tools`, `reasoning` ve konuşma sürekliliği için `previous_response_id` kabul eder.
+
+### Reasoning Effort
+
+Codex CLI `reasoning: {"effort": ..., "summary": ...}` gönderir. Kabul edilen effort değerleri `none`, `minimal`, `low`, `medium`, `high` ve `xhigh`'dır; başka bir değer yok sayılmak yerine HTTP 400 ile reddedilir.
+
+M365 ayrı bir effort ayarı sunmaz; bu yüzden effort, var olan tek kolu yönlendirir: `medium` ve üzeri, registry'de bir reasoning varyantı varsa isteği o varyanta yönlendirir, örneğin `gpt5.5` yerine `gpt5.5-reasoning`. Varyantı olmayan bir model veya zaten varyantı adlandıran bir anahtar değişmeden kalır. `summary` kabul edilir ama işlenmez.
+
+### Custom Tool'lar
+
+`"type": "custom"` ile tanımlanan bir tool, JSON argüman yerine serbest biçimli metin alır. Çağrıları, metin `input` alanında olacak şekilde `custom_tool_call` öğeleri olarak döner ve eşleşen `custom_tool_call` / `custom_tool_call_output` geçmiş öğeleri bir sonraki turda geri okunur.
 
 ### Örnek (akışsız)
 
