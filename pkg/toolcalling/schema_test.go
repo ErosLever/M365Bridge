@@ -160,6 +160,96 @@ func TestParseSimulatedResponseAnthropicDropsSchemaViolation(t *testing.T) {
 	}
 }
 
+// twoToolContracts declares two schemaless tools so tool_choice is the only
+// thing that can reject a call.
+func twoToolContracts() ToolContracts {
+	return ContractsFor([]ToolDef{
+		{Type: "function", Function: ToolDefFunc{Name: "get_weather"}},
+		{Type: "function", Function: ToolDefFunc{Name: "send_email"}},
+	})
+}
+
+func weatherCallPayload() string {
+	return `{"choices":[{"message":{"role":"assistant","tool_calls":[
+		{"id":"x","type":"function","function":{"name":"get_weather","arguments":"{}"}}]}}]}`
+}
+
+func TestToolChoiceNoneDropsEveryCall(t *testing.T) {
+	// The caller forbade tool use. A model that emits a call anyway must not
+	// reach the client, and re-asking cannot change the answer, so the drop is
+	// final rather than repairable.
+	result := ParseSimulatedResponse(
+		weatherCallPayload(),
+		[]string{"get_weather", "send_email"},
+		twoToolContracts().WithChoice("none"),
+	)
+	if len(result.ToolCalls) != 0 {
+		t.Fatalf("tool_choice \"none\" still forwarded %#v", result.ToolCalls)
+	}
+	if len(result.DroppedCalls) != 0 {
+		t.Fatalf("DroppedCalls = %#v, want none so the repair flow is not triggered", result.DroppedCalls)
+	}
+}
+
+func TestToolChoicePinnedDropsOtherTools(t *testing.T) {
+	// send_email is pinned, so a get_weather call is a contract violation the
+	// model can plausibly fix when asked again.
+	result := ParseSimulatedResponse(
+		weatherCallPayload(),
+		[]string{"get_weather", "send_email"},
+		twoToolContracts().WithChoice("send_email"),
+	)
+	if len(result.ToolCalls) != 0 {
+		t.Fatalf("pinned tool_choice still forwarded %#v", result.ToolCalls)
+	}
+	if len(result.DroppedCalls) != 1 || result.DroppedCalls[0].Name != "get_weather" {
+		t.Fatalf("DroppedCalls = %#v, want one repairable get_weather entry", result.DroppedCalls)
+	}
+	if !strings.Contains(result.DroppedCalls[0].Reason, "send_email") {
+		t.Fatalf("rejection reason %q does not name the pinned tool", result.DroppedCalls[0].Reason)
+	}
+}
+
+func TestToolChoicePinnedKeepsTheChosenTool(t *testing.T) {
+	result := ParseSimulatedResponse(
+		weatherCallPayload(),
+		[]string{"get_weather", "send_email"},
+		twoToolContracts().WithChoice("get_weather"),
+	)
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("the pinned tool was rejected: %#v / %#v", result.ToolCalls, result.DroppedCalls)
+	}
+}
+
+func TestToolChoicePermissiveValuesAllowAnyTool(t *testing.T) {
+	for _, choice := range []string{"", "auto", "required", "any"} {
+		result := ParseSimulatedResponse(
+			weatherCallPayload(),
+			[]string{"get_weather", "send_email"},
+			twoToolContracts().WithChoice(choice),
+		)
+		if len(result.ToolCalls) != 1 {
+			t.Fatalf("tool_choice %q rejected a valid call: %#v", choice, result.DroppedCalls)
+		}
+	}
+}
+
+func TestToolChoiceAnthropicPinnedDropsOtherTools(t *testing.T) {
+	raw := `{"content":[{"type":"tool_use","name":"get_weather","input":{}}]}`
+
+	result := ParseSimulatedResponseAnthropic(
+		raw,
+		[]string{"get_weather", "send_email"},
+		twoToolContracts().WithChoice("send_email"),
+	)
+	if len(result.ToolCalls) != 0 {
+		t.Fatalf("pinned tool_choice still forwarded %#v", result.ToolCalls)
+	}
+	if len(result.DroppedCalls) != 1 {
+		t.Fatalf("DroppedCalls = %#v, want one entry", result.DroppedCalls)
+	}
+}
+
 func TestSchemaByToolReadsEveryProviderShape(t *testing.T) {
 	anthropic := map[string]any{"type": "object", "properties": map[string]any{"a": map[string]any{"type": "string"}}}
 	responses := map[string]any{"type": "object", "properties": map[string]any{"b": map[string]any{"type": "string"}}}

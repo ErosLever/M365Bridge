@@ -40,6 +40,11 @@ func SchemaByTool(tools []ToolDef) map[string]map[string]any {
 type ToolContracts struct {
 	Required map[string][]string
 	Schemas  map[string]map[string]any
+	// Choice is the request's tool_choice: "auto", "none", "required", or the
+	// name of the one tool the caller pinned. The prompt asks the model to obey
+	// it, but a model that ignores the instruction must not reach the client,
+	// so it is enforced here as well.
+	Choice string
 }
 
 // ContractsFor builds the validation contracts for the declared tools.
@@ -50,34 +55,61 @@ func ContractsFor(tools []ToolDef) ToolContracts {
 	}
 }
 
+// WithChoice returns the contracts with the request's tool_choice attached.
+func (c ToolContracts) WithChoice(choice string) ToolContracts {
+	c.Choice = choice
+	return c
+}
+
+// choiceAllows reports whether tool_choice permits calling name.
+func (c ToolContracts) choiceAllows(name string) bool {
+	switch c.Choice {
+	case "", "auto", "required", "any":
+		return true
+	case "none":
+		return false
+	}
+	// Anything else names the single tool the caller pinned.
+	return c.Choice == name
+}
+
 // validate checks one tool call's arguments. It returns the arguments to
-// forward, which may have had undeclared keys pruned, and a rejection reason
-// that is empty when the call is acceptable.
-func (c ToolContracts) validate(name string, arguments json.RawMessage) (result json.RawMessage, reason string) {
+// forward, which may have had undeclared keys pruned, a rejection reason that
+// is empty when the call is acceptable, and whether re-asking the model could
+// plausibly fix the rejection.
+func (c ToolContracts) validate(name string, arguments json.RawMessage) (result json.RawMessage, reason string, repairable bool) {
+	if !c.choiceAllows(name) {
+		if c.Choice == "none" {
+			// The caller asked for no tool calls at all, so re-asking would
+			// only burn a turn.
+			return arguments, `tool_choice is "none", so no tool may be called`, false
+		}
+		return arguments, fmt.Sprintf("tool_choice pins %q, so %q may not be called", c.Choice, name), true
+	}
 	if !toolCallSatisfiesRequired(arguments, c.Required[name]) {
-		return arguments, "required arguments were missing or empty"
+		return arguments, "required arguments were missing or empty", true
 	}
 
 	schema := c.Schemas[name]
 	if len(schema) == 0 {
-		return arguments, ""
+		return arguments, "", false
 	}
 
 	var decoded map[string]any
 	if err := json.Unmarshal(arguments, &decoded); err != nil {
 		// Only an object can be validated. A non-object payload already failed
 		// the required check unless the tool declares no required arguments.
-		return arguments, "arguments were not a JSON object"
+		return arguments, "arguments were not a JSON object", true
 	}
 	if err := ValidateAndPrune(decoded, schema); err != nil {
-		return arguments, err.Error()
+		return arguments, err.Error(), true
 	}
 
 	pruned, err := json.Marshal(decoded)
 	if err != nil {
-		return arguments, ""
+		return arguments, "", false
 	}
-	return pruned, ""
+	return pruned, "", false
 }
 
 // ValidateAndPrune checks arguments against a JSON schema and removes

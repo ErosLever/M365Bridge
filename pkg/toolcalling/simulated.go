@@ -460,10 +460,12 @@ func parseAnthropicPayload(payload map[string]any, result *SimulatedResult, allo
 			}
 			// Drop tool_use blocks that violate the tool's schema so the client
 			// never receives an unexecutable tool call to retry forever.
-			validated, reason := contracts.validate(name, json.RawMessage(argsBytes))
+			validated, reason, repairable := contracts.validate(name, json.RawMessage(argsBytes))
 			if reason != "" {
 				logging.Warnf("parseAnthropicPayload: dropping %q tool_use: %s", name, reason)
-				result.DroppedCalls = append(result.DroppedCalls, DroppedCall{Name: name, Reason: reason})
+				if repairable {
+					result.DroppedCalls = append(result.DroppedCalls, DroppedCall{Name: name, Reason: reason})
+				}
 				continue
 			}
 			argsBytes = validated
@@ -578,10 +580,12 @@ func parseChatCompletionPayload(payload map[string]any, result *SimulatedResult,
 			// Drop tool calls that violate the tool's schema so a malformed call
 			// is never forwarded to the client (which would reject it and retry
 			// in an endless loop).
-			validated, reason := contracts.validate(name, json.RawMessage(args))
+			validated, reason, repairable := contracts.validate(name, json.RawMessage(args))
 			if reason != "" {
 				logging.Warnf("parseChatCompletionPayload: dropping %q tool call: %s", name, reason)
-				result.DroppedCalls = append(result.DroppedCalls, DroppedCall{Name: name, Reason: reason})
+				if repairable {
+					result.DroppedCalls = append(result.DroppedCalls, DroppedCall{Name: name, Reason: reason})
+				}
 				continue
 			}
 			args = string(validated)

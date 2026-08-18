@@ -30,6 +30,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					0,
 					false,
 					nil,
+					"",
 				)
 			},
 		},
@@ -45,6 +46,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					0,
 					false,
 					nil,
+					"",
 				)
 			},
 		},
@@ -61,6 +63,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					"conv-poisoned",
 					false,
 					nil,
+					"",
 				)
 			},
 		},
@@ -77,6 +80,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					"conv-poisoned",
 					false,
 					nil,
+					"",
 				)
 			},
 		},

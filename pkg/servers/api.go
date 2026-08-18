@@ -952,9 +952,9 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if req.Stream {
-		api.streamChatCompletions(w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools)
+		api.streamChatCompletions(w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
 	} else {
-		api.nonStreamChatCompletions(w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools)
+		api.nonStreamChatCompletions(w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
 	}
 }
 
@@ -1020,9 +1020,9 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 	hasTools := len(req.Tools) > 0
 
 	if req.Stream {
-		api.streamCompletions(w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools)
+		api.streamCompletions(w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
 	} else {
-		api.nonStreamCompletions(w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools)
+		api.nonStreamCompletions(w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
 	}
 }
 
@@ -1185,9 +1185,9 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if req.Stream {
-		api.streamAnthropicMessages(w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools)
+		api.streamAnthropicMessages(w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice))
 	} else {
-		api.nonStreamAnthropicMessages(w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools)
+		api.nonStreamAnthropicMessages(w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice))
 	}
 }
 
@@ -1394,7 +1394,7 @@ func (api *APIServer) streamAnthropicComplete(w http.ResponseWriter, messages []
 }
 
 // streamChatCompletions streams chat completion responses in OpenAI format.
-func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef) {
+func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -1503,7 +1503,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 	// Parse simulated tool calls from full text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
 	if toolCallingEnabled {
-		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
+		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools).WithChoice(toolChoice))
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
@@ -1659,7 +1659,7 @@ func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoop
 }
 
 // nonStreamChatCompletions handles non-streaming chat completion in OpenAI format.
-func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef) {
+func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
 	respText, thinking, toolCalls, finishReason, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 	if err != nil {
 		if sid != "" {
@@ -1679,7 +1679,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 
 	// Parse simulated tool calls from response text if tool calling is enabled
 	if hasTools {
-		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
+		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools).WithChoice(toolChoice))
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
@@ -1776,7 +1776,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 }
 
 // streamAnthropicMessages streams messages in Anthropic SSE format.
-func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef) {
+func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -1937,7 +1937,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 	// Parse simulated tool calls from full text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
 	if toolCallingEnabled {
-		sim := toolcalling.ParseSimulatedResponseAnthropic(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
+		sim := toolcalling.ParseSimulatedResponseAnthropic(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools).WithChoice(toolChoice))
 		sim = api.repairSimulatedToolCalls(toolLoopAnthropic, messages, cfg, tools, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
@@ -2144,7 +2144,7 @@ func (api *APIServer) respondBufferedAnthropic(w http.ResponseWriter, result too
 }
 
 // nonStreamAnthropicMessages handles non-streaming Anthropic messages response.
-func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef) {
+func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
 	respText, thinking, toolCalls, finishReason, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 	if err != nil {
 		if sid != "" {
@@ -2164,7 +2164,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 
 	// Parse simulated tool calls from response text if tool calling is enabled
 	if hasTools {
-		sim := toolcalling.ParseSimulatedResponseAnthropic(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
+		sim := toolcalling.ParseSimulatedResponseAnthropic(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools).WithChoice(toolChoice))
 		sim = api.repairSimulatedToolCalls(toolLoopAnthropic, messages, cfg, tools, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
@@ -2253,7 +2253,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 }
 
 // streamCompletions streams text completion responses in OpenAI text_completion format.
-func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef) {
+func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -2349,7 +2349,7 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 	// Parse simulated tool calls from buffered text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
 	if toolCallingEnabled {
-		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
+		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools).WithChoice(toolChoice))
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
@@ -2418,7 +2418,7 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 }
 
 // nonStreamCompletions handles non-streaming text completion.
-func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef) {
+func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
 	respText, thinking, toolCalls, finishReason, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 	if err != nil {
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Completion failed: %v", err))
@@ -2432,7 +2432,7 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 
 	// Parse simulated tool calls from response text
 	if hasTools {
-		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
+		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools).WithChoice(toolChoice))
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
@@ -2752,6 +2752,20 @@ func anthropicToolChoiceString(toolChoice map[string]any) string {
 		return t
 	}
 	return ""
+}
+
+// anthropicToolChoiceEnforcement resolves the Anthropic tool_choice field to
+// the value the parser enforces: "none", "auto", "any", or the name of the one
+// tool the caller pinned. It differs from anthropicToolChoiceString, which
+// reports the raw type and would turn a pinned tool into the literal name
+// "tool".
+func anthropicToolChoiceEnforcement(toolChoice map[string]any) string {
+	kind := anthropicToolChoiceString(toolChoice)
+	if kind != "tool" {
+		return kind
+	}
+	name, _ := toolChoice["name"].(string)
+	return name
 }
 
 // toolChoiceString normalizes the tool_choice field to a string ("auto",
