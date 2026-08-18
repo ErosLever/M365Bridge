@@ -616,7 +616,7 @@ func parseChatCompletionPayload(payload map[string]any, result *SimulatedResult,
 	result.Content = normalizeMessageContent(message["content"])
 }
 
-// extractToolCallFields pulls id/name/arguments from a tool_calls entry,
+// extractToolCallFields pulls name/namespace/arguments from a tool_calls entry,
 // tolerating both the OpenAI wrapper ({id,type,function:{name,arguments}})
 // and a flat shape ({name,arguments}).
 func extractToolCallFields(tc map[string]any) (name, namespace, id, args string) {
@@ -628,9 +628,6 @@ func extractToolCallFields(tc map[string]any) (name, namespace, id, args string)
 			namespace = ns
 		}
 		args = normalizeArgumentsJSON(fn["arguments"])
-		if i, ok := tc["id"].(string); ok && i != "" {
-			id = i
-		}
 	}
 	if name == "" {
 		if n, ok := tc["name"].(string); ok && n != "" {

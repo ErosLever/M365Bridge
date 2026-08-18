@@ -2839,13 +2839,14 @@ func reasoningEffortRequestsDeliberation(reasoning *responsesReasoning) (bool, e
 	return rank >= reasoningEffortRank["medium"], nil
 }
 
-// applyReasoningEffort redirects the request to the model key's reasoning
-// variant when the caller asked to deliberate and such a variant exists. A
-// model without a variant, or a key that is already one, is left untouched:
-// M365 has no separate effort dial, so the tone is the only lever.
-func applyReasoningEffort(modelKey string, cfg models.ModelConfig, deliberate bool) (string, models.ModelConfig) {
+// applyReasoningEffort returns the model config to use, redirecting to the
+// model key's reasoning variant when the caller asked to deliberate and such a
+// variant exists. A model without a variant, or a key that is already one, is
+// left untouched: M365 has no separate effort dial, so the tone is the only
+// lever.
+func applyReasoningEffort(modelKey string, cfg models.ModelConfig, deliberate bool) models.ModelConfig {
 	if !deliberate || strings.HasSuffix(modelKey, "-reasoning") {
-		return modelKey, cfg
+		return cfg
 	}
 	// The registry is consulted directly: LookupModel falls back to the default
 	// model for an unknown key, which would reroute every model to that default
@@ -2853,10 +2854,10 @@ func applyReasoningEffort(modelKey string, cfg models.ModelConfig, deliberate bo
 	variantKey := modelKey + "-reasoning"
 	variant, ok := models.ModelRegistry[variantKey]
 	if !ok {
-		return modelKey, cfg
+		return cfg
 	}
 	logging.Infof("applyReasoningEffort: routing %s to %s", modelKey, variantKey)
-	return variantKey, variant
+	return variant
 }
 
 // validateToolResultMessages rejects a tool result that answers nothing. The
@@ -3800,7 +3801,7 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 		api.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	modelKey, cfg = applyReasoningEffort(modelKey, cfg, deliberate)
+	cfg = applyReasoningEffort(modelKey, cfg, deliberate)
 
 	req.Tools = mergeLoadedResponsesTools(req.Input, req.Tools)
 	preparedTools, localTools := api.prepareCodingTools(req.Tools, false)
@@ -5192,7 +5193,7 @@ func (api *APIServer) handleResponsesCompact(w http.ResponseWriter, r *http.Requ
 		api.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	modelKey, cfg = applyReasoningEffort(modelKey, cfg, deliberate)
+	cfg = applyReasoningEffort(modelKey, cfg, deliberate)
 
 	// Convert Responses API input to payload.Message list
 	inputMessages := responsesInputToMessages(req.Input)

@@ -61,12 +61,9 @@ func TestReasoningEffortThreshold(t *testing.T) {
 
 func TestApplyReasoningEffortRoutesToTheVariant(t *testing.T) {
 	base := models.LookupModel("gpt5.5")
-	key, cfg := applyReasoningEffort("gpt5.5", base, true)
-	if key != "gpt5.5-reasoning" {
-		t.Fatalf("model key = %q, want the reasoning variant", key)
-	}
-	if cfg.Tone == base.Tone {
-		t.Fatalf("tone stayed %q, so the variant was not applied", cfg.Tone)
+	got := applyReasoningEffort("gpt5.5", base, true)
+	if got.Tone != models.ModelRegistry["gpt5.5-reasoning"].Tone {
+		t.Fatalf("tone = %q, want the reasoning variant", got.Tone)
 	}
 }
 
@@ -74,22 +71,19 @@ func TestApplyReasoningEffortLeavesModelsWithoutAVariant(t *testing.T) {
 	// The tone is the only lever, so a model with no reasoning variant must be
 	// left alone rather than silently swapped for an unrelated one.
 	base := models.LookupModel("claude-opus")
-	key, cfg := applyReasoningEffort("claude-opus", base, true)
-	if key != "claude-opus" || cfg.Tone != base.Tone {
-		t.Fatalf("model without a variant was rerouted to %q/%q", key, cfg.Tone)
+	if got := applyReasoningEffort("claude-opus", base, true); got.Tone != base.Tone {
+		t.Fatalf("model without a variant was rerouted to %q", got.Tone)
 	}
 
 	// A key that already names a reasoning variant must not grow a second suffix.
 	variant := models.LookupModel("gpt5.5-reasoning")
-	key, cfg = applyReasoningEffort("gpt5.5-reasoning", variant, true)
-	if key != "gpt5.5-reasoning" || cfg.Tone != variant.Tone {
-		t.Fatalf("reasoning variant was rerouted to %q/%q", key, cfg.Tone)
+	if got := applyReasoningEffort("gpt5.5-reasoning", variant, true); got.Tone != variant.Tone {
+		t.Fatalf("reasoning variant was rerouted to %q", got.Tone)
 	}
 
 	// Low effort leaves the tone alone even when a variant exists.
 	base = models.LookupModel("gpt5.5")
-	key, _ = applyReasoningEffort("gpt5.5", base, false)
-	if key != "gpt5.5" {
-		t.Fatalf("low effort rerouted the model to %q", key)
+	if got := applyReasoningEffort("gpt5.5", base, false); got.Tone != base.Tone {
+		t.Fatalf("low effort rerouted the model to %q", got.Tone)
 	}
 }
