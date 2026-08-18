@@ -14,6 +14,8 @@ package toolcalling
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/google/uuid"
 )
 
 // ToolDef represents a tool definition from the client request.
@@ -77,13 +79,15 @@ type ToolCall struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
-// toolCallIDCounter generates sequential tool call IDs.
-var toolCallIDCounter int
-
 // nextToolCallID returns a unique tool call ID.
+//
+// The ID must be unique across every request and every restart. A sequential
+// counter was both a data race between concurrent requests and a source of
+// collisions: it restarted at zero on every boot and could repeat the
+// positional fallback IDs, which made clients reject a turn with a duplicate
+// tool call id.
 func nextToolCallID() string {
-	toolCallIDCounter++
-	return fmt.Sprintf("call_%d", toolCallIDCounter)
+	return "call_" + uuid.NewString()
 }
 
 // ToolName extracts the name from either OpenAI or Anthropic tool definition.

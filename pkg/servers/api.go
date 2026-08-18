@@ -3904,10 +3904,10 @@ func buildResponsesObject(responseID, model, text, thinking string, toolCalls []
 	}
 
 	// Add function_call or built-in client tool items after commentary.
-	for i, tc := range toolCalls {
+	for _, tc := range toolCalls {
 		callID := tc.ID
 		if callID == "" {
-			callID = fmt.Sprintf("call_%d", i)
+			callID = "call_" + uuid.NewString()
 		}
 		output = append(output, buildResponsesToolCallItem(callID, tc, toolTypes, "completed"))
 		outputIndex++
@@ -4788,10 +4788,10 @@ func (api *APIServer) streamResponses(
 
 		// Emit tool call items after the user-facing commentary.
 		toolTypes := responsesToolTypes(toolPolicy.tools)
-		for i, tc := range toolCalls {
+		for _, tc := range toolCalls {
 			callID := tc.ID
 			if callID == "" {
-				callID = fmt.Sprintf("call_%d", i)
+				callID = "call_" + uuid.NewString()
 			}
 			toolKey := responsesToolKey(
 				tc.Function.Namespace,
@@ -5554,8 +5554,8 @@ var errImageHostNotAllowed = errors.New("image URL host is not allowed")
 func hostAllowed(host string, allowlist []string) bool {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	for _, entry := range allowlist {
-		if strings.HasPrefix(entry, ".") {
-			if host == strings.TrimPrefix(entry, ".") || strings.HasSuffix(host, entry) {
+		if domain, isSuffix := strings.CutPrefix(entry, "."); isSuffix {
+			if host == domain || strings.HasSuffix(host, entry) {
 				return true
 			}
 			continue
@@ -5612,10 +5612,8 @@ func (api *APIServer) validateImageDownloadURL(rawURL string) error {
 	if err != nil || len(ips) == 0 {
 		return fmt.Errorf("%w: %q does not resolve", errImageHostNotAllowed, host)
 	}
-	for _, ip := range ips {
-		if ipDisallowed(ip) {
-			return fmt.Errorf("%w: %q resolves to a non-public address", errImageHostNotAllowed, host)
-		}
+	if slices.ContainsFunc(ips, ipDisallowed) {
+		return fmt.Errorf("%w: %q resolves to a non-public address", errImageHostNotAllowed, host)
 	}
 	return nil
 }

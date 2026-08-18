@@ -109,13 +109,11 @@ func TestConcurrentRefreshSerializesRedemptions(t *testing.T) {
 	const callers = 4
 	var wg sync.WaitGroup
 	for range callers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, err := tm.Refresh(); err != nil {
 				t.Errorf("refresh failed: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

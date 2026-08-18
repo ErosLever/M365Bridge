@@ -421,10 +421,10 @@ func parseAnthropicPayload(payload map[string]any, result *SimulatedResult, allo
 			if len(allowed) > 0 && !allowed[name] {
 				continue
 			}
-			id, _ := bm["id"].(string)
-			if id == "" {
-				id = nextToolCallID()
-			}
+			// The model's own id is discarded. It tends to be a deterministic
+			// label such as call_istanbul_weather_001, which repeats across
+			// turns and makes clients reject a duplicate tool call id.
+			id := nextToolCallID()
 			// input is a JSON object in Anthropic format
 			var argsBytes []byte
 			if input, ok := bm["input"]; ok && input != nil {
@@ -608,14 +608,9 @@ func extractToolCallFields(tc map[string]any) (name, namespace, id, args string)
 	if args == "" {
 		args = normalizeArgumentsJSON(tc["arguments"])
 	}
-	if id == "" {
-		if i, ok := tc["id"].(string); ok && i != "" {
-			id = i
-		}
-	}
-	if id == "" {
-		id = nextToolCallID()
-	}
+	// Always mint our own id. A model-supplied id repeats across turns, which
+	// clients reject as a duplicate tool call id.
+	id = nextToolCallID()
 	return
 }
 
