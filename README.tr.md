@@ -482,6 +482,7 @@ print(resp.choices[0].message.content)
 | `DELETE /v1/conversations/{id}`  | Konuşmayı kalıcı olarak siler                           |
 | `GET /v1/models`                 | Model listesi                                           |
 | `GET /v1/quota`                  | Son gözlenen M365 konuşma mesaj kotası                  |
+| `POST /mcp`                      | Model Context Protocol sunucusu (JSON-RPC 2.0)          |
 | `GET /health`                    | Sağlık kontrolü (kimlik doğrulama gerektirmez)          |
 
 ## Modeller
@@ -554,6 +555,23 @@ M365, konuşma başına bir mesaj üst sınırı uygular ve sayaçları update f
 ```
 
 Proxy'nin tanımadığı sayaçlar atılmaz, `extra` altında döndürülür. Bir istek boş upstream yanıtı üretirse ve son sayaçlar üst sınıra ulaşıldığını gösteriyorsa, proxy genel boş yanıt hatası yerine `upstream_throttled` tipiyle `429` döndürür; devam etmek için yeni bir session başlatın.
+
+## MCP Sunucusu
+
+`POST /mcp`, M365 Copilot'u Model Context Protocol istemcilerine JSON-RPC 2.0 üzerinden sunar (protokol sürümü `2025-06-18`). `initialize`, `tools/list`, `tools/call` ve `ping` desteklenir; lifecycle notification'ları gövdesiz `202` ile yanıtlanır. Bir API anahtarı yapılandırılmışsa bu route anahtar gerektirir.
+
+| Tool | Argümanlar | Açıklama |
+|------|------------|----------|
+| `ask_copilot` | `prompt` (zorunlu), `model` | Metin döndüren tek, durumsuz Copilot turu |
+| `describe_image` | `image_url` (zorunlu, data URI), `prompt`, `model` | Copilot'a satır içi bir görsel hakkında soru sorar |
+
+```bash
+curl -s -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask_copilot","arguments":{"prompt":"CAP teoremini özetle"}}}'
+```
+
+Copilot, MCP rolünde bilinçli olarak yaprak düğümdür. `/v1` endpoint'lerinin kullandığı simulated tool calling MCP üzerinden **sunulmaz**: bir MCP istemcisinin zaten gerçek, şema ile zorlanan bir tool mekanizması vardır ve prompt tabanlı emülasyonu onun içine yerleştirmek birbiriyle yarışan iki tool loop'u oluşturur. Her MCP çağrısı, konuşma sürekliliği olmayan bağımsız bir turdur.
 
 ## Tool Calling (Araç Çağırma)
 

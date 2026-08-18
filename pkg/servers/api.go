@@ -222,6 +222,9 @@ func (api *APIServer) Start(port int) error {
 	mux.HandleFunc("/v1/conversations", api.withAuth(api.handleConversations))
 	mux.HandleFunc("/v1/conversations/", api.withAuth(api.handleConversation))
 	mux.HandleFunc("/v1/models", api.handleModels)
+	// MCP exposes Copilot as a tool; it stays behind the API key middleware
+	// because it drives real upstream turns.
+	mux.HandleFunc("/mcp", api.withAuth(api.handleMCP))
 	// Quota counters expose account usage, so this route stays behind the API
 	// key middleware unlike the public /v1/models and /health routes.
 	mux.HandleFunc("/v1/quota", api.withAuth(api.handleQuota))

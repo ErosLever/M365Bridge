@@ -482,6 +482,7 @@ print(resp.choices[0].message.content)
 | `DELETE /v1/conversations/{id}`  | Permanently delete a conversation                      |
 | `GET /v1/models`                 | Model list                                             |
 | `GET /v1/quota`                  | Last observed M365 conversation message quota          |
+| `POST /mcp`                      | Model Context Protocol server (JSON-RPC 2.0)           |
 | `GET /health`                    | Health check (no auth required)                        |
 
 ## Models
@@ -554,6 +555,23 @@ M365 enforces a per-conversation message ceiling and reports the counters on its
 ```
 
 Counters the proxy does not recognize are returned under `extra` instead of being dropped. When a request produces an empty upstream response and the last counters show the ceiling was reached, the proxy answers `429` with type `upstream_throttled` rather than a generic empty-response error; start a new session to continue.
+
+## MCP Server
+
+`POST /mcp` exposes M365 Copilot to Model Context Protocol clients over JSON-RPC 2.0 (protocol revision `2025-06-18`). It supports `initialize`, `tools/list`, `tools/call`, and `ping`; lifecycle notifications are acknowledged with `202` and no body. The route requires an API key when one is configured.
+
+| Tool | Arguments | Description |
+|------|-----------|-------------|
+| `ask_copilot` | `prompt` (required), `model` | One stateless Copilot turn returning text |
+| `describe_image` | `image_url` (required, data URI), `prompt`, `model` | Asks Copilot about an inline image |
+
+```bash
+curl -s -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask_copilot","arguments":{"prompt":"Summarize the CAP theorem"}}}'
+```
+
+Copilot is deliberately a leaf in the MCP role. The simulated tool calling used by the `/v1` endpoints is **not** offered through MCP: an MCP client already has a real, schema-enforced tool mechanism, and nesting the prompt-based emulation inside it would create two competing tool loops. Every MCP call is an independent turn with no conversation continuity.
 
 ## Tool Calling
 
