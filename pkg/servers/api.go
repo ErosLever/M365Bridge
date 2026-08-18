@@ -3182,6 +3182,25 @@ func buildResponsesToolCallItem(callID string, call client.ToolCall, toolTypes m
 			"arguments": arguments,
 		}
 	}
+	if toolTypes[toolKey] == "custom" {
+		// A custom tool takes free-form input rather than JSON arguments, so it
+		// travels as its own item type. The item id is derived from the call id
+		// instead of minted fresh, because the streaming path builds the item
+		// twice (in_progress then completed) and a client correlates the two by
+		// that id.
+		item := map[string]any{
+			"id":      "ctc_" + strings.TrimPrefix(callID, "call_"),
+			"type":    "custom_tool_call",
+			"status":  status,
+			"call_id": callID,
+			"name":    call.Function.Name,
+			"input":   "",
+		}
+		if status == "completed" {
+			item["input"] = call.Function.Arguments
+		}
+		return item
+	}
 	item := map[string]any{
 		"id":      callID,
 		"type":    "function_call",
@@ -3913,7 +3932,37 @@ func responsesInputToMessages(input any) []payload.Message {
 
 		itemType, _ := m["type"].(string)
 
-		// Handle function_call_output items (tool results)
+		// Handle function_call_output items (tool results). A custom tool
+		// reports its result the same way, only under its own item type and
+		// with the free-form field name.
+		if itemType == "custom_tool_call_output" {
+			callID, _ := m["call_id"].(string)
+			output, _ := m["output"].(string)
+			messages = append(messages, payload.Message{
+				Role: "tool",
+				Content: fmt.Sprintf(
+					"Authoritative tool result (call_id: %s):\n%s",
+					callID,
+					output,
+				),
+				ToolCallID:    callID,
+				ToolResultIDs: []string{callID},
+			})
+			continue
+		}
+
+		if itemType == "custom_tool_call" {
+			name, _ := m["name"].(string)
+			input, _ := m["input"].(string)
+			callID, _ := m["call_id"].(string)
+			messages = append(messages, payload.Message{
+				Role:        "assistant",
+				Content:     fmt.Sprintf("Tool call: %s(%s)", name, input),
+				ToolCallIDs: []string{callID},
+			})
+			continue
+		}
+
 		if itemType == "function_call_output" {
 			callID, _ := m["call_id"].(string)
 			output, _ := m["output"].(string)
