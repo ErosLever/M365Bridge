@@ -45,6 +45,7 @@ func BuildSimulatedPrompt(requestJSON string, hasTools bool, toolChoice string) 
 			"CRITICAL: Only use tool names that appear in the tools array of the request payload. Never invent tool names.",
 			"NEVER emit a tool_calls entry with name \"code_interpreter\" or any name not present in the request's tools array.",
 			"Do not use code_interpreter, web_search, or any built-in/baked-in tool. Only the client-supplied tools are valid.",
+			nativeToolBanInstruction,
 		)
 		normalizedChoice := strings.TrimSpace(toolChoice)
 		switch strings.ToLower(normalizedChoice) {
@@ -90,6 +91,7 @@ func BuildSimulatedPromptResponses(requestJSON string, hasTools bool, toolChoice
 			"CRITICAL: Only use tool names that appear in the tools array or in a prior tool_search_output item. Never invent tool names.",
 			`A tool entry with "type": "tool_search" is callable as "tool_search" and can load additional tools when needed.`,
 			"Do not use code_interpreter, web_search, or another built-in tool unless its exact name is in the callable set.",
+			nativeToolBanInstruction,
 		)
 
 		normalizedChoice := strings.TrimSpace(toolChoice)
@@ -135,6 +137,7 @@ func BuildSimulatedPromptAnthropic(requestJSON string, hasTools bool, toolChoice
 			"CRITICAL: Only use tool names that appear in the tools array of the request payload. Never invent tool names.",
 			"NEVER emit a tool_use block with name \"code_interpreter\" or any name not present in the request's tools array.",
 			"Do not use code_interpreter, web_search, or any built-in/baked-in tool. Only the client-supplied tools are valid.",
+			nativeToolBanInstruction,
 		)
 		switch strings.ToLower(strings.TrimSpace(toolChoice)) {
 		case "any":

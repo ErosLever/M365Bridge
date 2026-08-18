@@ -755,13 +755,14 @@ func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, me
 		if len(tools) == 0 {
 			return toolLoopResult{text: text, thinking: thinking, toolCalls: backendCalls, finishReason: finishReason, conversationID: currentConvID}, nil
 		}
+		contracts := toolcalling.ContractsFor(tools)
 		var simulated toolcalling.SimulatedResult
 		if provider == toolLoopAnthropic {
-			simulated = toolcalling.ParseSimulatedResponseAnthropic(text, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
+			simulated = toolcalling.ParseSimulatedResponseAnthropic(text, toolNamesFromDefs(tools), contracts)
 		} else {
-			simulated = toolcalling.ParseSimulatedResponse(text, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
+			simulated = toolcalling.ParseSimulatedResponse(text, toolNamesFromDefs(tools), contracts)
 		}
-		simulated = api.repairSimulatedToolCalls(provider, messages, cfg, tools, simulated)
+		simulated = api.repairSimulatedToolCalls(provider, messages, cfg, tools, contracts, text, simulated)
 		if !simulated.HasPayload || len(simulated.ToolCalls) == 0 {
 			if simulated.HasPayload {
 				text, finishReason = simulated.Content, "stop"
@@ -821,20 +822,41 @@ func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, me
 // with an appended corrective note on a fresh conversation and re-parses. It
 // returns the recovered result when the backend supplies valid tool calls, and
 // the original result otherwise so callers keep their existing fallback path.
-func (api *APIServer) repairSimulatedToolCalls(provider toolLoopProvider, messages []payload.Message, cfg models.ModelConfig, tools []toolcalling.ToolDef, sim toolcalling.SimulatedResult) toolcalling.SimulatedResult {
-	if len(sim.ToolCalls) > 0 || len(sim.DroppedCalls) == 0 || len(messages) == 0 {
+func (api *APIServer) repairSimulatedToolCalls(provider toolLoopProvider, messages []payload.Message, cfg models.ModelConfig, tools []toolcalling.ToolDef, contracts toolcalling.ToolContracts, rawText string, sim toolcalling.SimulatedResult) toolcalling.SimulatedResult {
+	if len(sim.ToolCalls) > 0 || len(messages) == 0 || len(tools) == 0 {
 		return sim
 	}
 
-	contracts := toolcalling.ContractsFor(tools)
-	note := toolcalling.BuildRepairNote(sim.DroppedCalls, contracts)
+	var note string
+	switch {
+	case len(sim.DroppedCalls) > 0:
+		note = toolcalling.BuildRepairNote(sim.DroppedCalls, contracts)
+		logging.Warnf("repairSimulatedToolCalls: re-asking backend, tool calls failed validation: %v", sim.DroppedCalls)
+	default:
+		// The backend produced no tool call at all. That is only worth a re-ask
+		// when the reply denies the tools exist or claims the work already ran
+		// elsewhere; an ordinary text answer is a legitimate outcome.
+		answer := sim.Content
+		if answer == "" {
+			answer = rawText
+		}
+		switch {
+		case toolcalling.IsToolRefusal(answer):
+			logging.Warn("repairSimulatedToolCalls: re-asking backend, reply denied the declared tools exist")
+		case toolcalling.IsSandboxHallucination(answer):
+			logging.Warn("repairSimulatedToolCalls: re-asking backend, reply claimed to have run the work itself")
+		default:
+			return sim
+		}
+		note = toolcalling.BuildNativeToolBanNote()
+	}
+
 	retry := make([]payload.Message, len(messages))
 	copy(retry, messages)
 	last := retry[len(retry)-1]
 	last.Content = last.Content + "\n\n" + note
 	retry[len(retry)-1] = last
 
-	logging.Warnf("repairSimulatedToolCalls: re-asking backend for tools failed validation: %v", sim.DroppedCalls)
 	text, _, _, _, _, err := api.m365Client.ChatConversation(retry, cfg.Tone, cfg.Override, "", api.config.UserOID, api.config.TenantID, true)
 	if err != nil {
 		logging.Errorf("repairSimulatedToolCalls: retry failed: %v", err)
@@ -1515,8 +1537,9 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 	// Parse simulated tool calls from full text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
 	if toolCallingEnabled {
-		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools).WithChoice(toolChoice))
-		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, sim)
+		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
+		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), contracts)
+		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, contracts, fullText, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
 				simToolCalls = sim.ToolCalls
@@ -1691,8 +1714,9 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 
 	// Parse simulated tool calls from response text if tool calling is enabled
 	if hasTools {
-		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools).WithChoice(toolChoice))
-		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, sim)
+		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
+		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), contracts)
+		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, contracts, respText, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
 				finishReason = "tool_calls"
@@ -1949,8 +1973,9 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 	// Parse simulated tool calls from full text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
 	if toolCallingEnabled {
-		sim := toolcalling.ParseSimulatedResponseAnthropic(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools).WithChoice(toolChoice))
-		sim = api.repairSimulatedToolCalls(toolLoopAnthropic, messages, cfg, tools, sim)
+		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
+		sim := toolcalling.ParseSimulatedResponseAnthropic(fullText, toolNamesFromDefs(tools), contracts)
+		sim = api.repairSimulatedToolCalls(toolLoopAnthropic, messages, cfg, tools, contracts, fullText, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
 				simToolCalls = sim.ToolCalls
@@ -2176,8 +2201,9 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 
 	// Parse simulated tool calls from response text if tool calling is enabled
 	if hasTools {
-		sim := toolcalling.ParseSimulatedResponseAnthropic(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools).WithChoice(toolChoice))
-		sim = api.repairSimulatedToolCalls(toolLoopAnthropic, messages, cfg, tools, sim)
+		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
+		sim := toolcalling.ParseSimulatedResponseAnthropic(respText, toolNamesFromDefs(tools), contracts)
+		sim = api.repairSimulatedToolCalls(toolLoopAnthropic, messages, cfg, tools, contracts, respText, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
 				finishReason = "tool_calls"
@@ -2361,8 +2387,9 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 	// Parse simulated tool calls from buffered text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
 	if toolCallingEnabled {
-		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools).WithChoice(toolChoice))
-		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, sim)
+		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
+		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), contracts)
+		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, contracts, fullText, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
 				simToolCalls = sim.ToolCalls
@@ -2444,8 +2471,9 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 
 	// Parse simulated tool calls from response text
 	if hasTools {
-		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools).WithChoice(toolChoice))
-		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, sim)
+		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
+		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), contracts)
+		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, contracts, respText, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
 				finishReason = "tool_calls"
