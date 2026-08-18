@@ -2806,6 +2806,59 @@ func injectSimulatedPromptAnthropic(messages *[]payload.Message, requestJSON, to
 	}
 }
 
+// reasoningEffortRank orders the accepted effort values. Anything at medium or
+// above is treated as a request to deliberate, which is the only distinction
+// M365 can act on.
+var reasoningEffortRank = map[string]int{
+	"none":    0,
+	"minimal": 1,
+	"low":     2,
+	"medium":  3,
+	"high":    4,
+	"xhigh":   5,
+}
+
+// reasoningEffortRequestsDeliberation validates the effort value and reports
+// whether it asks for a reasoning tone. An unset block leaves the tone alone.
+func reasoningEffortRequestsDeliberation(reasoning *responsesReasoning) (bool, error) {
+	if reasoning == nil {
+		return false, nil
+	}
+	effort := strings.ToLower(strings.TrimSpace(reasoning.Effort))
+	if effort == "" {
+		return false, nil
+	}
+	rank, ok := reasoningEffortRank[effort]
+	if !ok {
+		return false, fmt.Errorf(
+			"unsupported reasoning effort %q; use %s",
+			reasoning.Effort,
+			strings.Join(models.ReasoningEffortPresets, ", "),
+		)
+	}
+	return rank >= reasoningEffortRank["medium"], nil
+}
+
+// applyReasoningEffort redirects the request to the model key's reasoning
+// variant when the caller asked to deliberate and such a variant exists. A
+// model without a variant, or a key that is already one, is left untouched:
+// M365 has no separate effort dial, so the tone is the only lever.
+func applyReasoningEffort(modelKey string, cfg models.ModelConfig, deliberate bool) (string, models.ModelConfig) {
+	if !deliberate || strings.HasSuffix(modelKey, "-reasoning") {
+		return modelKey, cfg
+	}
+	// The registry is consulted directly: LookupModel falls back to the default
+	// model for an unknown key, which would reroute every model to that default
+	// instead of leaving models without a variant alone.
+	variantKey := modelKey + "-reasoning"
+	variant, ok := models.ModelRegistry[variantKey]
+	if !ok {
+		return modelKey, cfg
+	}
+	logging.Infof("applyReasoningEffort: routing %s to %s", modelKey, variantKey)
+	return variantKey, variant
+}
+
 // validateToolResultMessages rejects a tool result that answers nothing. The
 // conversation payload flattens results into text, so an id the request never
 // declared would silently reach the model as a plausible-looking result and
@@ -3679,6 +3732,15 @@ type responsesRequest struct {
 	SessionID          string                `json:"session_id"`
 	User               string                `json:"user"`
 	Metadata           map[string]any        `json:"metadata"`
+	Reasoning          *responsesReasoning   `json:"reasoning"`
+}
+
+// responsesReasoning is the reasoning block Codex CLI sends. M365 decides how
+// much it deliberates through the tone rather than through a knob, so effort
+// steers the tone choice and summary is accepted but not acted on.
+type responsesReasoning struct {
+	Effort  string `json:"effort"`
+	Summary string `json:"summary"`
 }
 
 // handleResponses handles OpenAI Responses API requests.
@@ -3712,6 +3774,14 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Unknown model: %s", modelKey))
 		return
 	}
+
+	deliberate, err := reasoningEffortRequestsDeliberation(req.Reasoning)
+	if err != nil {
+		logging.Errorf("handleResponses: %v", err)
+		api.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	modelKey, cfg = applyReasoningEffort(modelKey, cfg, deliberate)
 
 	req.Tools = mergeLoadedResponsesTools(req.Input, req.Tools)
 	preparedTools, localTools := api.prepareCodingTools(req.Tools, false)
@@ -5066,6 +5136,14 @@ func (api *APIServer) handleResponsesCompact(w http.ResponseWriter, r *http.Requ
 		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Unknown model: %s", modelKey))
 		return
 	}
+
+	deliberate, err := reasoningEffortRequestsDeliberation(req.Reasoning)
+	if err != nil {
+		logging.Errorf("handleResponsesCompact: %v", err)
+		api.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	modelKey, cfg = applyReasoningEffort(modelKey, cfg, deliberate)
 
 	// Convert Responses API input to payload.Message list
 	inputMessages := responsesInputToMessages(req.Input)

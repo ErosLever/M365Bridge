@@ -1,0 +1,95 @@
+package servers
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/models"
+)
+
+func TestReasoningEffortValidation(t *testing.T) {
+	if deliberate, err := reasoningEffortRequestsDeliberation(nil); err != nil || deliberate {
+		t.Fatalf("absent reasoning block: deliberate=%v err=%v, want false and no error", deliberate, err)
+	}
+
+	// Codex sends the effort with varying case and spacing.
+	for _, effort := range []string{"none", "minimal", "low", "MEDIUM", " high ", "xhigh"} {
+		if _, err := reasoningEffortRequestsDeliberation(&responsesReasoning{Effort: effort}); err != nil {
+			t.Fatalf("effort %q rejected: %v", effort, err)
+		}
+	}
+
+	err := reasoningEffortRequestsDeliberationError(t, "turbo")
+	if !strings.Contains(err, "turbo") {
+		t.Fatalf("error %q does not name the rejected value", err)
+	}
+	for _, preset := range models.ReasoningEffortPresets {
+		if !strings.Contains(err, preset) {
+			t.Fatalf("error %q does not list the accepted value %q", err, preset)
+		}
+	}
+}
+
+func reasoningEffortRequestsDeliberationError(t *testing.T, effort string) string {
+	t.Helper()
+	_, err := reasoningEffortRequestsDeliberation(&responsesReasoning{Effort: effort})
+	if err == nil {
+		t.Fatalf("effort %q was accepted", effort)
+	}
+	return err.Error()
+}
+
+func TestReasoningEffortThreshold(t *testing.T) {
+	cases := map[string]bool{
+		"none":    false,
+		"minimal": false,
+		"low":     false,
+		"medium":  true,
+		"high":    true,
+		"xhigh":   true,
+	}
+	for effort, want := range cases {
+		got, err := reasoningEffortRequestsDeliberation(&responsesReasoning{Effort: effort})
+		if err != nil {
+			t.Fatalf("effort %q rejected: %v", effort, err)
+		}
+		if got != want {
+			t.Fatalf("effort %q asks to deliberate = %v, want %v", effort, got, want)
+		}
+	}
+}
+
+func TestApplyReasoningEffortRoutesToTheVariant(t *testing.T) {
+	base := models.LookupModel("gpt5.5")
+	key, cfg := applyReasoningEffort("gpt5.5", base, true)
+	if key != "gpt5.5-reasoning" {
+		t.Fatalf("model key = %q, want the reasoning variant", key)
+	}
+	if cfg.Tone == base.Tone {
+		t.Fatalf("tone stayed %q, so the variant was not applied", cfg.Tone)
+	}
+}
+
+func TestApplyReasoningEffortLeavesModelsWithoutAVariant(t *testing.T) {
+	// The tone is the only lever, so a model with no reasoning variant must be
+	// left alone rather than silently swapped for an unrelated one.
+	base := models.LookupModel("claude-opus")
+	key, cfg := applyReasoningEffort("claude-opus", base, true)
+	if key != "claude-opus" || cfg.Tone != base.Tone {
+		t.Fatalf("model without a variant was rerouted to %q/%q", key, cfg.Tone)
+	}
+
+	// A key that already names a reasoning variant must not grow a second suffix.
+	variant := models.LookupModel("gpt5.5-reasoning")
+	key, cfg = applyReasoningEffort("gpt5.5-reasoning", variant, true)
+	if key != "gpt5.5-reasoning" || cfg.Tone != variant.Tone {
+		t.Fatalf("reasoning variant was rerouted to %q/%q", key, cfg.Tone)
+	}
+
+	// Low effort leaves the tone alone even when a variant exists.
+	base = models.LookupModel("gpt5.5")
+	key, _ = applyReasoningEffort("gpt5.5", base, false)
+	if key != "gpt5.5" {
+		t.Fatalf("low effort rerouted the model to %q", key)
+	}
+}
