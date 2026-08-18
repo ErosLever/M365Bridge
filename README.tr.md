@@ -920,6 +920,14 @@ Her iki uç nokta aşağıdaki parametreleri kabul eder:
 - `response_format=url` (varsayılan): Görseli sunucu tarafında indirir ve `data:image/png;base64,...` data URL olarak döndürür. İndirme başarısız olursa raw `designerapp.officeapps.live.com` URL'ine düşer.
 - `response_format=b64_json`: Görseli sunucu tarafında broker token kullanarak indirir ve base64 ile kodlanmış PNG verisi olarak `b64_json` alanında döndürür.
 
+### Görsel Host Allowlist'i
+
+Üretilen görsel URL'leri modelin kendi markdown çıktısından okunur, yani güvenilmez girdidir ve indirme designerapp access token'ını gönderir. Bu nedenle proxy yalnızca allowlist'teki host'lara bağlanır, `https` zorunlu tutar ve loopback, private, link-local, carrier-grade NAT veya cloud metadata adreslerine çözümlenen host'ları reddeder. Bu kontrolleri geçemeyen URL istemciye döndürülmez, tamamen düşürülür.
+
+| Değişken | Varsayılan | Açıklama |
+|----------|------------|----------|
+| `M365_IMAGE_HOST_ALLOWLIST` | `.officeapps.live.com` | Üretilen görselleri sunabilecek host'lar (virgülle ayrılır). Nokta ile başlayan girdi o alan adını ve alt alan adlarını kapsar. |
+
 ### Görsel İndirme Token Akışı
 
 Görsel üretildiğinde, proxy `designerappservice.officeapps.live.com` için MSAL.js broker token akışı ile bir JWE access token alır ve görseli indirir (`url` ve `b64_json` formatlarının ikisinde de):

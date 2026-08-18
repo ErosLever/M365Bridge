@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -5224,7 +5225,7 @@ type imageDataItem struct {
 }
 
 // urlImagePattern matches markdown image links with HTTP(S) URLs.
-var urlImagePattern = regexp.MustCompile(`!\[[^\]]*\]\((https?://[^)]+)\)`)
+var urlImagePattern = regexp.MustCompile(`!\[[^\]]*\]\((https://[^)]+)\)`)
 
 // handleImageGenerations handles OpenAI /v1/images/generations requests.
 // It wraps the prompt as a chat completions request to M365, extracts generated
@@ -5509,40 +5510,114 @@ func (api *APIServer) buildOpenAIImageData(respText string, n int, revisedPrompt
 
 	var items []imageDataItem
 	for _, u := range uniqueURLs {
-		if responseFormat == "b64_json" {
-			b64, err := api.downloadAndBase64(u)
-			if err != nil {
-				logging.Errorf("Failed to download image %s: %v", u, err)
-				items = append(items, imageDataItem{
-					URL:           u,
-					RevisedPrompt: revisedPrompt,
-				})
+		b64, err := api.downloadAndBase64(u)
+		if err != nil {
+			// A disallowed host is dropped outright. Returning the raw URL
+			// would hand a model-controlled address back to the client, which
+			// would then fetch it.
+			if errors.Is(err, errImageHostNotAllowed) {
+				logging.Errorf("Dropping generated image URL: %v", err)
 				continue
 			}
+			// The host is allowed but the transfer failed, so the raw URL is
+			// still a safe fallback.
+			logging.Errorf("Failed to download image: %v", err)
+			items = append(items, imageDataItem{
+				URL:           u,
+				RevisedPrompt: revisedPrompt,
+			})
+			continue
+		}
+		if responseFormat == "b64_json" {
 			items = append(items, imageDataItem{
 				B64JSON:       b64,
 				RevisedPrompt: revisedPrompt,
 			})
-		} else {
-			// url format: try to download and return as data URL;
-			// fall back to raw URL on error
-			b64, err := api.downloadAndBase64(u)
-			if err != nil {
-				logging.Errorf("Failed to download image for data URL %s: %v", u, err)
-				items = append(items, imageDataItem{
-					URL:           u,
-					RevisedPrompt: revisedPrompt,
-				})
-				continue
-			}
-			items = append(items, imageDataItem{
-				URL:           "data:image/png;base64," + b64,
-				RevisedPrompt: revisedPrompt,
-			})
+			continue
 		}
+		items = append(items, imageDataItem{
+			URL:           "data:image/png;base64," + b64,
+			RevisedPrompt: revisedPrompt,
+		})
 	}
 
 	return items
+}
+
+// errImageHostNotAllowed reports a generated-image URL the proxy refuses to
+// contact.
+var errImageHostNotAllowed = errors.New("image URL host is not allowed")
+
+// hostAllowed reports whether host matches an allowlist entry. An entry
+// starting with a dot matches that domain and any subdomain of it; any other
+// entry must match exactly.
+func hostAllowed(host string, allowlist []string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, entry := range allowlist {
+		if strings.HasPrefix(entry, ".") {
+			if host == strings.TrimPrefix(entry, ".") || strings.HasSuffix(host, entry) {
+				return true
+			}
+			continue
+		}
+		if host == entry {
+			return true
+		}
+	}
+	return false
+}
+
+// ipDisallowed reports whether an address must never be contacted. Loopback,
+// private, link-local, multicast, unspecified and carrier-grade NAT ranges all
+// sit inside the deployment's own network, and 169.254.169.254 is the cloud
+// metadata endpoint.
+func ipDisallowed(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		// 100.64.0.0/10 is carrier-grade NAT, which net.IP.IsPrivate misses.
+		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+			return true
+		}
+	}
+	return false
+}
+
+// validateImageDownloadURL decides whether a generated-image URL may be
+// fetched. The download sends the designerapp access token, so an attacker who
+// can influence the model's output must not be able to redirect that token to
+// their own host, nor use the proxy to reach internal addresses. The URL comes
+// from model-generated markdown, which is untrusted input.
+func (api *APIServer) validateImageDownloadURL(rawURL string) error {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid image URL: %w", err)
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("%w: scheme %q is not https", errImageHostNotAllowed, parsed.Scheme)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return fmt.Errorf("%w: URL has no host", errImageHostNotAllowed)
+	}
+	if !hostAllowed(host, api.config.ImageHostAllowlist) {
+		return fmt.Errorf("%w: %q", errImageHostNotAllowed, host)
+	}
+
+	// Resolve as defence in depth: an allowlisted name that resolves inward
+	// still must not be contacted.
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return fmt.Errorf("%w: %q does not resolve", errImageHostNotAllowed, host)
+	}
+	for _, ip := range ips {
+		if ipDisallowed(ip) {
+			return fmt.Errorf("%w: %q resolves to a non-public address", errImageHostNotAllowed, host)
+		}
+	}
+	return nil
 }
 
 // downloadAndBase64 downloads an image from a designerapp URL and returns its
@@ -5550,6 +5625,10 @@ func (api *APIServer) buildOpenAIImageData(respText string, n int, revisedPrompt
 // via SSO cookies with the M365 web app client_id) and the fileToken query
 // parameter sent as a header.
 func (api *APIServer) downloadAndBase64(imageURL string) (string, error) {
+	if err := api.validateImageDownloadURL(imageURL); err != nil {
+		logging.Errorf("downloadAndBase64: refusing download: %v", err)
+		return "", err
+	}
 	logging.Infof("downloadAndBase64: downloading image from %s", imageURL[:min(100, len(imageURL))])
 	parsedURL, err := neturl.Parse(imageURL)
 	if err != nil {

@@ -920,6 +920,14 @@ Both endpoints accept the following parameters:
 - `response_format=url` (default): Downloads the image server-side and returns a `data:image/png;base64,...` data URL. Falls back to the raw `designerapp.officeapps.live.com` URL if the download fails.
 - `response_format=b64_json`: Downloads the image server-side using a broker token and returns the image as base64-encoded PNG data in the `b64_json` field.
 
+### Image Host Allowlist
+
+Generated-image URLs are read out of the model's own markdown output, which is untrusted, and the download sends the designerapp access token. The proxy therefore only contacts hosts on an allowlist, requires `https`, and rejects hosts that resolve to loopback, private, link-local, carrier-grade NAT or cloud metadata addresses. A URL that fails these checks is dropped rather than returned to the client.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `M365_IMAGE_HOST_ALLOWLIST` | `.officeapps.live.com` | Comma-separated hosts that may serve generated images. An entry starting with a dot matches that domain and its subdomains. |
+
 ### Image Download Token Flow
 
 When images are generated, the proxy acquires a JWE access token for `designerappservice.officeapps.live.com` via the MSAL.js broker token flow to download the image (used for both `url` and `b64_json` response formats):

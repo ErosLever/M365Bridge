@@ -114,7 +114,16 @@ type Config struct {
 	CodeToolMaxIterations int
 	ContextWindowTokens   int
 	MaxOutputTokens       int
+	// ImageHostAllowlist names the hosts a generated-image URL may point at.
+	// Downloads send an access token, so an unlisted host must never be
+	// contacted. A leading dot matches that domain and its subdomains.
+	ImageHostAllowlist []string
 }
+
+// DefaultImageHostAllowlist holds the Microsoft hosts that serve generated
+// images. The designerapp access token is issued for this resource, so it must
+// not be sent anywhere else.
+var DefaultImageHostAllowlist = []string{".officeapps.live.com"}
 
 // LoadConfig loads configuration from .env file and environment variables.
 // Returns configuration with defaults for missing values.
@@ -135,6 +144,7 @@ func LoadConfig() *Config {
 		CodeToolMaxOutput:     getEnvInt64("M365_CODE_TOOL_MAX_OUTPUT", 1<<20),
 		CodeToolMaxReadBytes:  getEnvInt64("M365_CODE_TOOL_MAX_READ_BYTES", 1<<20),
 		CodeToolMaxIterations: getEnvInt("M365_CODE_TOOL_MAX_ITERATIONS", 10),
+		ImageHostAllowlist:    getEnvHostList("M365_IMAGE_HOST_ALLOWLIST", DefaultImageHostAllowlist),
 		ContextWindowTokens:   getEnvInt("M365_CONTEXT_WINDOW", 1_000_000),
 		MaxOutputTokens:       getEnvInt("M365_MAX_OUTPUT_TOKENS", 1_000_000),
 	}
@@ -217,6 +227,25 @@ func getEnvWithDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// getEnvHostList reads a comma-separated host list, lowercased and trimmed.
+// An unset or empty value keeps the supplied default.
+func getEnvHostList(key string, defaultValue []string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return defaultValue
+	}
+	var hosts []string
+	for entry := range strings.SplitSeq(raw, ",") {
+		if host := strings.ToLower(strings.TrimSpace(entry)); host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	if len(hosts) == 0 {
+		return defaultValue
+	}
+	return hosts
 }
 
 // getEnvBool returns true for "true", "1", "yes", "on" (case-insensitive).
