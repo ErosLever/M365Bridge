@@ -481,6 +481,7 @@ print(resp.choices[0].message.content)
 | `PATCH /v1/conversations/{id}`   | Konuşmayı `{ "name": "..." }` ile yeniden adlandırır    |
 | `DELETE /v1/conversations/{id}`  | Konuşmayı kalıcı olarak siler                           |
 | `GET /v1/models`                 | Model listesi                                           |
+| `GET /v1/quota`                  | Son gözlenen M365 konuşma mesaj kotası                  |
 | `GET /health`                    | Sağlık kontrolü (kimlik doğrulama gerektirmez)          |
 
 ## Modeller
@@ -541,6 +542,18 @@ Hiç model göndermeyen bir istek (boş `model` alanı veya yalnızca `:session-
 |--------------------------|------------|--------------------------------------------------------------|
 | `M365_CONTEXT_WINDOW`    | `1000000`  | `/v1/models` içinde ilan edilen context window token sayısı. |
 | `M365_MAX_OUTPUT_TOKENS` | `1000000`  | `/v1/models` içinde ilan edilen maksimum çıktı token sayısı. |
+
+### Konuşma Kotası
+
+M365, konuşma başına bir mesaj üst sınırı uygular ve sayaçları update frame'lerinde bildirir. Her tur bunları loglar, örneğin `ConvStream throttling: used=8 max=600 headroom=592`.
+
+`GET /v1/quota` son gözlenen sayaçları döndürür. Backend bu sayaçları yalnızca bir tur devam ederken gönderir; dolayısıyla değerler canlı bir sorgu değil, en son chat isteğini yansıtır ve o isteği üreten konuşmaya aittir:
+
+```json
+{"object":"quota","available":true,"exhausted":false,"used":8,"max":600,"headroom":592}
+```
+
+Proxy'nin tanımadığı sayaçlar atılmaz, `extra` altında döndürülür. Bir istek boş upstream yanıtı üretirse ve son sayaçlar üst sınıra ulaşıldığını gösteriyorsa, proxy genel boş yanıt hatası yerine `upstream_throttled` tipiyle `429` döndürür; devam etmek için yeni bir session başlatın.
 
 ## Tool Calling (Araç Çağırma)
 

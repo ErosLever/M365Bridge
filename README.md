@@ -481,6 +481,7 @@ print(resp.choices[0].message.content)
 | `PATCH /v1/conversations/{id}`   | Rename a conversation with `{ "name": "..." }`         |
 | `DELETE /v1/conversations/{id}`  | Permanently delete a conversation                      |
 | `GET /v1/models`                 | Model list                                             |
+| `GET /v1/quota`                  | Last observed M365 conversation message quota          |
 | `GET /health`                    | Health check (no auth required)                        |
 
 ## Models
@@ -541,6 +542,18 @@ Each entry in `GET /v1/models` advertises `context_window` and `max_output_token
 |--------------------------|-----------|--------------------------------------------------------|
 | `M365_CONTEXT_WINDOW`    | `1000000` | Advertised context window token count in `/v1/models`. |
 | `M365_MAX_OUTPUT_TOKENS` | `1000000` | Advertised maximum output token count in `/v1/models`. |
+
+### Conversation Quota
+
+M365 enforces a per-conversation message ceiling and reports the counters on its update frames. Every turn logs them, for example `ConvStream throttling: used=8 max=600 headroom=592`.
+
+`GET /v1/quota` returns the last observed counters. The backend only sends them while a turn is in flight, so the values reflect the most recent chat request rather than a live lookup, and they belong to whichever conversation produced that request:
+
+```json
+{"object":"quota","available":true,"exhausted":false,"used":8,"max":600,"headroom":592}
+```
+
+Counters the proxy does not recognize are returned under `extra` instead of being dropped. When a request produces an empty upstream response and the last counters show the ceiling was reached, the proxy answers `429` with type `upstream_throttled` rather than a generic empty-response error; start a new session to continue.
 
 ## Tool Calling
 

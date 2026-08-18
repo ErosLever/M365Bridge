@@ -146,6 +146,32 @@ type APIServer struct {
 	server       *http.Server
 	stopCh       chan struct{}
 	mu           sync.RWMutex
+
+	// throttlingMu guards lastThrottling, which holds the most recent quota
+	// counters M365 reported. Handlers read it to turn an exhausted quota into
+	// a 429 instead of an unexplained empty response.
+	throttlingMu   sync.RWMutex
+	lastThrottling *client.ThrottlingInfo
+}
+
+// noteThrottling records the quota counters carried by a final stream chunk.
+// Chunks without counters leave the previous value untouched, because M365
+// sends the throttling object on its own update frames rather than on every
+// turn.
+func (api *APIServer) noteThrottling(info *client.ThrottlingInfo) {
+	if info == nil {
+		return
+	}
+	api.throttlingMu.Lock()
+	api.lastThrottling = info
+	api.throttlingMu.Unlock()
+}
+
+// currentThrottling returns the last known quota counters, or nil.
+func (api *APIServer) currentThrottling() *client.ThrottlingInfo {
+	api.throttlingMu.RLock()
+	defer api.throttlingMu.RUnlock()
+	return api.lastThrottling
 }
 
 // NewAPIServer creates a new API server instance.
@@ -165,6 +191,7 @@ func (api *APIServer) Start(port int) error {
 	api.mu.Lock()
 	// Initialize request transports and optional local coding tools.
 	api.m365Client = client.NewM365Client(api.tokenManager)
+	api.m365Client.SetThrottlingObserver(api.noteThrottling)
 	if api.config.EnableCodeTools {
 		manager, err := codingtools.New(codingtools.Config{
 			Enabled:       true,
@@ -195,6 +222,9 @@ func (api *APIServer) Start(port int) error {
 	mux.HandleFunc("/v1/conversations", api.withAuth(api.handleConversations))
 	mux.HandleFunc("/v1/conversations/", api.withAuth(api.handleConversation))
 	mux.HandleFunc("/v1/models", api.handleModels)
+	// Quota counters expose account usage, so this route stays behind the API
+	// key middleware unlike the public /v1/models and /health routes.
+	mux.HandleFunc("/v1/quota", api.withAuth(api.handleQuota))
 	mux.HandleFunc("/health", api.handleHealth)
 
 	api.server = &http.Server{
@@ -345,6 +375,76 @@ func (api *APIServer) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.sendJSON(w, http.StatusOK, response)
+}
+
+// upstreamThrottledCode marks a response rejected because the M365
+// conversation exhausted its message quota.
+const upstreamThrottledCode = "upstream_throttled"
+
+// handleQuota reports the last known M365 conversation quota counters. The
+// backend only sends them while a turn is in flight, so the values reflect the
+// most recent chat request rather than a live lookup.
+func (api *APIServer) handleQuota(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		api.handleCORS(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		api.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	info := api.currentThrottling()
+	if info == nil {
+		api.sendJSON(w, http.StatusOK, map[string]any{
+			"object":    "quota",
+			"available": false,
+			"detail":    "no quota counters observed yet; send a chat request first",
+		})
+		return
+	}
+
+	response := map[string]any{
+		"object":    "quota",
+		"available": true,
+		"exhausted": info.Exhausted(),
+	}
+	if info.NumUserMessages != nil {
+		response["used"] = *info.NumUserMessages
+	}
+	if info.MaxNumUserMessages != nil {
+		response["max"] = *info.MaxNumUserMessages
+	}
+	if info.NumUserMessages != nil && info.MaxNumUserMessages != nil {
+		response["headroom"] = *info.MaxNumUserMessages - *info.NumUserMessages
+	}
+	if len(info.Extra) > 0 {
+		response["extra"] = info.Extra
+	}
+	api.sendJSON(w, http.StatusOK, response)
+}
+
+// quotaExhausted reports whether the last observed counters show the
+// conversation at its message ceiling.
+func (api *APIServer) quotaExhausted() bool {
+	return api.currentThrottling().Exhausted()
+}
+
+// sendThrottledError reports an exhausted conversation quota as HTTP 429 so
+// clients back off instead of retrying against an unexplained empty response.
+func (api *APIServer) sendThrottledError(w http.ResponseWriter) {
+	info := api.currentThrottling()
+	message := "M365 conversation message quota exhausted; start a new session to continue"
+	if summary := info.Summary(); summary != "" {
+		message = message + " (" + summary + ")"
+	}
+	api.sendJSON(w, http.StatusTooManyRequests, map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    upstreamThrottledCode,
+			"code":    http.StatusTooManyRequests,
+		},
+	})
 }
 
 // handleConversations lists or creates M365 conversations.
@@ -4049,6 +4149,12 @@ func (api *APIServer) nonStreamResponses(
 	if responsesResultEmpty(respText, toolCalls) {
 		if sid != "" {
 			api.ctxCache.Delete("session:" + sid)
+		}
+		// An exhausted conversation quota is the one empty-response cause the
+		// client can act on, so report it as 429 rather than a generic empty.
+		if api.quotaExhausted() {
+			api.sendThrottledError(w)
+			return
 		}
 		writeResponsesUpstreamEmptyError(
 			w,

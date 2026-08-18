@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime/multipart"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -65,6 +67,18 @@ type M365Client struct {
 	handshakeTimeout time.Duration
 	recvTimeout      time.Duration
 	recvFinalTimeout time.Duration
+	// throttlingObserver is configuration set once before serving, not
+	// per-request state. It reports quota counters from both the streaming and
+	// the aggregating paths, which discard the final chunk.
+	throttlingObserver func(*ThrottlingInfo)
+}
+
+// SetThrottlingObserver registers a callback invoked whenever the backend
+// reports conversation quota counters. Call it before serving requests; the
+// callback runs on the WebSocket read goroutine and must be safe for
+// concurrent use.
+func (c *M365Client) SetThrottlingObserver(observer func(*ThrottlingInfo)) {
+	c.throttlingObserver = observer
 }
 
 // NewM365Client creates a new M365 client instance.
@@ -253,9 +267,91 @@ type StreamChunk struct {
 	Thinking       string
 	IsFinal        bool
 	Error          error
-	ConversationID string     // set on final chunk
-	ToolCalls      []ToolCall // set on final chunk
-	FinishReason   string     // set on final chunk
+	ConversationID string          // set on final chunk
+	ToolCalls      []ToolCall      // set on final chunk
+	FinishReason   string          // set on final chunk
+	Throttling     *ThrottlingInfo // latest quota counters, when the backend sent them
+}
+
+// ThrottlingInfo carries M365's per-conversation quota counters. The backend
+// sends them in a `throttling` object on type 1 update frames. Counters are
+// pointers because a frame may carry only some of them, and zero is a
+// meaningful value that must not be confused with absent.
+type ThrottlingInfo struct {
+	// NumUserMessages is the user message count consumed in this conversation.
+	NumUserMessages *int
+	// MaxNumUserMessages is the ceiling M365 enforces per conversation.
+	MaxNumUserMessages *int
+	// Extra holds every other key the backend sent, so a counter this build
+	// does not know about is still observable instead of silently dropped.
+	Extra map[string]any
+}
+
+// Exhausted reports whether the conversation reached its message ceiling.
+func (t *ThrottlingInfo) Exhausted() bool {
+	if t == nil || t.NumUserMessages == nil || t.MaxNumUserMessages == nil {
+		return false
+	}
+	return *t.MaxNumUserMessages > 0 && *t.NumUserMessages >= *t.MaxNumUserMessages
+}
+
+// Summary renders the counters as a compact log string.
+func (t *ThrottlingInfo) Summary() string {
+	if t == nil {
+		return ""
+	}
+	parts := make([]string, 0, 3+len(t.Extra))
+	if t.NumUserMessages != nil {
+		parts = append(parts, fmt.Sprintf("used=%d", *t.NumUserMessages))
+	}
+	if t.MaxNumUserMessages != nil {
+		parts = append(parts, fmt.Sprintf("max=%d", *t.MaxNumUserMessages))
+	}
+	if t.NumUserMessages != nil && t.MaxNumUserMessages != nil {
+		parts = append(parts, fmt.Sprintf("headroom=%d", *t.MaxNumUserMessages-*t.NumUserMessages))
+	}
+	for _, key := range slices.Sorted(maps.Keys(t.Extra)) {
+		parts = append(parts, fmt.Sprintf("%s=%v", key, t.Extra[key]))
+	}
+	return strings.Join(parts, " ")
+}
+
+// parseThrottling converts the backend's `throttling` object into
+// ThrottlingInfo. Keys beyond the two documented counters are preserved in
+// Extra rather than dropped by a hardcoded key list.
+func parseThrottling(raw map[string]any) *ThrottlingInfo {
+	if len(raw) == 0 {
+		return nil
+	}
+	info := &ThrottlingInfo{}
+	for key, value := range raw {
+		switch key {
+		case "numUserMessagesInConversation":
+			if n, ok := jsonInt(value); ok {
+				info.NumUserMessages = &n
+				continue
+			}
+		case "maxNumUserMessagesInConversation":
+			if n, ok := jsonInt(value); ok {
+				info.MaxNumUserMessages = &n
+				continue
+			}
+		}
+		if info.Extra == nil {
+			info.Extra = make(map[string]any)
+		}
+		info.Extra[key] = value
+	}
+	return info
+}
+
+// jsonInt converts a JSON number to int, rejecting bools and non-numbers.
+func jsonInt(value any) (int, bool) {
+	f, ok := value.(float64)
+	if !ok {
+		return 0, false
+	}
+	return int(f), true
 }
 
 // ChatStreamGen generates a stream of response chunks for a single text prompt.
@@ -418,6 +514,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 		accText := ""
 		accThinking := ""
 		var finalConvID string
+		var throttling *ThrottlingInfo
 
 		for {
 			conn.SetReadDeadline(time.Now().Add(c.recvFinalTimeout))
@@ -476,6 +573,17 @@ func (c *M365Client) ChatConversationStreamGenContext(
 								if argMap, ok := arg.(map[string]any); ok {
 									// DEBUG: log all keys in argMap
 									logging.Debugf("ConvStream argMap keys: %v", mapKeys(argMap))
+									// Capture the conversation quota counters. They arrive on
+									// their own update frames, separate from message frames.
+									if rawThrottling, ok := argMap["throttling"].(map[string]any); ok {
+										if info := parseThrottling(rawThrottling); info != nil {
+											throttling = info
+											logging.Infof("ConvStream throttling: %s", info.Summary())
+											if c.throttlingObserver != nil {
+												c.throttlingObserver(info)
+											}
+										}
+									}
 									// Extract conversationId from type:1 update if present (rare)
 									if convID, ok := argMap["conversationId"].(string); ok && convID != "" {
 										finalConvID = convID
@@ -577,7 +685,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 						finishReason = "tool_calls"
 					}
 					logging.Infof("ChatConversationStreamGen: completed finishReason=%s toolCalls=%d", finishReason, len(toolCalls))
-					emit(StreamChunk{Text: "", IsFinal: true, ConversationID: finalConvID, ToolCalls: toolCalls, FinishReason: finishReason})
+					emit(StreamChunk{Text: "", IsFinal: true, ConversationID: finalConvID, ToolCalls: toolCalls, FinishReason: finishReason, Throttling: throttling})
 					return
 				} else if msgType, ok := data["type"].(float64); ok && int(msgType) == -1 {
 					logging.Errorf("ChatConversationStreamGen: server error: %v", data)
