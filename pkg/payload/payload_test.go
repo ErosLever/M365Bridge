@@ -1,6 +1,7 @@
 package payload
 
 import (
+	"encoding/json"
 	"net/url"
 	"strings"
 	"testing"
@@ -69,5 +70,26 @@ func TestConversationTextForM365KeepsOnlyCurrentMessageForStickyConversation(t *
 
 	if got != "Current request" {
 		t.Fatalf("sticky conversation text = %q, want current request only", got)
+	}
+}
+
+// The M365 backend accepts image attachments only. A file or audio block must
+// not break the request and must not silently turn into text either.
+func TestUnsupportedContentBlocksAreDropped(t *testing.T) {
+	raw := `{"role":"user","content":[
+		{"type":"text","text":"summarize this"},
+		{"type":"input_file","file_id":"file_1"},
+		{"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}
+	]}`
+
+	var message Message
+	if err := json.Unmarshal([]byte(raw), &message); err != nil {
+		t.Fatalf("unsupported blocks broke decoding: %v", err)
+	}
+	if message.Content != "summarize this" {
+		t.Fatalf("content = %q, want only the text block", message.Content)
+	}
+	if len(message.Images) != 0 {
+		t.Fatalf("a non-image block became an attachment: %#v", message.Images)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
 	"github.com/google/uuid"
 )
 
@@ -240,6 +241,12 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 				}
 			}
 			m.Content += fmt.Sprintf("\n[Tool Result (call_id: %s)]\n%s\n", toolUseID, resultContent)
+		case "input_file", "file", "input_audio", "audio":
+			// The M365 backend accepts image attachments only, so these blocks
+			// cannot be forwarded. They were already skipped by falling through
+			// the switch; the case exists so the drop is visible in the log
+			// rather than looking like the client never sent anything.
+			logging.Debugf("Message.UnmarshalJSON: dropping unsupported %q content block", blockType)
 		}
 	}
 
