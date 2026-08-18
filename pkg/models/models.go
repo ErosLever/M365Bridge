@@ -28,7 +28,29 @@ type ModelConfig struct {
 	Tone     string // The tone/style parameter sent to the backend
 	Override string // Optional GPT model override identifier
 	OpenAIID string // OpenAI-compatible model identifier
+	Owner    string // Who built the model behind the tone; defaults to OwnerMicrosoft
 }
+
+// Model owners advertised through /v1/models. The Claude tones reach real
+// Anthropic models through Microsoft 365, and a client that routes by vendor
+// needs to see that rather than a single blanket owner.
+const (
+	OwnerMicrosoft = "microsoft-365"
+	OwnerAnthropic = "anthropic-via-microsoft-365"
+)
+
+// Owner returns the model owner, falling back to Microsoft for tones that do
+// not name one.
+func (c ModelConfig) OwnerOrDefault() string {
+	if c.Owner == "" {
+		return OwnerMicrosoft
+	}
+	return c.Owner
+}
+
+// ReasoningEffortPresets lists the reasoning effort values the Responses API
+// accepts, from cheapest to most thorough.
+var ReasoningEffortPresets = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 
 // ModelRegistry maps model keys to their configurations.
 var ModelRegistry = map[string]ModelConfig{
@@ -67,26 +89,31 @@ var ModelRegistry = map[string]ModelConfig{
 		Tone:     "Claude_Sonnet",
 		Override: "",
 		OpenAIID: "claude-sonnet-4.6",
+		Owner:    OwnerAnthropic,
 	},
 	"claude-sonnet": {
 		Tone:     "Claude_Sonnet",
 		Override: "",
 		OpenAIID: "claude-sonnet-4.6",
+		Owner:    OwnerAnthropic,
 	},
 	"claude-opus": {
 		Tone:     "Claude_Opus",
 		Override: "",
 		OpenAIID: "claude-opus-4.6",
+		Owner:    OwnerAnthropic,
 	},
 	"claude-fable": {
 		Tone:     "Claude_Fable",
 		Override: "",
 		OpenAIID: "claude-fable-5",
+		Owner:    OwnerAnthropic,
 	},
 	"claude-sonnet-4-20250514": {
 		Tone:     "Claude_Sonnet",
 		Override: "",
 		OpenAIID: "claude-sonnet-4.6",
+		Owner:    OwnerAnthropic,
 	},
 }
 

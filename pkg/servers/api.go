@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -361,21 +362,44 @@ func (api *APIServer) handleModels(w http.ResponseWriter, r *http.Request) {
 	contextWindow := api.config.ContextWindowTokens
 	maxOutput := api.config.MaxOutputTokens
 
-	modelList := []map[string]any{}
+	// The advertised output budget is only carved out of the window when it is
+	// smaller than the window. With the defaults both hints are the same value,
+	// so subtracting would advertise an input budget of zero.
+	maxInput := contextWindow
+	if maxOutput < contextWindow {
+		maxInput = contextWindow - maxOutput
+	}
+
+	// Several registry keys are aliases for the same model, so the list is keyed
+	// by the advertised id and sorted; a map range would otherwise return
+	// duplicates in a different order on every request.
+	byID := make(map[string]models.ModelConfig, len(models.ModelRegistry))
 	for _, cfg := range models.ModelRegistry {
+		byID[cfg.OpenAIID] = cfg
+	}
+	ids := slices.Sorted(maps.Keys(byID))
+
+	modelList := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
 		modelList = append(modelList, map[string]any{
-			"id":                cfg.OpenAIID,
+			"id":                id,
 			"object":            "model",
 			"created":           1700000000,
-			"owned_by":          "microsoft",
+			"owned_by":          byID[id].OwnerOrDefault(),
 			"context_window":    contextWindow,
+			"max_input_tokens":  maxInput,
 			"max_output_tokens": maxOutput,
+			// Every model reaches caller-defined tools through the simulated
+			// tool calling layer, so the capability is a property of the proxy
+			// rather than of the tone.
+			"supports_tools": true,
 		})
 	}
 
 	response := map[string]any{
-		"object": "list",
-		"data":   modelList,
+		"object":                   "list",
+		"data":                     modelList,
+		"reasoning_effort_presets": models.ReasoningEffortPresets,
 	}
 
 	api.sendJSON(w, http.StatusOK, response)
