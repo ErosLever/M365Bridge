@@ -1729,6 +1729,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
 		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), contracts)
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, contracts, fullText, sim)
+		sim = dropSettledToolCalls(buildToolLedger(messages), toolChoice, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
 				simToolCalls = sim.ToolCalls
@@ -1913,6 +1914,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
 		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), contracts)
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, contracts, respText, sim)
+		sim = dropSettledToolCalls(buildToolLedger(messages), toolChoice, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
 				finishReason = "tool_calls"
@@ -2181,6 +2183,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
 		sim := toolcalling.ParseSimulatedResponseAnthropic(fullText, toolNamesFromDefs(tools), contracts)
 		sim = api.repairSimulatedToolCalls(toolLoopAnthropic, messages, cfg, tools, contracts, fullText, sim)
+		sim = dropSettledToolCalls(buildToolLedger(messages), toolChoice, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
 				simToolCalls = sim.ToolCalls
@@ -2416,6 +2419,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
 		sim := toolcalling.ParseSimulatedResponseAnthropic(respText, toolNamesFromDefs(tools), contracts)
 		sim = api.repairSimulatedToolCalls(toolLoopAnthropic, messages, cfg, tools, contracts, respText, sim)
+		sim = dropSettledToolCalls(buildToolLedger(messages), toolChoice, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
 				finishReason = "tool_calls"
@@ -2611,6 +2615,7 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
 		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), contracts)
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, contracts, fullText, sim)
+		sim = dropSettledToolCalls(buildToolLedger(messages), toolChoice, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
 				simToolCalls = sim.ToolCalls
@@ -2702,6 +2707,7 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
 		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), contracts)
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, contracts, respText, sim)
+		sim = dropSettledToolCalls(buildToolLedger(messages), toolChoice, sim)
 		if sim.HasPayload {
 			if len(sim.ToolCalls) > 0 {
 				finishReason = "tool_calls"
@@ -3278,6 +3284,48 @@ func buildToolLedger(messages []payload.Message) toolcalling.Ledger {
 	return toolcalling.BuildLedger(calls, results, rounds)
 }
 
+// toolChoiceForcesACall reports whether the caller demanded a tool call in this
+// turn, either by name or with "required"/"any".
+func toolChoiceForcesACall(toolChoice string) bool {
+	switch toolChoice {
+	case "", "auto", "none":
+		return false
+	default:
+		return true
+	}
+}
+
+// dropSettledToolCalls removes a tool call the model is issuing for at least
+// the third time with the same arguments, whose result is already in this
+// turn's history.
+//
+// A call the caller demanded through tool_choice is forwarded regardless:
+// refusing it would contradict the request. The drop is not recorded in
+// DroppedCalls either, because that list drives a corrective re-ask and
+// re-asking would produce the same call again. When nothing survives, the turn
+// becomes a plain answer, which needs substitute text because the parser clears
+// the content whenever tool calls are present.
+func dropSettledToolCalls(ledger toolcalling.Ledger, toolChoice string, sim toolcalling.SimulatedResult) toolcalling.SimulatedResult {
+	if len(sim.ToolCalls) == 0 || toolChoiceForcesACall(toolChoice) {
+		return sim
+	}
+	kept, dropped := ledger.FilterRepeated(sim.ToolCalls)
+	if len(dropped) == 0 {
+		return sim
+	}
+	for _, call := range dropped {
+		logging.Warnf("dropSettledToolCalls: dropping %q, its result is already in this turn's history", call.Name)
+	}
+	sim.ToolCalls = kept
+	if len(kept) == 0 {
+		sim.FinishReason = "stop"
+		if strings.TrimSpace(sim.Content) == "" {
+			sim.Content = toolcalling.RepeatedCallsNotice
+		}
+	}
+	return sim
+}
+
 // toolRoundLimitCode marks a client-driven tool loop that ran past its cap.
 const toolRoundLimitCode = "tool_round_limit"
 
@@ -3374,6 +3422,11 @@ type responsesToolPolicy struct {
 	promptChoice     string
 	allowedToolNames []string
 	tools            []toolcalling.ToolDef
+	// ledger carries the evidence of the client-driven tool loop. The
+	// Responses input is collapsed into one canonical prompt message before
+	// parsing, so the ledger has to travel with the policy instead of being
+	// rebuilt from the messages the parser sees.
+	ledger toolcalling.Ledger
 }
 
 type responsesSimulationResult struct {
@@ -3679,6 +3732,9 @@ func parseResponsesSimulation(text string, policy responsesToolPolicy) (response
 		finishReason: "stop",
 	}
 	simulated := toolcalling.ParseSimulatedResponseResponses(text, policy.allowedToolNames, toolcalling.ContractsFor(policy.tools))
+	if !policy.required {
+		simulated = dropSettledToolCalls(policy.ledger, "", simulated)
+	}
 	if simulated.HasPayload {
 		result.content = simulated.Content
 		if len(simulated.ToolCalls) > 0 {
@@ -4247,6 +4303,9 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 		api.sendToolRoundLimitError(w, ledger)
 		return
 	}
+	// The simulation prompt collapses the input into one message, so the
+	// evidence has to travel with the policy to reach the parser.
+	toolPolicy.ledger = ledger
 
 	// Prepend instructions as first user message (M365 has no system role)
 	if strings.TrimSpace(req.Instructions) != "" && len(messages) > 0 {

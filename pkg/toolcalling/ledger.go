@@ -193,6 +193,12 @@ func (l Ledger) FilterRepeated(calls []ToolCall) (kept, dropped []ToolCall) {
 	return kept, dropped
 }
 
+// RepeatedCallsNotice replaces the answer text when every tool call of a turn
+// was dropped as a settled repeat. The parser clears the content whenever tool
+// calls are present, so without a substitute the client would receive a turn
+// with neither calls nor an answer.
+const RepeatedCallsNotice = "The tools requested in this turn have already run with the same arguments, and their results are in the conversation above. Answer from those results instead of calling them again."
+
 // EvidenceNote renders the completed calls as a compact instruction for the
 // prompt, so the model treats a result it already has as settled instead of
 // asking for it again. It returns an empty string when there is no evidence.
