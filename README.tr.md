@@ -572,6 +572,16 @@ M365, konuşma başına bir mesaj üst sınırı uygular ve sayaçları update f
 
 Proxy'nin tanımadığı sayaçlar atılmaz, `extra` altında döndürülür. Bir istek boş upstream yanıtı üretirse ve son sayaçlar üst sınıra ulaşıldığını gösteriyorsa, proxy genel boş yanıt hatası yerine `upstream_throttled` tipiyle `429` döndürür; devam etmek için yeni bir session başlatın.
 
+### Token Kullanımı
+
+Prompt ve completion token sayıları yerel olarak üretilen tahminlerdir; M365 backend'i kullanım bildirmez. Encoder, backend'in sunduğu GPT-5 sınıfı modellerin encoding'i olan `o200k_base`'dir; yedeği `cl100k_base`, iki sözlük de indirilemezse karakter tabanlı tahmindir. Her `usage` nesnesi sayıları hangisinin ürettiğini bildirir:
+
+```json
+{"prompt_tokens": 42, "completion_tokens": 17, "total_tokens": 59, "usage_source": "tiktoken_o200k_base_estimate"}
+```
+
+`usage_source` standart dışı bir alandır; standart alanlar anlamını ve yerini korur. Prompt token'ları mesaj rolleri ve içerikleri, serileştirilmiş tool tanımları ve `tool_choice` değeri üzerinden, artı mesaj başına ve tool başına sabit bir çerçeve payı ile sayılır. Önceki sürümler encoder'ı mesaj diliminin Go gösterimi üzerinde çalıştırıyordu, yani struct alan adları da prompt içeriği olarak faturalanıyordu. Bu nedenle aynı istek için sayılar öncekinden düşüktür.
+
 ## MCP Sunucusu
 
 `POST /mcp`, M365 Copilot'u Model Context Protocol istemcilerine JSON-RPC 2.0 üzerinden sunar (protokol sürümü `2025-06-18`). `initialize`, `tools/list`, `tools/call` ve `ping` desteklenir; lifecycle notification'ları gövdesiz `202` ile yanıtlanır. Bir API anahtarı yapılandırılmışsa bu route anahtar gerektirir.
@@ -708,10 +718,17 @@ Claude Code ve Codex gibi agent istemcileri tool loop'u kendileri sürer ve her 
 | Değişken               | Varsayılan | Açıklama                                                                     |
 |------------------------|------------|------------------------------------------------------------------------------|
 | `M365_MAX_TOOL_ROUNDS` | `32`       | Bir kullanıcı turunun sürebileceği tool round sayısı. Üst sınır `512`.        |
+| `M365_ENABLE_WEB_SEARCH` | `1`      | Her turda M365 `BingWebSearch` built-in'ini tanımlar. `0`, `false`, `off` veya `no` bunu gönderilmez yapar. |
 
 - Sınır aşıldığında `tool_round_limit` tipiyle HTTP 409 döner ve round sayısı bildirilir. HTTP 409 Anthropic SDK'sının beklediği bir kod değildir, ama istemci bir tur daha isterken sonsuza kadar yanıt vermektense açık bir ret tercih edilir.
 - Tamamlanmış çağrılar ve sonuçları prompt'ta kesin kanıt olarak tekrar edilir; böylece model elindeki sonucu yeniden istemek yerine ondan yanıt verir. Aynı çağrı aynı hatayla birden fazla kez başarısız olduysa prompt ayrıca yaklaşım değiştirmeyi ister.
 - Sonucu turda zaten bulunan bir ad ve argüman ikilisini tekrarlayan tool call, üçüncü aynı denemede düşürülür. İlk tekrar geçer; çünkü yazma sonrası dosyayı okumak veya değişiklik sonrası testleri tekrar çalıştırmak olağandır. `tool_choice` ile talep edilen bir çağrı her zaman iletilir ve düşürme düzeltici re-ask'i tetiklemez; çünkü tekrar sorulduğunda model aynı çağrıyı üretir.
+- Tekrar edilen her sonuç, kaldırılan bayt sayısını bildiren bir işaretin etrafında baş ve kuyruk olarak kırpılır; böylece uzun bir build logu döngünün her turunda prompt'u büyütmez.
+- İki kez tanımlanan veya iki kez yanıtlanan bir tool call id'si HTTP 400 ile reddedilir: sonraki sonucun hangi çağrıya ait olduğu belirlenemez.
+- Yalnızca hangi tool'u kullanacağını bildiren, tanımlı bir tool adını kısa ve fence'siz bir cümlede geçiren yanıt bir kez yeniden sorulur. Tekrar da bildirim olarak kalırsa cevap metni değiştirilir; böylece istemci hiç gelmeyecek bir çağrıyı beklemez.
+- `function_call_progress` giriş item'ı, uzun süren bir istemci tool'unun ara durum bildirmesini sağlar. Modele bağlam olarak ulaşır ama bekleyen çağrıyı asla yanıtlamaz ve yeni bir kullanıcı turu başlatmaz.
+- Grammar kısıtlı bir tool (`"type": "custom"`, örneğin Codex code mode'un `exec`'i) JSON argüman değil ham gövde alır. Backend bu gövdeyi fence'siz ürettiğinde, tek başına `{"input": "..."}` nesnesi olarak veya çıplak kaynak olarak, `/v1/responses` üzerinde kaçışlı metin yerine `custom_tool_call` olarak yakalanır.
+- İstemcinin tanımladığı `web_search` tool'u istemciye asla yönlendirilmez: aramayı M365 kendi `BingWebSearch` built-in'i ile yapar ve sonuçları cevaba yazar. Yeteneğin var olduğunu model görsün diye tanım prompt'ta kalır. `web_search` tek tanımlı tool ise istek simüle tool yolundan tamamen çıkar ve düz metin olarak akar.
 - İstek tool tanımlıyor, tur hiç tool call üretmiyor ve hiç tool result yoksa, işi birinci tekil şahısla yaptığını iddia eden yanıt hiçbir şeyin doğrulanmadığını söyleyen kısa bir cümleyle değiştirilir; özgün metin debug seviyesinde loglanır. "Go was created at Google" gibi üçüncü şahıs bir ifadeye ve uzun düz metin yanıtlara dokunulmaz. Değiştirme, tool tanımlı bir turu parse bitene kadar tamponlayan akışlı Chat Completions, Messages ve Completions uç noktalarında da geçerlidir. Yalnızca `/v1/responses` akışı içeriği çözdükçe yayımladığı için orada yalnızca loglanır.
 
 ## Built-in Coding Tools (Opt-in)
@@ -917,7 +934,7 @@ data/                    # Çalışma zamanı verisi (gitignore'lı): tokens/, s
 |---------------------------------|-----------------------------------------------------------------------|
 | `github.com/google/uuid`        | SID'ler ve istek ID'leri için UUID oluşturma                          |
 | `github.com/gorilla/websocket`  | SignalR için WebSocket istemcisi                                      |
-| `github.com/pkoukk/tiktoken-go` | Kullanım ve max_tokens uygulaması için BPE token sayımı (cl100k_base) |
+| `github.com/pkoukk/tiktoken-go` | Kullanım ve max_tokens uygulaması için BPE token sayımı (o200k_base, yedek cl100k_base) |
 | `golang.org/x/net`              | SSO cookie jar için publicsuffix listesi                              |
 
 ## Güvenlik

@@ -572,6 +572,16 @@ M365 enforces a per-conversation message ceiling and reports the counters on its
 
 Counters the proxy does not recognize are returned under `extra` instead of being dropped. When a request produces an empty upstream response and the last counters show the ceiling was reached, the proxy answers `429` with type `upstream_throttled` rather than a generic empty-response error; start a new session to continue.
 
+### Token Usage
+
+Prompt and completion token counts are estimates produced locally; the M365 backend reports no usage. The encoder is `o200k_base`, the encoding of the GPT-5 class models the backend serves, with `cl100k_base` as the fallback and a character-based estimate when neither vocabulary can be fetched. Every `usage` object names which one produced the numbers:
+
+```json
+{"prompt_tokens": 42, "completion_tokens": 17, "total_tokens": 59, "usage_source": "tiktoken_o200k_base_estimate"}
+```
+
+`usage_source` is a non-standard field; the standard fields keep their meaning and position. Prompt tokens are counted from the message roles and contents, the serialized tool definitions and the `tool_choice` value, plus a fixed per-message and per-tool framing allowance. Earlier versions ran the encoder over the Go representation of the message slice, so struct field names were billed as prompt content. Counts are therefore lower than before for the same request.
+
 ## MCP Server
 
 `POST /mcp` exposes M365 Copilot to Model Context Protocol clients over JSON-RPC 2.0 (protocol revision `2025-06-18`). It supports `initialize`, `tools/list`, `tools/call`, and `ping`; lifecycle notifications are acknowledged with `202` and no body. The route requires an API key when one is configured.
@@ -708,10 +718,17 @@ Agent clients such as Claude Code and Codex drive the tool loop themselves and r
 | Variable               | Default | Description                                                                 |
 |------------------------|---------|-----------------------------------------------------------------------------|
 | `M365_MAX_TOOL_ROUNDS` | `32`    | Tool rounds one user turn may drive before HTTP 409. Capped at `512`.        |
+| `M365_ENABLE_WEB_SEARCH` | `1`   | Declares the M365 `BingWebSearch` built-in on every turn. `0`, `false`, `off` or `no` withholds it. |
 
 - Exceeding the cap returns HTTP 409 with `tool_round_limit` and reports the round count. HTTP 409 is not a status the Anthropic SDK expects, but an explicit refusal is preferable to answering forever while the client asks for one more round.
 - The completed calls and their results are restated in the prompt as final evidence, so the model answers from a result it already has instead of asking for it again. When the same call has failed the same way more than once, the prompt also asks for a change of approach.
 - A tool call repeating a name and arguments whose result is already in the turn is dropped on the third identical attempt. The first repeat passes, because reading a file back after writing it or re-running the tests after a change are ordinary. A call demanded through `tool_choice` is always forwarded, and a drop never triggers the corrective re-ask, because re-asking would produce the same call again.
+- Each restated result is compacted to a head and a tail around a marker naming the removed size, so a long build log does not grow the prompt on every round of the loop.
+- A tool call id declared twice, or answered twice, is rejected with HTTP 400: nothing can tell which call a later result belongs to.
+- A reply that only announces which tool it means to use, naming a declared tool in a short sentence without a code fence, is re-asked once. If the retry stays an announcement the answer text is replaced, so the client is not left waiting for a call that never comes.
+- A `function_call_progress` input item lets a long-running client tool report intermediate status. It reaches the model as context but never answers the pending call and never starts a new user turn.
+- A grammar-constrained tool (`"type": "custom"`, such as Codex code mode's `exec`) takes a raw body rather than JSON arguments. When the backend emits that body unfenced, either as a lone `{"input": "..."}` object or as bare source, it is claimed as a `custom_tool_call` on `/v1/responses` instead of being forwarded as escaped text.
+- A client-declared `web_search` tool is never routed back to the client: M365 runs the search itself through its `BingWebSearch` built-in and writes the results into the answer. The declaration stays in the prompt so the model knows the capability exists. When `web_search` is the only declared tool, the request drops out of the simulated tool path entirely and streams as ordinary text.
 - When the request declares tools, the turn emits no tool call, and no tool result exists, an answer claiming in the first person to have carried the work out is replaced with a short statement that nothing was verified; the original text is logged at debug level. A third-person statement such as "Go was created at Google" and a long prose answer are never touched. The replacement also applies to the streaming Chat Completions, Messages and Completions endpoints, which buffer a tool-enabled turn until the parse is done. Only `/v1/responses` streaming publishes content as it decodes it, so there the case is logged instead.
 
 ## Built-in Coding Tools (Opt-in)
@@ -917,7 +934,7 @@ data/                    # Runtime data (gitignored): tokens/, setup.json, cache
 |---------------------------------|-----------------------------------------------------------------------|
 | `github.com/google/uuid`        | UUID generation for SIDs and request IDs                              |
 | `github.com/gorilla/websocket`  | WebSocket client for SignalR                                          |
-| `github.com/pkoukk/tiktoken-go` | BPE token counting (cl100k_base) for usage and max_tokens enforcement |
+| `github.com/pkoukk/tiktoken-go` | BPE token counting (o200k_base, cl100k_base fallback) for usage and max_tokens enforcement |
 | `golang.org/x/net`              | publicsuffix list for SSO cookie jar                                  |
 
 ## Security
