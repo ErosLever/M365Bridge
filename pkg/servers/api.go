@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/auth"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/client"
@@ -1887,7 +1888,6 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 	}
 
 	// Send final chunk with usage
-	promptStr := fmt.Sprint(messages)
 	finishReason := "stop"
 	if truncated {
 		finishReason = "length"
@@ -1895,14 +1895,15 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 	if len(toolCalls) > 0 {
 		finishReason = "tool_calls"
 	}
-	promptTok := countTokens(promptStr)
-	completionTok := countTokens(fullText)
+	promptTok := countPromptTokens(messages, tools, toolChoice)
+	completionTok := countTokens(fullText) + outputProtocolTokens
 	reasoningTok := countTokens(thinkingText.String())
 	usage := map[string]any{
 		"prompt_tokens":     promptTok,
 		"completion_tokens": completionTok,
 		"reasoning_tokens":  reasoningTok,
 		"total_tokens":      promptTok + completionTok + reasoningTok,
+		"usage_source":      usageSource(),
 	}
 
 	api.sendSSEDone(w, chunkID, openaiModel, finishReason, usage)
@@ -2052,9 +2053,8 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 		}
 	}
 
-	promptStr := fmt.Sprint(messages)
-	promptTok := countTokens(promptStr)
-	completionTok := countTokens(respText)
+	promptTok := countPromptTokens(messages, tools, toolChoice)
+	completionTok := countTokens(respText) + outputProtocolTokens
 	reasoningTok := countTokens(thinking)
 	response := map[string]any{
 		"id":      fmt.Sprintf("chatcmpl-%s", uuid.New().String()),
@@ -2073,6 +2073,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 			"completion_tokens": completionTok,
 			"reasoning_tokens":  reasoningTok,
 			"total_tokens":      promptTok + completionTok + reasoningTok,
+			"usage_source":      usageSource(),
 		},
 	}
 
@@ -2817,9 +2818,8 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 		}
 	}
 
-	promptStr := fmt.Sprint(messages)
-	promptTok := countTokens(promptStr)
-	completionTok := countTokens(respText)
+	promptTok := countPromptTokens(messages, tools, toolChoice)
+	completionTok := countTokens(respText) + outputProtocolTokens
 	reasoningTok := countTokens(thinking)
 
 	// Build choices
@@ -2844,6 +2844,7 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 			"completion_tokens": completionTok,
 			"reasoning_tokens":  reasoningTok,
 			"total_tokens":      promptTok + completionTok + reasoningTok,
+			"usage_source":      usageSource(),
 		},
 	}
 
@@ -4265,18 +4266,66 @@ func (api *APIServer) fimToChat(prompt, suffix string) []payload.Message {
 	}
 }
 
-// tokenEncoder is the tiktoken encoder for cl100k_base (GPT-4/5 family).
+// tokenEncoder is the tiktoken encoder used for every token count. o200k_base
+// is the encoding of the GPT-5 family the backend serves; cl100k_base is kept
+// as a fallback because the vocabulary is fetched at first use and the fetch
+// can fail.
 var tokenEncoder *tiktoken.Tiktoken
 
+// tokenEncodingName names the encoding actually in use, for usage reporting.
+var tokenEncodingName string
+
+// Usage source values reported alongside the token counts, so a caller can tell
+// a real BPE count from the character estimate that stands in when the
+// vocabulary could not be fetched.
+const (
+	usageSourceHeuristic = "heuristic_character_estimate"
+)
+
 func init() {
-	enc, err := tiktoken.EncodingForModel("gpt-4")
-	if err != nil {
-		enc, err = tiktoken.GetEncoding("cl100k_base")
+	for _, name := range []string{"o200k_base", "cl100k_base"} {
+		enc, err := tiktoken.GetEncoding(name)
 		if err != nil {
-			logging.Warnf("Failed to init tiktoken encoder, falling back to space split: %v", err)
+			logging.Warnf("token encoding %s unavailable: %v", name, err)
+			continue
+		}
+		tokenEncoder = enc
+		tokenEncodingName = name
+		break
+	}
+	if tokenEncoder == nil {
+		logging.Warn("no token encoding available, falling back to a character estimate")
+	}
+}
+
+// usageSource reports how the token counts in a response were produced.
+func usageSource() string {
+	if tokenEncoder == nil {
+		return usageSourceHeuristic
+	}
+	return "tiktoken_" + tokenEncodingName + "_estimate"
+}
+
+// heuristicTokenCount estimates tokens from character classes when no encoding
+// is available. Latin text averages roughly four characters per token while
+// CJK and other non-ASCII scripts average closer to one, so a single divisor
+// would be wrong for one of them.
+func heuristicTokenCount(text string) int {
+	ascii, other := 0, 0
+	for _, r := range text {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		if r <= 0x7f {
+			ascii++
+		} else {
+			other++
 		}
 	}
-	tokenEncoder = enc
+	if ascii == 0 && other == 0 {
+		return 0
+	}
+	return max(ascii/4+other, 1)
 }
 
 // countTokens returns the real BPE token count using tiktoken.
@@ -4287,7 +4336,43 @@ func countTokens(text string) int {
 	if tokenEncoder != nil {
 		return len(tokenEncoder.Encode(text, nil, nil))
 	}
-	return len(strings.Split(text, " "))
+	return heuristicTokenCount(text)
+}
+
+// Protocol framing costs. The request carries structure the message text does
+// not represent: role markers, tool schemas and the priming that starts the
+// reply. These are conservative estimates of that framing, not billing figures
+// from the backend.
+const (
+	requestProtocolTokens    = 4
+	messageProtocolTokens    = 4
+	toolProtocolTokens       = 6
+	toolChoiceProtocolTokens = 2
+	replyPrimingTokens       = 3
+	outputProtocolTokens     = 3
+)
+
+// countPromptTokens estimates the prompt cost of a request from its parts.
+//
+// The previous count ran tiktoken over fmt.Sprint of the message slice, which
+// counted Go struct field names and slice punctuation as prompt content. Tools
+// and tool_choice were not counted at all even though they travel in the
+// request.
+func countPromptTokens(messages []payload.Message, tools []toolcalling.ToolDef, toolChoice string) int {
+	total := requestProtocolTokens + replyPrimingTokens
+	for i := range messages {
+		total += messageProtocolTokens + countTokens(messages[i].Role) + countTokens(messages[i].Content)
+	}
+	for i := range tools {
+		total += toolProtocolTokens
+		if encoded, err := json.Marshal(tools[i]); err == nil {
+			total += countTokens(string(encoded))
+		}
+	}
+	if strings.TrimSpace(toolChoice) != "" {
+		total += toolChoiceProtocolTokens
+	}
+	return total
 }
 
 // truncateToTokens truncates text to at most maxTokens tokens using tiktoken.
@@ -4302,6 +4387,11 @@ func truncateToTokens(text string, maxTokens int) (string, bool) {
 			return text, false
 		}
 		return tokenEncoder.Decode(tokens[:maxTokens]), true
+	}
+	// Without an encoder there is no token boundary to cut on, so the word
+	// split stands in; heuristicTokenCount decides whether a cut is needed.
+	if heuristicTokenCount(text) <= maxTokens {
+		return text, false
 	}
 	words := strings.Split(text, " ")
 	if len(words) <= maxTokens {
@@ -4796,6 +4886,7 @@ func buildResponsesObject(responseID, model, text, thinking string, toolCalls []
 			"output_tokens":    completionTok,
 			"reasoning_tokens": reasoningTok,
 			"total_tokens":     promptTok + completionTok + reasoningTok,
+			"usage_source":     usageSource(),
 		},
 	}
 	return resp
@@ -5057,9 +5148,8 @@ func (api *APIServer) nonStreamResponses(
 		}
 	}
 
-	promptStr := fmt.Sprint(messages)
-	promptTok := countTokens(promptStr)
-	completionTok := countTokens(respText)
+	promptTok := countPromptTokens(messages, toolPolicy.tools, toolPolicy.promptChoice)
+	completionTok := countTokens(respText) + outputProtocolTokens
 	reasoningTok := countTokens(thinking)
 
 	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
@@ -5756,9 +5846,8 @@ func (api *APIServer) streamResponses(
 		status = "incomplete"
 	}
 
-	promptStr := fmt.Sprint(messages)
-	promptTok := countTokens(promptStr)
-	completionTok := countTokens(fullText)
+	promptTok := countPromptTokens(messages, toolPolicy.tools, toolPolicy.promptChoice)
+	completionTok := countTokens(fullText) + outputProtocolTokens
 	reasoningText := thinkingText.String()
 	reasoningTok := countTokens(reasoningText)
 
@@ -5922,6 +6011,7 @@ func buildCompactionResponseObject(responseID, model, summaryText string, prompt
 			"input_tokens":  promptTok,
 			"output_tokens": completionTok,
 			"total_tokens":  promptTok + completionTok,
+			"usage_source":  usageSource(),
 		},
 	}
 }
@@ -5955,9 +6045,9 @@ func (api *APIServer) nonStreamResponsesCompact(w http.ResponseWriter, messages 
 		}
 	}
 
-	promptStr := fmt.Sprint(messages)
-	promptTok := countTokens(promptStr)
-	completionTok := countTokens(respText)
+	// The compaction request declares no tools, so only message framing counts.
+	promptTok := countPromptTokens(messages, nil, "")
+	completionTok := countTokens(respText) + outputProtocolTokens
 
 	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
 	response := buildCompactionResponseObject(responseID, cfg.OpenAIID, respText, promptTok, completionTok)
@@ -6086,9 +6176,8 @@ func (api *APIServer) streamResponsesCompact(w http.ResponseWriter, messages []p
 	})
 
 	// Build final response object for response.completed
-	promptStr := fmt.Sprint(messages)
-	promptTok := countTokens(promptStr)
-	completionTok := countTokens(fullText)
+	promptTok := countPromptTokens(messages, nil, "")
+	completionTok := countTokens(fullText) + outputProtocolTokens
 
 	finalResponse := buildCompactionResponseObject(responseID, openaiModel, fullText, promptTok, completionTok)
 
