@@ -982,7 +982,8 @@ func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, me
 			currentConvID = finalConvID
 		}
 		if len(tools) == 0 {
-			return toolLoopResult{text: text, thinking: thinking, toolCalls: backendCalls, finishReason: finishReason, conversationID: currentConvID}, nil
+			_, finishReason = withoutBackendToolCalls(backendCalls, finishReason)
+			return toolLoopResult{text: text, thinking: thinking, finishReason: finishReason, conversationID: currentConvID}, nil
 		}
 		contracts := toolcalling.ContractsFor(tools)
 		var simulated toolcalling.SimulatedResult
@@ -1847,17 +1848,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 	}
 
 	// Send tool calls in stream if any (from M365 backend or simulated)
-	toolCalls := finalToolCalls
-
-	// Discard backend-injected tool calls (search, code_interpreter) whenever
-	// the caller declared tools of its own: those calls name no client tool,
-	// so forwarding them hands the client work it cannot run. The declaration
-	// list is the test rather than hasTools, because a request declaring only
-	// web_search runs no simulation yet still must not leak the backend's own
-	// search call.
-	if len(tools) > 0 {
-		toolCalls = nil
-	}
+	toolCalls, _ := withoutBackendToolCalls(finalToolCalls, "")
 
 	// Append simulated tool calls
 	for _, stc := range simToolCalls {
@@ -1975,15 +1966,10 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 		return
 	}
 
-	// Discard backend-injected tool calls (search, code_interpreter) whenever
-	// the caller declared tools of its own; see the note on the streaming path.
+	toolCalls, finishReason = withoutBackendToolCalls(toolCalls, finishReason)
+	// The transport thinking filter belongs to simulated mode only, where the
+	// envelope travels inside the reasoning text.
 	if len(tools) > 0 {
-		toolCalls = nil
-		// The backend reported tool_use for a call that is now gone, so the
-		// turn ends on its text instead.
-		if finishReason == "tool_calls" || finishReason == "tool_use" {
-			finishReason = "stop"
-		}
 		thinking = chatAnthropicThinkingForOutput(thinking, true)
 	}
 
@@ -2328,17 +2314,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 	}
 
 	// Send tool_use content blocks if any (server-side tools from M365 backend or simulated)
-	toolCalls := finalToolCalls
-
-	// Discard backend-injected tool calls (search, code_interpreter) whenever
-	// the caller declared tools of its own: those calls name no client tool,
-	// so forwarding them hands the client work it cannot run. The declaration
-	// list is the test rather than hasTools, because a request declaring only
-	// web_search runs no simulation yet still must not leak the backend's own
-	// search call.
-	if len(tools) > 0 {
-		toolCalls = nil
-	}
+	toolCalls, _ := withoutBackendToolCalls(finalToolCalls, "")
 
 	// Append simulated tool calls
 	for _, stc := range simToolCalls {
@@ -2489,15 +2465,10 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 		return
 	}
 
-	// Discard backend-injected tool calls (search, code_interpreter) whenever
-	// the caller declared tools of its own; see the note on the streaming path.
+	toolCalls, finishReason = withoutBackendToolCalls(toolCalls, finishReason)
+	// The transport thinking filter belongs to simulated mode only, where the
+	// envelope travels inside the reasoning text.
 	if len(tools) > 0 {
-		toolCalls = nil
-		// The backend reported tool_use for a call that is now gone, so the
-		// turn ends on its text instead.
-		if finishReason == "tool_calls" || finishReason == "tool_use" {
-			finishReason = "stop"
-		}
 		thinking = chatAnthropicThinkingForOutput(thinking, true)
 	}
 
@@ -2786,13 +2757,7 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 		return
 	}
 
-	// Discard backend-injected tool calls whenever the caller declared tools.
-	if len(tools) > 0 {
-		toolCalls = nil
-		if finishReason == "tool_calls" {
-			finishReason = "stop"
-		}
-	}
+	toolCalls, finishReason = withoutBackendToolCalls(toolCalls, finishReason)
 
 	// Parse simulated tool calls from response text
 	if hasTools {
@@ -3172,6 +3137,24 @@ func (api *APIServer) injectJSONMode(messages *[]payload.Message) {
 	}
 
 	*messages = append([]payload.Message{{Role: "system", Content: instruction}}, *messages...)
+}
+
+// withoutBackendToolCalls drops the tool calls M365 raises for its own built-ins
+// (search, code_interpreter, trigger_plugin, invoke_action) and returns the
+// finish reason the turn must end on instead.
+//
+// The client never declared those names, so it cannot execute them. This holds
+// whether or not the request carried tools: a plain chat turn that triggers a
+// server-side search would otherwise end on a tool_calls finish reason with a
+// call the caller has no handler for.
+func withoutBackendToolCalls(calls []client.ToolCall, finishReason string) ([]client.ToolCall, string) {
+	if len(calls) == 0 {
+		return calls, finishReason
+	}
+	if finishReason == "tool_calls" || finishReason == "tool_use" {
+		finishReason = "stop"
+	}
+	return nil, finishReason
 }
 
 // chatAnthropicThinkingForOutput strips the simulated transport envelope from a
@@ -5051,10 +5034,7 @@ func (api *APIServer) nonStreamResponses(
 	finishReason := result.finishReason
 	finalConvID := result.conversationID
 
-	// In simulated mode, discard backend-injected tool calls
-	if toolPolicy.simulate {
-		toolCalls = nil
-	}
+	toolCalls, finishReason = withoutBackendToolCalls(toolCalls, finishReason)
 
 	// Parse simulated tool calls from response text
 	if toolPolicy.simulate {
