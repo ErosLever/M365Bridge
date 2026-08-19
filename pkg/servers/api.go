@@ -3259,15 +3259,22 @@ func applyReasoningEffort(modelKey string, cfg models.ModelConfig, deliberate bo
 // context window legitimately sends results whose calls are no longer present.
 // Only a missing id is rejected in that case.
 func validateToolResultMessages(messages []payload.Message) error {
+	// A repeated id makes the loop ambiguous: neither the client nor this
+	// server can tell which call a later result answers.
 	known := make(map[string]bool)
 	for i := range messages {
 		for _, call := range messages[i].ToolCalls {
-			if call.ID != "" {
-				known[call.ID] = true
+			if call.ID == "" {
+				continue
 			}
+			if known[call.ID] {
+				return fmt.Errorf("tool call id %q is declared more than once in this request", call.ID)
+			}
+			known[call.ID] = true
 		}
 	}
 
+	answered := make(map[string]bool)
 	for i := range messages {
 		if messages[i].Role == "tool" && messages[i].ToolCallID == "" {
 			return errors.New(`a message with role "tool" is missing tool_call_id`)
@@ -3279,6 +3286,10 @@ func validateToolResultMessages(messages []payload.Message) error {
 			if len(known) > 0 && !known[result.ID] {
 				return fmt.Errorf("tool result %q does not answer any tool call in this request", result.ID)
 			}
+			if answered[result.ID] {
+				return fmt.Errorf("tool call %q is answered more than once in this request", result.ID)
+			}
+			answered[result.ID] = true
 		}
 	}
 	return nil

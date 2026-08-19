@@ -113,3 +113,33 @@ func TestResponsesInputCarriesToolCallIDs(t *testing.T) {
 		t.Fatal("a function_call_output answering no function_call was accepted")
 	}
 }
+
+func TestValidateToolResultMessagesRejectsADuplicateCallID(t *testing.T) {
+	messages := decodeMessages(t, `[
+		{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"call_1","content":"sunny"},
+		{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]}
+	]`)
+	err := validateToolResultMessages(messages)
+	if err == nil {
+		t.Fatal("a repeated tool call id was accepted")
+	}
+	if !strings.Contains(err.Error(), "call_1") {
+		t.Fatalf("error %q does not name the repeated id", err)
+	}
+}
+
+func TestValidateToolResultMessagesRejectsATwiceAnsweredCall(t *testing.T) {
+	messages := decodeMessages(t, `[
+		{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"call_1","content":"sunny"},
+		{"role":"tool","tool_call_id":"call_1","content":"rainy"}
+	]`)
+	err := validateToolResultMessages(messages)
+	if err == nil {
+		t.Fatal("two results for one call were accepted")
+	}
+	if !strings.Contains(err.Error(), "call_1") {
+		t.Fatalf("error %q does not name the call", err)
+	}
+}
