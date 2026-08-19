@@ -289,14 +289,13 @@ func (api *APIServer) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if len(api.config.APIKeys) > 0 {
-			provided := r.Header.Get("Authorization")
-			if provided == "" {
-				logging.Warnf("Auth: missing Authorization header from %s", r.RemoteAddr)
-				api.sendError(w, http.StatusUnauthorized, "Missing Authorization header")
+			offered := apiKeyCandidates(r)
+			if len(offered) == 0 {
+				logging.Warnf("Auth: no API key header from %s", r.RemoteAddr)
+				api.sendError(w, http.StatusUnauthorized, "Missing API key; send Authorization: Bearer <key> or x-api-key: <key>")
 				return
 			}
-			token := strings.TrimSpace(strings.TrimPrefix(provided, "Bearer "))
-			if !api.isValidAPIKey(token) {
+			if !slices.ContainsFunc(offered, api.isValidAPIKey) {
 				logging.Warnf("Auth: invalid API key from %s", r.RemoteAddr)
 				api.sendError(w, http.StatusUnauthorized, "Invalid API key")
 				return
@@ -304,6 +303,34 @@ func (api *APIServer) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// apiKeyCandidates returns every credential the client offered, in priority
+// order. An Anthropic SDK client sends the key as `x-api-key` under
+// ANTHROPIC_API_KEY and as `Authorization: Bearer` under ANTHROPIC_AUTH_TOKEN,
+// and Claude Code can send both at once with only one of them valid, so every
+// offered credential is checked rather than just the first.
+func apiKeyCandidates(r *http.Request) []string {
+	var offered []string
+	if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" {
+		offered = append(offered, key)
+	}
+	if header := strings.TrimSpace(r.Header.Get("Authorization")); header != "" {
+		// A bare token without the scheme is tolerated because some clients
+		// send the key unprefixed.
+		if key := strings.TrimSpace(trimBearerPrefix(header)); key != "" {
+			offered = append(offered, key)
+		}
+	}
+	return offered
+}
+
+// trimBearerPrefix removes a case-insensitive "Bearer " scheme prefix.
+func trimBearerPrefix(header string) string {
+	if len(header) >= 7 && strings.EqualFold(header[:7], "bearer ") {
+		return header[7:]
+	}
+	return header
 }
 
 // isValidAPIKey checks if the given token matches any configured API key.
@@ -381,19 +408,7 @@ func (api *APIServer) handleModels(w http.ResponseWriter, r *http.Request) {
 
 	modelList := make([]map[string]any, 0, len(ids))
 	for _, id := range ids {
-		modelList = append(modelList, map[string]any{
-			"id":                id,
-			"object":            "model",
-			"created":           1700000000,
-			"owned_by":          byID[id].OwnerOrDefault(),
-			"context_window":    contextWindow,
-			"max_input_tokens":  maxInput,
-			"max_output_tokens": maxOutput,
-			// Every model reaches caller-defined tools through the simulated
-			// tool calling layer, so the capability is a property of the proxy
-			// rather than of the tone.
-			"supports_tools": true,
-		})
+		modelList = append(modelList, modelCatalogEntry(id, byID[id], contextWindow, maxInput, maxOutput))
 	}
 
 	response := map[string]any{
@@ -403,6 +418,118 @@ func (api *APIServer) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.sendJSON(w, http.StatusOK, response)
+}
+
+// codexBaseInstructions is advertised in the model catalog. Codex builds its
+// own request instructions from it; the proxy never forwards it upstream.
+const codexBaseInstructions = "You are a helpful AI assistant. When asked to write code, always provide the complete implementation — never truncate, abbreviate, or return only a fragment. Write full, working code with all logic included."
+
+// modelCatalogEntry builds one /v1/models entry.
+//
+// Capability fields appear both at the top level and under `capabilities`
+// because OpenAI-compatible clients disagree on where to look, and Codex reads
+// a further set of fields that plain OpenAI clients ignore.
+func modelCatalogEntry(id string, cfg models.ModelConfig, contextWindow, maxInput, maxOutput int) map[string]any {
+	modalities := []string{"text", "image"}
+	features := []string{"tools", "function_calling", "streaming", "reasoning", "vision"}
+	capabilities := map[string]any{
+		"chat_completions":           true,
+		"responses":                  true,
+		"streaming":                  true,
+		"tools":                      true,
+		"supports_tools":             true,
+		"tool_calls":                 true,
+		"function_calling":           true,
+		"supports_function_calling":  true,
+		"reasoning":                  true,
+		"reasoning_efforts":          models.ReasoningEffortPresets,
+		"supported_reasoning_levels": models.ReasoningEffortPresets,
+		"reasoning_mode":             "gateway_tone_routing",
+		"vision":                     true,
+		"supports_vision":            true,
+		"modalities":                 modalities,
+		"input_modalities":           modalities,
+		"output_modalities":          []string{"text"},
+		"supported_features":         features,
+	}
+
+	return map[string]any{
+		"id":       id,
+		"slug":     id,
+		"object":   "model",
+		"created":  1700000000,
+		"owned_by": cfg.OwnerOrDefault(),
+
+		"display_name":      id,
+		"description":       "Public model endpoint.",
+		"visibility":        "list",
+		"supported_in_api":  true,
+		"priority":          1,
+		"base_instructions": codexBaseInstructions,
+		"model_messages":    codexModelMessages(),
+
+		"context_window":                   contextWindow,
+		"max_context_window":               contextWindow,
+		"effective_context_window_percent": 95,
+		"max_input_tokens":                 maxInput,
+		"max_output_tokens":                maxOutput,
+		"truncation_policy":                map[string]any{"mode": "tokens", "limit": 10000},
+
+		"default_reasoning_level":      "medium",
+		"supports_reasoning_summaries": true,
+		"default_reasoning_summary":    "none",
+		"supported_reasoning_levels":   models.ReasoningEffortPresets,
+		"support_verbosity":            true,
+		"default_verbosity":            "low",
+
+		// Every model reaches caller-defined tools through the simulated tool
+		// calling layer, so tool support is a property of the proxy rather than
+		// of the tone.
+		"supports_tools":                 true,
+		"tool_calls":                     true,
+		"function_calling":               true,
+		"supports_function_calling":      true,
+		"supports_parallel_tool_calls":   true,
+		"tool_mode":                      "code_mode_only",
+		"shell_type":                     "shell_command",
+		"apply_patch_tool_type":          "freeform",
+		"web_search_tool_type":           "text_and_image",
+		"supports_search_tool":           true,
+		"experimental_supported_tools":   []any{},
+		"supports_image_detail_original": true,
+
+		"vision":             true,
+		"supports_vision":    true,
+		"modalities":         modalities,
+		"input_modalities":   modalities,
+		"output_modalities":  []string{"text"},
+		"supported_features": features,
+
+		"additional_speed_tiers":            []string{},
+		"service_tiers":                     []any{},
+		"availability_nux":                  nil,
+		"upgrade":                           nil,
+		"include_skills_usage_instructions": false,
+		"use_responses_lite":                false,
+		"multi_agent_version":               "v2",
+
+		"capabilities": capabilities,
+	}
+}
+
+// codexModelMessages is the instruction template block Codex expects alongside
+// each catalog entry.
+func codexModelMessages() map[string]any {
+	return map[string]any{
+		"instructions_template": codexBaseInstructions,
+		"instructions_variables": map[string]string{
+			"personality_default":   "",
+			"personality_friendly":  "",
+			"personality_pragmatic": "",
+		},
+		"approvals":   nil,
+		"auto_review": nil,
+	}
 }
 
 // upstreamThrottledCode marks a response rejected because the M365
@@ -473,6 +600,34 @@ func (api *APIServer) sendThrottledError(w http.ResponseWriter) {
 			"code":    http.StatusTooManyRequests,
 		},
 	})
+}
+
+// upstreamContentBlockedCode marks a reply that is M365's canned content
+// refusal rather than an answer.
+const upstreamContentBlockedCode = "upstream_content_blocked"
+
+// sendContentBlockedError reports a backend content refusal as HTTP 502.
+//
+// The refusal reads like an ordinary short answer, so an agent client would
+// otherwise accept it and continue on nothing. A distinct status lets the
+// client tell "the backend declined this request" apart from "here is the
+// answer".
+func (api *APIServer) sendContentBlockedError(w http.ResponseWriter, reply string) {
+	logging.Warn("upstream content refusal: M365 declined the request instead of answering")
+	api.sendJSON(w, http.StatusBadGateway, map[string]any{
+		"error": map[string]any{
+			"message": "M365 declined this request: " + strings.TrimSpace(reply),
+			"type":    upstreamContentBlockedCode,
+			"code":    http.StatusBadGateway,
+		},
+	})
+}
+
+// blockedByContentPolicy reports whether a finished turn is a content refusal
+// with nothing else to deliver. A turn that also produced tool calls is real
+// work and is left alone.
+func blockedByContentPolicy(respText string, toolCalls []client.ToolCall) bool {
+	return len(toolCalls) == 0 && toolcalling.IsContentPolicyBlock(respText)
 }
 
 // handleConversations lists or creates M365 conversations.
@@ -1571,6 +1726,13 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 			} else {
 				fullText = sim.Content
 			}
+		} else {
+			fullText = toolcalling.WithholdTransportEnvelope(fullText)
+			if toolcalling.IsContentPolicyBlock(fullText) {
+				// The stream is already open, so the refusal cannot be turned
+				// into an HTTP error the way the non-streaming paths do.
+				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
+			}
 		}
 	}
 
@@ -1762,7 +1924,16 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 			// we discarded backend-injected toolCalls above, reset the
 			// finish reason so we don't report tool_use with no blocks.
 			finishReason = "stop"
+			respText = toolcalling.WithholdTransportEnvelope(respText)
 		}
+	}
+
+	if blockedByContentPolicy(respText, toolCalls) {
+		if sid != "" {
+			api.ctxCache.Delete("session:" + sid)
+		}
+		api.sendContentBlockedError(w, respText)
+		return
 	}
 
 	// Enforce max_tokens on response text
@@ -2007,6 +2178,13 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 			} else {
 				fullText = sim.Content
 			}
+		} else {
+			fullText = toolcalling.WithholdTransportEnvelope(fullText)
+			if toolcalling.IsContentPolicyBlock(fullText) {
+				// The stream is already open, so the refusal cannot be turned
+				// into an HTTP error the way the non-streaming paths do.
+				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
+			}
 		}
 	}
 
@@ -2249,12 +2427,21 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 			// we discarded backend-injected toolCalls above, reset the
 			// finish reason so we don't report tool_use with no blocks.
 			finishReason = "stop"
+			respText = toolcalling.WithholdTransportEnvelope(respText)
 		}
 	}
 
 	stopReason := "end_turn"
 	if finishReason == "tool_calls" {
 		stopReason = "tool_use"
+	}
+
+	if blockedByContentPolicy(respText, toolCalls) {
+		if sid != "" {
+			api.ctxCache.Delete("session:" + sid)
+		}
+		api.sendContentBlockedError(w, respText)
+		return
 	}
 
 	// Enforce max_tokens on response text
@@ -2421,6 +2608,13 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 			} else {
 				fullText = sim.Content
 			}
+		} else {
+			fullText = toolcalling.WithholdTransportEnvelope(fullText)
+			if toolcalling.IsContentPolicyBlock(fullText) {
+				// The stream is already open, so the refusal cannot be turned
+				// into an HTTP error the way the non-streaming paths do.
+				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
+			}
 		}
 	}
 
@@ -2515,7 +2709,16 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 			}
 		} else {
 			finishReason = "stop"
+			respText = toolcalling.WithholdTransportEnvelope(respText)
 		}
+	}
+
+	if blockedByContentPolicy(respText, toolCalls) {
+		if sid != "" {
+			api.ctxCache.Delete("session:" + sid)
+		}
+		api.sendContentBlockedError(w, respText)
+		return
 	}
 
 	// Enforce max_tokens on response text
@@ -2680,7 +2883,119 @@ func (api *APIServer) sendAnthropicSSE(w http.ResponseWriter, eventType string, 
 // uploadImagesAndAnnotate uploads any images found in message Images fields
 // to the M365 backend and attaches the resulting docId annotations to the
 // last message with images. This enables multimodal image input support.
+// Limits for caller-supplied remote images. They bound how much work one
+// request can make the proxy do on someone else's behalf.
+const (
+	remoteImageMaxBytes   = 20 << 20
+	remoteImageMaxPerTurn = 16
+	remoteImageTimeout    = 30 * time.Second
+)
+
+// errRemoteImageRejected marks a caller-supplied image URL the proxy refuses to
+// fetch.
+var errRemoteImageRejected = errors.New("remote image URL rejected")
+
+// validateRemoteImageURL decides whether a caller-supplied image URL may be
+// fetched. No credential travels on this request, so any public https host is
+// acceptable; the guard exists to stop the proxy being used to reach addresses
+// inside its own network.
+func validateRemoteImageURL(rawURL string) error {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errRemoteImageRejected, err)
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("%w: scheme %q is not https", errRemoteImageRejected, parsed.Scheme)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return fmt.Errorf("%w: URL has no host", errRemoteImageRejected)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return fmt.Errorf("%w: %q does not resolve", errRemoteImageRejected, host)
+	}
+	if slices.ContainsFunc(ips, ipDisallowed) {
+		return fmt.Errorf("%w: %q resolves to a non-public address", errRemoteImageRejected, host)
+	}
+	return nil
+}
+
+// fetchRemoteImage downloads a caller-supplied image and returns it as base64
+// with its media type. It sends no Authorization header, so a hostile URL
+// learns nothing beyond the fact that the proxy fetched it.
+func fetchRemoteImage(rawURL string) (base64Data, mediaType string, err error) {
+	if err := validateRemoteImageURL(rawURL); err != nil {
+		return "", "", err
+	}
+
+	client := &http.Client{Timeout: remoteImageTimeout}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		return "", "", fmt.Errorf("fetch remote image: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("fetch remote image: HTTP %d", resp.StatusCode)
+	}
+
+	// One extra byte distinguishes "exactly at the limit" from "truncated".
+	body, err := io.ReadAll(io.LimitReader(resp.Body, remoteImageMaxBytes+1))
+	if err != nil {
+		return "", "", fmt.Errorf("read remote image: %w", err)
+	}
+	if len(body) > remoteImageMaxBytes {
+		return "", "", fmt.Errorf("%w: larger than %d bytes", errRemoteImageRejected, remoteImageMaxBytes)
+	}
+
+	mediaType = resp.Header.Get("Content-Type")
+	if semicolon := strings.IndexByte(mediaType, ';'); semicolon >= 0 {
+		mediaType = strings.TrimSpace(mediaType[:semicolon])
+	}
+	if !strings.HasPrefix(mediaType, "image/") {
+		return "", "", fmt.Errorf("%w: content type %q is not an image", errRemoteImageRejected, mediaType)
+	}
+	return base64.StdEncoding.EncodeToString(body), mediaType, nil
+}
+
+// resolveRemoteImages fetches every caller-supplied image URL in a message and
+// drops the ones that cannot be fetched, so a single bad URL does not fail the
+// whole turn.
+func resolveRemoteImages(msg *payload.Message) {
+	resolved := make([]payload.ImageData, 0, len(msg.Images))
+	fetched := 0
+	for _, img := range msg.Images {
+		if img.RemoteURL == "" {
+			resolved = append(resolved, img)
+			continue
+		}
+		if fetched >= remoteImageMaxPerTurn {
+			logging.Warnf("resolveRemoteImages: skipping image beyond the per-turn limit of %d", remoteImageMaxPerTurn)
+			continue
+		}
+		fetched++
+		data, mediaType, err := fetchRemoteImage(img.RemoteURL)
+		if err != nil {
+			logging.Errorf("resolveRemoteImages: %v", err)
+			continue
+		}
+		resolved = append(resolved, payload.ImageData{
+			Base64:    data,
+			MediaType: mediaType,
+			FileName:  "upload." + extFromMediaType(mediaType),
+		})
+	}
+	msg.Images = resolved
+}
+
 func (api *APIServer) uploadImagesAndAnnotate(messages *[]payload.Message, convID string) {
+	// Caller-supplied URLs arrive unfetched, so resolve them before the last
+	// message with images is chosen: a message whose only images were rejected
+	// must not be treated as an image turn.
+	for i := range *messages {
+		resolveRemoteImages(&(*messages)[i])
+	}
+
 	// Find the last message with images
 	lastImgIdx := -1
 	for i := range slices.Backward(*messages) {
@@ -2816,6 +3131,7 @@ var reasoningEffortRank = map[string]int{
 	"medium":  3,
 	"high":    4,
 	"xhigh":   5,
+	"max":     6,
 }
 
 // reasoningEffortRequestsDeliberation validates the effort value and reports
@@ -2833,7 +3149,7 @@ func reasoningEffortRequestsDeliberation(reasoning *responsesReasoning) (bool, e
 		return false, fmt.Errorf(
 			"unsupported reasoning effort %q; use %s",
 			reasoning.Effort,
-			strings.Join(models.ReasoningEffortPresets, ", "),
+			strings.Join(models.ReasoningEffortNames(), ", "),
 		)
 	}
 	return rank >= reasoningEffortRank["medium"], nil
@@ -4391,6 +4707,13 @@ func (api *APIServer) nonStreamResponses(
 		finishReason = simulated.finishReason
 	}
 	thinking = responsesReasoningForOutput(thinking, toolPolicy.simulate)
+	if blockedByContentPolicy(respText, toolCalls) {
+		if sid != "" {
+			api.ctxCache.Delete("session:" + sid)
+		}
+		api.sendContentBlockedError(w, respText)
+		return
+	}
 	if responsesResultEmpty(respText, toolCalls) {
 		if sid != "" {
 			api.ctxCache.Delete("session:" + sid)
@@ -5301,6 +5624,8 @@ func (api *APIServer) nonStreamResponsesCompact(w http.ResponseWriter, messages 
 		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		if sim.HasPayload {
 			respText = sim.Content
+		} else {
+			respText = toolcalling.WithholdTransportEnvelope(respText)
 		}
 	}
 
@@ -5406,6 +5731,13 @@ func (api *APIServer) streamResponsesCompact(w http.ResponseWriter, messages []p
 		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		if sim.HasPayload {
 			fullText = sim.Content
+		} else {
+			fullText = toolcalling.WithholdTransportEnvelope(fullText)
+			if toolcalling.IsContentPolicyBlock(fullText) {
+				// The stream is already open, so the refusal cannot be turned
+				// into an HTTP error the way the non-streaming paths do.
+				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
+			}
 		}
 	}
 
