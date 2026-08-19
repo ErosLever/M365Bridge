@@ -1,6 +1,9 @@
 package toolcalling
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // M365 Copilot runs its own code interpreter, so when a caller declares a tool
 // the backend can answer in two ways that both leave the agent loop with
@@ -80,6 +83,67 @@ func IsToolRefusal(text string) bool {
 // itself instead of calling one of the caller's tools.
 func IsSandboxHallucination(text string) bool {
 	return matchesAny(text, sandboxHallucinationPatterns)
+}
+
+// unverifiedCompletionPatterns match a reply in which the model says it carried
+// the work out itself. The subject is what matters, not the verb: "the file was
+// created in 2019" is a fact about the world, while "I created the file" is a
+// claim about this turn that only a tool result can support.
+var unverifiedCompletionPatterns = regexp.MustCompile(
+	`(?i)(\bi(\s+have|\s*'ve)?(\s+already|\s+just)?\s+(installed|created|wrote|written|executed|ran|run|started|deployed|deleted|removed|verified|completed|fixed|updated|added|configured)\b` +
+		`|i\s+successfully\s+` +
+		`|i\s+went\s+ahead\s+and\s+` +
+		`|successfully\s+(installed|created|deployed|executed|updated|removed)\b` +
+		`|\bdone!` +
+		`|\ball\s+set\b` +
+		`|\ball\s+done\b)`,
+)
+
+// completionHedgePatterns match a reply that states the work is not confirmed
+// or asks the reader to carry it out. A claim next to a hedge is not the
+// failure this guard is for.
+var completionHedgePatterns = []string{
+	"ran into",
+	"run into",
+	"ran out of",
+	"cannot confirm",
+	"can't confirm",
+	"unable to verify",
+	"not verified",
+	"could not verify",
+	"couldn't verify",
+	"you will need to",
+	"you'll need to",
+	"you need to",
+	"please run",
+	"please execute",
+	"would need to",
+	"i cannot",
+	"i can't",
+	"i am unable",
+	"i'm unable",
+}
+
+// unverifiedClaimMaxLen bounds the reply length that can be a false completion
+// report. The failure is a short confident summary; a long answer that happens
+// to say "I created a plan" is prose the caller asked for, and replacing it
+// would destroy real work.
+const unverifiedClaimMaxLen = 600
+
+// ClaimsUnverifiedCompletion reports whether the reply says the model itself
+// carried out the work, without hedging that it could not.
+//
+// Callers must combine this with the turn's evidence: the claim is only a
+// problem when the request declared tools and neither this turn nor the history
+// produced a tool result to back it up.
+func ClaimsUnverifiedCompletion(answer string) bool {
+	if strings.TrimSpace(answer) == "" || len(answer) > unverifiedClaimMaxLen {
+		return false
+	}
+	if matchesAny(answer, completionHedgePatterns) {
+		return false
+	}
+	return unverifiedCompletionPatterns.MatchString(answer)
 }
 
 func matchesAny(text string, patterns []string) bool {

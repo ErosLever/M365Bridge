@@ -630,6 +630,45 @@ func blockedByContentPolicy(respText string, toolCalls []client.ToolCall) bool {
 	return len(toolCalls) == 0 && toolcalling.IsContentPolicyBlock(respText)
 }
 
+// unverifiedCompletionNotice replaces an answer that reports finished work the
+// server has no evidence for.
+const unverifiedCompletionNotice = "No tool was called in this turn and no tool result exists, so the reported completion is not verified. Nothing was executed."
+
+// withoutUnverifiedCompletionClaim replaces an answer in which the model says
+// it carried the work out itself, while the turn emitted no tool call and the
+// history holds no tool result to support it. An agent client would otherwise
+// accept the report and stop.
+//
+// The guard is limited to requests that declared tools. The reference this is
+// drawn from omits that condition, so a plain chat answer such as "Go was
+// created at Google" trips it; here such an answer is never touched.
+func withoutUnverifiedCompletionClaim(respText string, hasTools bool, ledger toolcalling.Ledger, toolCalls []client.ToolCall) string {
+	if !unverifiedCompletionClaim(respText, hasTools, ledger, len(toolCalls)) {
+		return respText
+	}
+	logging.Warn("replacing an unverified completion claim: the turn called no tool and holds no tool result")
+	logging.Debugf("unverified completion claim was: %q", respText)
+	return unverifiedCompletionNotice
+}
+
+// unverifiedCompletionClaim is the condition behind the guard, separated so a
+// streaming turn can report it without holding client-shaped tool calls.
+func unverifiedCompletionClaim(respText string, hasTools bool, ledger toolcalling.Ledger, toolCallCount int) bool {
+	if !hasTools || toolCallCount > 0 || len(ledger.Completed) > 0 {
+		return false
+	}
+	return toolcalling.ClaimsUnverifiedCompletion(respText)
+}
+
+// warnOnUnverifiedCompletionClaim reports the same failure on a streaming turn,
+// where the text has already reached the client and can no longer be replaced.
+func warnOnUnverifiedCompletionClaim(respText string, hasTools bool, ledger toolcalling.Ledger, toolCallCount int) {
+	if unverifiedCompletionClaim(respText, hasTools, ledger, toolCallCount) {
+		logging.Warn("unverified completion claim on a streaming turn: the text was already sent to the client and could not be replaced")
+		logging.Debugf("unverified completion claim was: %q", respText)
+	}
+}
+
 // handleConversations lists or creates M365 conversations.
 func (api *APIServer) handleConversations(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
@@ -1748,6 +1787,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
 			}
 		}
+		warnOnUnverifiedCompletionClaim(fullText, hasTools, buildToolLedger(messages), len(simToolCalls))
 	}
 
 	if toolCallingEnabled {
@@ -1950,6 +1990,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 		api.sendContentBlockedError(w, respText)
 		return
 	}
+	respText = withoutUnverifiedCompletionClaim(respText, hasTools, buildToolLedger(messages), toolCalls)
 
 	// Enforce max_tokens on response text
 	if maxTokens > 0 {
@@ -2202,6 +2243,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
 			}
 		}
+		warnOnUnverifiedCompletionClaim(fullText, hasTools, buildToolLedger(messages), len(simToolCalls))
 	}
 
 	// Flush any remaining filtered thinking when the response was thinking-only
@@ -2460,6 +2502,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 		api.sendContentBlockedError(w, respText)
 		return
 	}
+	respText = withoutUnverifiedCompletionClaim(respText, hasTools, buildToolLedger(messages), toolCalls)
 
 	// Enforce max_tokens on response text
 	if maxTokens > 0 {
@@ -2634,6 +2677,7 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
 			}
 		}
+		warnOnUnverifiedCompletionClaim(fullText, hasTools, buildToolLedger(messages), len(simToolCalls))
 	}
 
 	// If tool calling buffered text, send it now as a single chunk
@@ -2739,6 +2783,7 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 		api.sendContentBlockedError(w, respText)
 		return
 	}
+	respText = withoutUnverifiedCompletionClaim(respText, hasTools, buildToolLedger(messages), toolCalls)
 
 	// Enforce max_tokens on response text
 	if maxTokens > 0 {
@@ -4887,6 +4932,9 @@ func (api *APIServer) nonStreamResponses(
 		api.sendContentBlockedError(w, respText)
 		return
 	}
+	// The Responses input is collapsed into one prompt message, so the
+	// evidence comes from the policy rather than from the messages here.
+	respText = withoutUnverifiedCompletionClaim(respText, toolPolicy.simulate, toolPolicy.ledger, toolCalls)
 	if responsesResultEmpty(respText, toolCalls) {
 		if sid != "" {
 			api.ctxCache.Delete("session:" + sid)
