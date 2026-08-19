@@ -166,7 +166,11 @@ func (c *M365Client) UploadFile(base64Data, mediaType, fileName, conversationID,
 
 	if resp.StatusCode != http.StatusOK {
 		logging.Errorf("UploadFile: upload failed status=%d body=%s", resp.StatusCode, string(respBody)[:min(300, len(respBody))])
-		return nil, fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(respBody))
+		return nil, &UpstreamError{
+			Op:     "upload",
+			Status: resp.StatusCode,
+			Err:    errors.New(string(respBody)),
+		}
 	}
 
 	var result struct {
@@ -211,10 +215,18 @@ func (c *M365Client) dialConnection(conversationID, userOID, tenantID string) (*
 		HandshakeTimeout: c.handshakeTimeout,
 	}
 
-	conn, _, err := dialer.Dial(url, nil)
+	// The dial response carries the status the backend refused with. Discarding
+	// it would leave an expired token, a throttled account and a backend outage
+	// indistinguishable at the HTTP layer.
+	conn, dialResp, err := dialer.Dial(url, nil)
 	if err != nil {
-		logging.Errorf("dialConnection: WebSocket dial failed: %v", err)
-		return nil, "", "", fmt.Errorf("failed to dial: %w", err)
+		status := 0
+		if dialResp != nil {
+			status = dialResp.StatusCode
+			dialResp.Body.Close()
+		}
+		logging.Errorf("dialConnection: WebSocket dial failed: status=%d err=%v", status, err)
+		return nil, "", "", &UpstreamError{Op: "dial", Status: status, Err: err}
 	}
 
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(handshakeMessage)); err != nil {
