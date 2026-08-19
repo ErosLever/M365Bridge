@@ -318,6 +318,10 @@ func (api *APIServer) Start(port int) error {
 	mux.HandleFunc("/v1/images/edits", api.withAuth(api.handleImageEdits))
 	mux.HandleFunc("/v1/conversations", api.withAuth(api.handleConversations))
 	mux.HandleFunc("/v1/conversations/", api.withAuth(api.handleConversation))
+	// Session routes expose conversation IDs, so they stay behind the API key
+	// middleware.
+	mux.HandleFunc("/v1/sessions", api.withAuth(api.handleSessions))
+	mux.HandleFunc("/v1/sessions/", api.withAuth(api.handleSession))
 	mux.HandleFunc("/v1/models", api.handleModels)
 	// Codex probes /v1/health before it sends any chat request and treats a
 	// 404 as an unreachable provider. It stays public alongside /v1/models
