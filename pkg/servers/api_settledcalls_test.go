@@ -126,3 +126,29 @@ func TestParseResponsesSimulationDropsASettledRepeat(t *testing.T) {
 		t.Fatalf("content = %q, want the substitute notice", result.content)
 	}
 }
+
+func TestInjectedPromptCarriesTheLedgerEvidence(t *testing.T) {
+	messages := decodeMessages(t, `[
+		{"role":"user","content":"what is in main.go?"},
+		{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"main.go\"}"}}]},
+		{"role":"tool","tool_call_id":"call_1","content":"package main"}
+	]`)
+
+	ledger := buildToolLedger(messages)
+	injectSimulatedPrompt(&messages, `{"tools":[]}`, "auto", ledger.EvidenceNote())
+
+	prompt := messages[0].Content
+	if !strings.Contains(prompt, "read_file") || !strings.Contains(prompt, "package main") {
+		t.Fatalf("the injected prompt does not carry the settled call:\n%s", prompt)
+	}
+}
+
+func TestInjectedPromptStaysCleanWithoutEvidence(t *testing.T) {
+	messages := decodeMessages(t, `[{"role":"user","content":"hello"}]`)
+	ledger := buildToolLedger(messages)
+	injectSimulatedPrompt(&messages, `{"tools":[]}`, "auto", ledger.EvidenceNote())
+
+	if strings.Contains(messages[0].Content, "TOOL EVIDENCE") {
+		t.Fatalf("an evidence section appeared without any tool history:\n%s", messages[0].Content)
+	}
+}

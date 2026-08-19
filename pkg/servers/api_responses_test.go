@@ -32,7 +32,7 @@ func TestInjectSimulatedPromptResponsesUsesOneCanonicalMessage(t *testing.T) {
 	}
 	requestJSON := `{"input":[{"role":"user","content":"old user message"},{"role":"assistant","content":"old assistant message"},{"role":"user","content":"latest user message"}]}`
 
-	injectSimulatedPromptResponses(&messages, requestJSON, "auto")
+	injectSimulatedPromptResponses(&messages, requestJSON, "auto", "")
 
 	if len(messages) != 1 {
 		t.Fatalf("expected one canonical simulation message, got %d: %#v", len(messages), messages)

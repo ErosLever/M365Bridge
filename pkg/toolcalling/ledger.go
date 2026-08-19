@@ -213,7 +213,7 @@ func (l Ledger) EvidenceNote() string {
 	}
 
 	var note strings.Builder
-	note.WriteString("\n\nTOOL EVIDENCE FROM THIS CONVERSATION\n")
+	note.WriteString("TOOL EVIDENCE FROM THIS CONVERSATION\n")
 	note.WriteString("These tool calls already ran and their results are final:\n")
 	note.Write(encoded)
 	note.WriteString("\nTreat each result as authoritative. Do not call a tool again with the same name and the same arguments unless the result was a failure you are addressing differently.")

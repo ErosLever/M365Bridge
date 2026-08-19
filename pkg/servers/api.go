@@ -988,9 +988,11 @@ func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, me
 			return toolLoopResult{}, fmt.Errorf("serialize coding tool continuation: %w", err)
 		}
 		if provider == toolLoopAnthropic {
-			injectSimulatedPromptAnthropic(&messages, string(requestJSON), "auto")
+			// The synthetic messages of the built-in loop carry no client tool
+			// structure, so there is no ledger to pass here.
+			injectSimulatedPromptAnthropic(&messages, string(requestJSON), "auto", "")
 		} else {
-			injectSimulatedPrompt(&messages, string(requestJSON), "auto")
+			injectSimulatedPrompt(&messages, string(requestJSON), "auto", "")
 		}
 	}
 }
@@ -1124,7 +1126,7 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	req.Tools = preparedTools
 	requestJSON := replaceRequestTools(bodyBytes, req.Tools)
 	if len(req.Tools) > 0 {
-		injectSimulatedPrompt(&req.Messages, requestJSON, toolChoiceString(req.ToolChoice))
+		injectSimulatedPrompt(&req.Messages, requestJSON, toolChoiceString(req.ToolChoice), ledger.EvidenceNote())
 	}
 
 	// Resolve session ID and conversation ID
@@ -1216,7 +1218,8 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 
 	// Inject simulated tool prompt if tool calling is enabled
 	if len(req.Tools) > 0 {
-		injectSimulatedPrompt(&messages, string(bodyBytes), toolChoiceString(req.ToolChoice))
+		// A FIM completion carries no tool history, so there is no evidence.
+		injectSimulatedPrompt(&messages, string(bodyBytes), toolChoiceString(req.ToolChoice), "")
 	}
 
 	// Resolve session ID and conversation ID
@@ -1379,7 +1382,7 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 	req.Tools = preparedTools
 	requestJSON := replaceRequestTools(bodyBytes, req.Tools)
 	if len(req.Tools) > 0 {
-		injectSimulatedPromptAnthropic(&chatMessages, requestJSON, anthropicToolChoiceString(req.ToolChoice))
+		injectSimulatedPromptAnthropic(&chatMessages, requestJSON, anthropicToolChoiceString(req.ToolChoice), ledger.EvidenceNote())
 	}
 
 	// Resolve session ID and conversation ID
@@ -3095,11 +3098,11 @@ func chatAnthropicThinkingForOutput(thinking string, simulated bool) string {
 // injectSimulatedPrompt replaces the last user message with a simulated-mode
 // prompt that embeds the entire OpenAI request JSON and asks M365 Copilot to
 // produce a valid chat.completion response in a single ```json block.
-func injectSimulatedPrompt(messages *[]payload.Message, requestJSON, toolChoice string) {
+func injectSimulatedPrompt(messages *[]payload.Message, requestJSON, toolChoice, evidence string) {
 	if len(*messages) == 0 {
 		return
 	}
-	prompt := toolcalling.BuildSimulatedPrompt(requestJSON, true, toolChoice)
+	prompt := toolcalling.BuildSimulatedPrompt(requestJSON, true, toolChoice, evidence)
 	for i := range slices.Backward(*messages) {
 		if (*messages)[i].Role == "user" {
 			suffix := ""
@@ -3115,8 +3118,8 @@ func injectSimulatedPrompt(messages *[]payload.Message, requestJSON, toolChoice 
 // injectSimulatedPromptResponses replaces the converted Responses history with
 // one canonical simulation message. The full history remains present exactly
 // once inside requestJSON, avoiding duplicated context at the M365 layer.
-func injectSimulatedPromptResponses(messages *[]payload.Message, requestJSON, toolChoice string) {
-	prompt := toolcalling.BuildSimulatedPromptResponses(requestJSON, true, toolChoice)
+func injectSimulatedPromptResponses(messages *[]payload.Message, requestJSON, toolChoice, evidence string) {
+	prompt := toolcalling.BuildSimulatedPromptResponses(requestJSON, true, toolChoice, evidence)
 	canonical := payload.Message{Role: "user", Content: prompt}
 	for _, message := range *messages {
 		canonical.Images = append(canonical.Images, message.Images...)
@@ -3129,11 +3132,11 @@ func injectSimulatedPromptResponses(messages *[]payload.Message, requestJSON, to
 // simulated-mode prompt that embeds the entire Anthropic request JSON and asks
 // M365 Copilot to produce a valid Anthropic Messages response in a single
 // ```json block.
-func injectSimulatedPromptAnthropic(messages *[]payload.Message, requestJSON, toolChoice string) {
+func injectSimulatedPromptAnthropic(messages *[]payload.Message, requestJSON, toolChoice, evidence string) {
 	if len(*messages) == 0 {
 		return
 	}
-	prompt := toolcalling.BuildSimulatedPromptAnthropic(requestJSON, true, toolChoice)
+	prompt := toolcalling.BuildSimulatedPromptAnthropic(requestJSON, true, toolChoice, evidence)
 	for i := range slices.Backward(*messages) {
 		if (*messages)[i].Role == "user" {
 			suffix := ""
@@ -4319,7 +4322,7 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 	// Inject one Responses-aware simulation prompt unless tool_choice disables
 	// client tool use.
 	if toolPolicy.simulate {
-		injectSimulatedPromptResponses(&messages, requestJSON, toolPolicy.promptChoice)
+		injectSimulatedPromptResponses(&messages, requestJSON, toolPolicy.promptChoice, toolPolicy.ledger.EvidenceNote())
 	}
 
 	// Resolve session ID

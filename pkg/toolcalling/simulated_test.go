@@ -9,7 +9,7 @@ import (
 func TestBuildSimulatedPromptResponsesDescribesResponsesPayload(t *testing.T) {
 	requestJSON := `{"input":"hello","instructions":"be concise","tools":[],"tool_choice":"auto"}`
 
-	prompt := BuildSimulatedPromptResponses(requestJSON, true, "auto")
+	prompt := BuildSimulatedPromptResponses(requestJSON, true, "auto", "")
 
 	for _, want := range []string{
 		"OpenAI Responses API",
@@ -31,7 +31,7 @@ func TestBuildSimulatedPromptResponsesDescribesResponsesPayload(t *testing.T) {
 }
 
 func TestBuildSimulatedPromptResponsesKeepsChatCompletionResultEnvelope(t *testing.T) {
-	prompt := BuildSimulatedPromptResponses(`{"input":"hello"}`, true, "required")
+	prompt := BuildSimulatedPromptResponses(`{"input":"hello"}`, true, "required", "")
 
 	for _, want := range []string{
 		"choices[0].message.tool_calls",
@@ -50,12 +50,12 @@ func TestBuildSimulatedPromptResponsesKeepsChatCompletionResultEnvelope(t *testi
 }
 
 func TestExistingSimulatedPromptContractsRemainUnchanged(t *testing.T) {
-	chatPrompt := BuildSimulatedPrompt(`{"messages":[]}`, true, "auto")
+	chatPrompt := BuildSimulatedPrompt(`{"messages":[]}`, true, "auto", "")
 	if !strings.Contains(chatPrompt, "POST /v1/chat/completions") {
 		t.Fatalf("Chat Completions prompt lost its endpoint contract:\n%s", chatPrompt)
 	}
 
-	anthropicPrompt := BuildSimulatedPromptAnthropic(`{"messages":[]}`, true, "auto")
+	anthropicPrompt := BuildSimulatedPromptAnthropic(`{"messages":[]}`, true, "auto", "")
 	if !strings.Contains(anthropicPrompt, "POST /v1/messages") {
 		t.Fatalf("Anthropic prompt lost its endpoint contract:\n%s", anthropicPrompt)
 	}

@@ -192,3 +192,34 @@ func TestEvidenceNoteCarriesTheResultsAndTheFailureWarning(t *testing.T) {
 		t.Fatalf("note %q does not warn about the repeated failure", note)
 	}
 }
+
+func TestSimulatedPromptsCarryTheEvidenceNote(t *testing.T) {
+	ledger := BuildLedger(
+		[]LedgerCall{{ID: "call_1", Name: "read_file", Arguments: `{"path":"main.go"}`}},
+		[]LedgerResult{{ID: "call_1", Content: "package main"}},
+		1,
+	)
+	note := ledger.EvidenceNote()
+	if note == "" {
+		t.Fatal("a ledger with a completed call produced no note")
+	}
+
+	builders := map[string]func(string, bool, string, string) string{
+		"chat completions": BuildSimulatedPrompt,
+		"responses":        BuildSimulatedPromptResponses,
+		"anthropic":        BuildSimulatedPromptAnthropic,
+	}
+	for name, build := range builders {
+		withEvidence := build(`{"tools":[]}`, true, "auto", note)
+		if !strings.Contains(withEvidence, "read_file") {
+			t.Fatalf("%s prompt omits the completed call", name)
+		}
+		if !strings.Contains(withEvidence, "package main") {
+			t.Fatalf("%s prompt omits the result the call returned", name)
+		}
+		withoutEvidence := build(`{"tools":[]}`, true, "auto", "")
+		if strings.Contains(withoutEvidence, "TOOL EVIDENCE") {
+			t.Fatalf("%s prompt carries an evidence section without evidence", name)
+		}
+	}
+}

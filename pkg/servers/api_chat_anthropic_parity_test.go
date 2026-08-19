@@ -180,13 +180,13 @@ func TestChatAndAnthropicSimulationPromptsPreserveCurrentUserMessage(t *testing.
 		{
 			name: "chat completions",
 			inject: func(messages *[]payload.Message) {
-				injectSimulatedPrompt(messages, requestJSON, "required")
+				injectSimulatedPrompt(messages, requestJSON, "required", "")
 			},
 		},
 		{
 			name: "anthropic messages",
 			inject: func(messages *[]payload.Message) {
-				injectSimulatedPromptAnthropic(messages, requestJSON, "any")
+				injectSimulatedPromptAnthropic(messages, requestJSON, "any", "")
 			},
 		},
 	}

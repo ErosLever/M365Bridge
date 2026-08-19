@@ -75,17 +75,17 @@ func TestCorrectiveTextDoesNotTripTheDetectors(t *testing.T) {
 // Every tool-enabled prompt carries the ban instruction, so a request never
 // reaches the backend without it.
 func TestSimulatedPromptsCarryTheNativeToolBan(t *testing.T) {
-	builders := map[string]func(string, bool, string) string{
+	builders := map[string]func(string, bool, string, string) string{
 		"chat completions": BuildSimulatedPrompt,
 		"responses":        BuildSimulatedPromptResponses,
 		"anthropic":        BuildSimulatedPromptAnthropic,
 	}
 	for name, build := range builders {
-		withTools := build(`{"tools":[]}`, true, "auto")
+		withTools := build(`{"tools":[]}`, true, "auto", "")
 		if !strings.Contains(withTools, nativeToolBanInstruction) {
 			t.Fatalf("%s prompt omits the native tool ban", name)
 		}
-		withoutTools := build(`{}`, false, "")
+		withoutTools := build(`{}`, false, "", "")
 		if strings.Contains(withoutTools, nativeToolBanInstruction) {
 			t.Fatalf("%s prompt carries the tool ban without tools", name)
 		}

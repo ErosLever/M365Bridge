@@ -25,7 +25,8 @@ import (
 // requestJSON is the serialized OpenAI /v1/chat/completions request body.
 // hasTools indicates whether the request carries client-defined tools.
 // toolChoice is the raw tool_choice value ("auto", "required", "none", or "").
-func BuildSimulatedPrompt(requestJSON string, hasTools bool, toolChoice string) string {
+// evidence is the tool result summary from Ledger.EvidenceNote, or "".
+func BuildSimulatedPrompt(requestJSON string, hasTools bool, toolChoice, evidence string) string {
 	lines := []string{
 		"The JSON payload below is an entire request for the OpenAI chat.completions format.",
 		"The JSON payload below is an entire request for POST /v1/chat/completions.",
@@ -57,6 +58,10 @@ func BuildSimulatedPrompt(requestJSON string, hasTools bool, toolChoice string) 
 		}
 	}
 
+	if evidence != "" {
+		lines = append(lines, evidence)
+	}
+
 	lines = append(lines, "```json", requestJSON, "```")
 	return strings.Join(lines, "\n")
 }
@@ -65,7 +70,9 @@ func BuildSimulatedPrompt(requestJSON string, hasTools bool, toolChoice string) 
 // OpenAI Responses API requests. The embedded request keeps Responses input
 // semantics, while the model returns the existing chat-completion-shaped inner
 // result envelope consumed by ParseSimulatedResponse.
-func BuildSimulatedPromptResponses(requestJSON string, hasTools bool, toolChoice string) string {
+//
+// evidence is the tool result summary from Ledger.EvidenceNote, or "".
+func BuildSimulatedPromptResponses(requestJSON string, hasTools bool, toolChoice, evidence string) string {
 	lines := []string{
 		"The JSON payload below is an entire request for the OpenAI Responses API.",
 		"The JSON payload below is an entire request for POST /v1/responses.",
@@ -105,6 +112,10 @@ func BuildSimulatedPromptResponses(requestJSON string, hasTools bool, toolChoice
 		}
 	}
 
+	if evidence != "" {
+		lines = append(lines, evidence)
+	}
+
 	lines = append(lines, "```json", requestJSON, "```")
 	return strings.Join(lines, "\n")
 }
@@ -117,7 +128,8 @@ func BuildSimulatedPromptResponses(requestJSON string, hasTools bool, toolChoice
 // requestJSON is the serialized Anthropic /v1/messages request body.
 // hasTools indicates whether the request carries client-defined tools.
 // toolChoice is the Anthropic tool_choice value ("any", "auto", "tool", or "").
-func BuildSimulatedPromptAnthropic(requestJSON string, hasTools bool, toolChoice string) string {
+// evidence is the tool result summary from Ledger.EvidenceNote, or "".
+func BuildSimulatedPromptAnthropic(requestJSON string, hasTools bool, toolChoice, evidence string) string {
 	lines := []string{
 		"The JSON payload below is an entire request for the Anthropic Messages API format.",
 		"The JSON payload below is an entire request for POST /v1/messages.",
@@ -145,6 +157,10 @@ func BuildSimulatedPromptAnthropic(requestJSON string, hasTools bool, toolChoice
 		case "tool":
 			lines = append(lines, "This request requires a specific tool call. Do not return a plain-text-only assistant response.")
 		}
+	}
+
+	if evidence != "" {
+		lines = append(lines, evidence)
 	}
 
 	lines = append(lines, "```json", requestJSON, "```")
