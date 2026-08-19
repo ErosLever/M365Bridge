@@ -71,6 +71,16 @@ type M365Client struct {
 	// per-request state. It reports quota counters from both the streaming and
 	// the aggregating paths, which discard the final chunk.
 	throttlingObserver func(*ThrottlingInfo)
+	// webSearchEnabled is configuration set once before serving, not
+	// per-request state. It declares the BingWebSearch built-in on outgoing
+	// payloads.
+	webSearchEnabled bool
+}
+
+// SetWebSearchEnabled declares or withholds the BingWebSearch built-in on every
+// request. Call it before serving requests.
+func (c *M365Client) SetWebSearchEnabled(enabled bool) {
+	c.webSearchEnabled = enabled
 }
 
 // SetThrottlingObserver registers a callback invoked whenever the backend
@@ -85,6 +95,7 @@ func (c *M365Client) SetThrottlingObserver(observer func(*ThrottlingInfo)) {
 func NewM365Client(tokenManager *auth.TokenManager) *M365Client {
 	return &M365Client{
 		tokenManager:     tokenManager,
+		webSearchEnabled: true,
 		handshakeTimeout: defaultHandshakeTimeout,
 		recvTimeout:      defaultRecvTimeout,
 		recvFinalTimeout: defaultRecvFinalTimeout,
@@ -235,7 +246,7 @@ func (c *M365Client) Chat(text, tone, gptOverride, conversationID, userOID, tena
 	}
 	defer conn.Close()
 
-	payloadStr, err := payload.BuildPayload(hexSID, uuidSID, text, tone, gptOverride, false, hasTools, nil)
+	payloadStr, err := payload.BuildPayload(hexSID, uuidSID, text, tone, gptOverride, false, hasTools, c.webSearchEnabled, nil)
 	if err != nil {
 		return "", err
 	}
@@ -494,6 +505,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 			gptOverride,
 			false,
 			hasTools,
+			c.webSearchEnabled,
 			nil,
 		)
 		if err != nil {

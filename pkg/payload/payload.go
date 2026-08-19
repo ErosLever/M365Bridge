@@ -381,10 +381,22 @@ func formatUUID(hex string) string {
 		hex[0:8], hex[8:12], hex[12:16], hex[16:20], hex[20:32])
 }
 
+// webSearchPlugins returns the built-in plugin list for a request. BingWebSearch
+// is the only server-side plugin the backend needs declared, and M365_ENABLE_WEB_SEARCH
+// turns it off for callers that want the model to answer from the conversation alone.
+func webSearchPlugins(enableWebSearch bool) []map[string]string {
+	if !enableWebSearch {
+		return []map[string]string{}
+	}
+	return []map[string]string{
+		{"Id": "BingWebSearch", "Source": "BuiltIn"},
+	}
+}
+
 // BuildPayload constructs a chat request payload for a single message.
 // When hasTools is true, code_interpreter option flags are stripped to prevent
 // M365 from intercepting file/code operations.
-func BuildPayload(hexSID, uuidSID, text, tone, gptOverride string, enableFileUpload, hasTools bool, extraOptions []string) (string, error) {
+func BuildPayload(hexSID, uuidSID, text, tone, gptOverride string, enableFileUpload, hasTools, enableWebSearch bool, extraOptions []string) (string, error) {
 	invocationID := uuid.New().String()
 	options := getOptions(enableFileUpload, false, hasTools, extraOptions)
 
@@ -394,21 +406,19 @@ func BuildPayload(hexSID, uuidSID, text, tone, gptOverride string, enableFileUpl
 		"target":       "chat",
 		"arguments": []map[string]any{
 			{
-				"source":                   "officeweb",
-				"clientCorrelationId":      hexSID,
-				"sessionId":                uuidSID,
-				"message":                  buildFullMessage(hexSID, text, nil),
-				"optionsSets":              options,
-				"streamingMode":            "ConciseWithPadding",
-				"spokenTextMode":           "None",
-				"options":                  map[string]any{},
-				"extraExtensionParameters": map[string]any{},
-				"allowedMessageTypes":      allowedMessageTypes,
-				"sliceIds":                 []string{},
-				"tone":                     tone,
-				"plugins": []map[string]string{
-					{"Id": "BingWebSearch", "Source": "BuiltIn"},
-				},
+				"source":                    "officeweb",
+				"clientCorrelationId":       hexSID,
+				"sessionId":                 uuidSID,
+				"message":                   buildFullMessage(hexSID, text, nil),
+				"optionsSets":               options,
+				"streamingMode":             "ConciseWithPadding",
+				"spokenTextMode":            "None",
+				"options":                   map[string]any{},
+				"extraExtensionParameters":  map[string]any{},
+				"allowedMessageTypes":       allowedMessageTypes,
+				"sliceIds":                  []string{},
+				"tone":                      tone,
+				"plugins":                   webSearchPlugins(enableWebSearch),
 				"isStartOfSession":          false,
 				"isSbsSupported":            true,
 				"renderReferencesBehindEOS": true,
@@ -481,7 +491,7 @@ func conversationTextForM365(messages []Message, includeHistory bool) string {
 // BuildConversationPayload constructs a chat request payload with conversation history.
 // When hasTools is true, code_interpreter option flags are stripped to prevent
 // M365 from intercepting file/code operations.
-func BuildConversationPayload(hexSID, uuidSID string, messages []Message, includeHistory bool, tone, gptOverride string, enableFileUpload, hasTools bool, extraOptions []string) (string, error) {
+func BuildConversationPayload(hexSID, uuidSID string, messages []Message, includeHistory bool, tone, gptOverride string, enableFileUpload, hasTools, enableWebSearch bool, extraOptions []string) (string, error) {
 	invocationID := uuid.New().String()
 
 	// Extract annotations from the last message (images are attached to the last user message)
@@ -516,21 +526,19 @@ func BuildConversationPayload(hexSID, uuidSID string, messages []Message, includ
 		"target":       "chat",
 		"arguments": []map[string]any{
 			{
-				"source":                   "officeweb",
-				"clientCorrelationId":      hexSID,
-				"sessionId":                uuidSID,
-				"message":                  buildMinimalMessage(hexSID, lastText, annotations),
-				"optionsSets":              options,
-				"streamingMode":            "ConciseWithPadding",
-				"spokenTextMode":           "None",
-				"options":                  map[string]any{},
-				"extraExtensionParameters": map[string]any{},
-				"allowedMessageTypes":      allowedMessageTypes,
-				"sliceIds":                 []string{},
-				"tone":                     tone,
-				"plugins": []map[string]string{
-					{"Id": "BingWebSearch", "Source": "BuiltIn"},
-				},
+				"source":                    "officeweb",
+				"clientCorrelationId":       hexSID,
+				"sessionId":                 uuidSID,
+				"message":                   buildMinimalMessage(hexSID, lastText, annotations),
+				"optionsSets":               options,
+				"streamingMode":             "ConciseWithPadding",
+				"spokenTextMode":            "None",
+				"options":                   map[string]any{},
+				"extraExtensionParameters":  map[string]any{},
+				"allowedMessageTypes":       allowedMessageTypes,
+				"sliceIds":                  []string{},
+				"tone":                      tone,
+				"plugins":                   webSearchPlugins(enableWebSearch),
 				"isStartOfSession":          false,
 				"isSbsSupported":            true,
 				"renderReferencesBehindEOS": true,

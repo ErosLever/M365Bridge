@@ -153,3 +153,21 @@ func TestAnthropicToolStructureSurvivesFlattening(t *testing.T) {
 		t.Fatalf("tool results = %#v, want the raw result body", result.ToolResults)
 	}
 }
+
+func TestWebSearchPluginIsGated(t *testing.T) {
+	raw, err := BuildConversationPayload("sid", "uuid", []Message{{Role: "user", Content: "hi"}}, false, "Magic", "", false, false, true, nil)
+	if err != nil {
+		t.Fatalf("build with web search: %v", err)
+	}
+	if !strings.Contains(raw, "BingWebSearch") {
+		t.Fatal("the built-in was withheld while web search is enabled")
+	}
+
+	raw, err = BuildConversationPayload("sid", "uuid", []Message{{Role: "user", Content: "hi"}}, false, "Magic", "", false, false, false, nil)
+	if err != nil {
+		t.Fatalf("build without web search: %v", err)
+	}
+	if strings.Contains(raw, "BingWebSearch") {
+		t.Fatal("the built-in was declared while web search is disabled")
+	}
+}

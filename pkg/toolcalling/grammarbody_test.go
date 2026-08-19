@@ -99,3 +99,35 @@ func TestGrammarBodyCallHonorsTheAllowFilter(t *testing.T) {
 		t.Fatal("a body was claimed for a tool the policy disallows")
 	}
 }
+
+func TestRouteableToolsDropsWebSearchOnly(t *testing.T) {
+	tools := []ToolDef{
+		{Type: "web_search"},
+		{Type: "function", Function: ToolDefFunc{Name: "web_search"}},
+		{Type: "function", Function: ToolDefFunc{Name: "get_weather"}},
+		{Type: "custom", Name: "exec"},
+	}
+	routeable := RouteableTools(tools)
+	if len(routeable) != 2 {
+		t.Fatalf("routeable = %#v, want both web search forms dropped", routeable)
+	}
+	for i := range routeable {
+		if IsWebSearchTool(&routeable[i]) {
+			t.Fatalf("a web search tool survived: %#v", routeable[i])
+		}
+	}
+}
+
+func TestSimulatedPromptsCarryTheWebSearchInstruction(t *testing.T) {
+	builders := map[string]func(string, bool, string, string) string{
+		"chat completions": BuildSimulatedPrompt,
+		"responses":        BuildSimulatedPromptResponses,
+		"anthropic":        BuildSimulatedPromptAnthropic,
+	}
+	for name, build := range builders {
+		prompt := build(`{"tools":[]}`, true, "auto", "")
+		if !strings.Contains(prompt, "do not emit a call to it") {
+			t.Fatalf("%s prompt omits the web search instruction", name)
+		}
+	}
+}

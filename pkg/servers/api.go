@@ -194,6 +194,7 @@ func (api *APIServer) Start(port int) error {
 	// Initialize request transports and optional local coding tools.
 	api.m365Client = client.NewM365Client(api.tokenManager)
 	api.m365Client.SetThrottlingObserver(api.noteThrottling)
+	api.m365Client.SetWebSearchEnabled(api.config.EnableWebSearch)
 	if api.config.EnableCodeTools {
 		manager, err := codingtools.New(codingtools.Config{
 			Enabled:       true,
@@ -1216,7 +1217,7 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	api.uploadImagesAndAnnotate(&req.Messages, convID)
 
 	// Determine if client-defined tools are present (for optionsSets stripping)
-	hasTools := len(req.Tools) > 0
+	hasTools := len(toolcalling.RouteableTools(req.Tools)) > 0
 
 	if len(localTools) > 0 {
 		result, err := api.runToolLoop(r, toolLoopOpenAI, req.Messages, cfg, convID, req.Tools, localTools)
@@ -1294,7 +1295,7 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 		convID = api.ctxCache.Get("session:" + sid)
 	}
 
-	hasTools := len(req.Tools) > 0
+	hasTools := len(toolcalling.RouteableTools(req.Tools)) > 0
 
 	if req.Stream {
 		api.streamCompletions(w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
@@ -1461,7 +1462,7 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 	api.uploadImagesAndAnnotate(&chatMessages, convID)
 
 	// Determine if client-defined tools are present (for optionsSets stripping)
-	hasTools := len(req.Tools) > 0
+	hasTools := len(toolcalling.RouteableTools(req.Tools)) > 0
 
 	if len(localTools) > 0 {
 		result, err := api.runToolLoop(r, toolLoopAnthropic, chatMessages, cfg, convID, req.Tools, localTools)
@@ -3533,7 +3534,9 @@ func newResponsesToolPolicy(tools []toolcalling.ToolDef, toolChoice any) (respon
 	}
 
 	policy := responsesToolPolicy{
-		simulate:         len(tools) > 0,
+		// With only web search declared there is nothing for the client to
+		// run, so the request takes the plain answer path.
+		simulate:         len(allNames) > 0,
 		promptChoice:     "auto",
 		allowedToolNames: allNames,
 		tools:            tools,
@@ -3554,6 +3557,11 @@ func newResponsesToolPolicy(tools []toolcalling.ToolDef, toolChoice any) (respon
 			policy.required = true
 			policy.promptChoice = "required"
 		default:
+			if strings.EqualFold(choice, toolcalling.WebSearchToolName) {
+				// The backend performs the search itself, so the pin is
+				// satisfied by the answer rather than by a call.
+				break
+			}
 			if !knownNames[choice] {
 				return responsesToolPolicy{}, fmt.Errorf("invalid Responses tool_choice %q", choice)
 			}
@@ -3606,6 +3614,13 @@ func responsesToolNames(tools []toolcalling.ToolDef) []string {
 	names := make([]string, 0, len(tools))
 	seen := make(map[string]bool, len(tools))
 	for _, tool := range tools {
+		// Web search is a server-side built-in: the backend answers with
+		// search results inline and the client has nothing to execute, so a
+		// call to it must never be routed even though the declaration stays
+		// visible in the prompt.
+		if toolcalling.IsWebSearchTool(&tool) {
+			continue
+		}
 		name := responsesToolName(tool)
 		if name == "" || seen[name] {
 			continue
@@ -5872,7 +5887,7 @@ func (api *APIServer) handleResponsesCompact(w http.ResponseWriter, r *http.Requ
 	// Upload any images found in multimodal content
 	api.uploadImagesAndAnnotate(&messages, convID)
 
-	hasTools := len(req.Tools) > 0
+	hasTools := len(toolcalling.RouteableTools(req.Tools)) > 0
 
 	logging.Infof("handleResponsesCompact: model=%s sid=%s convID=%s stream=%t tools=%d", modelKey, sid, convID, req.Stream, len(req.Tools))
 

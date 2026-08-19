@@ -2,6 +2,7 @@ package servers
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -193,5 +194,46 @@ func TestParseResponsesSimulationLeavesProseAloneWithoutAGrammarTool(t *testing.
 	}
 	if result.content != answer {
 		t.Fatalf("content = %q, want the text passed through", result.content)
+	}
+}
+
+func TestWebSearchIsNotRouteableOnTheResponsesPath(t *testing.T) {
+	tools := []toolcalling.ToolDef{
+		{Type: "function", Function: toolcalling.ToolDefFunc{Name: "web_search"}},
+		{Type: "function", Function: toolcalling.ToolDefFunc{Name: "get_weather"}},
+	}
+	policy, err := newResponsesToolPolicy(tools, "auto")
+	if err != nil {
+		t.Fatalf("newResponsesToolPolicy: %v", err)
+	}
+	if slices.Contains(policy.allowedToolNames, "web_search") {
+		t.Fatalf("allowed names = %#v, want web_search excluded", policy.allowedToolNames)
+	}
+	if !slices.Contains(policy.allowedToolNames, "get_weather") {
+		t.Fatalf("allowed names = %#v, want the client tool kept", policy.allowedToolNames)
+	}
+}
+
+func TestWebSearchAloneTurnsSimulationOff(t *testing.T) {
+	policy, err := newResponsesToolPolicy([]toolcalling.ToolDef{{Type: "web_search"}}, "auto")
+	if err != nil {
+		t.Fatalf("newResponsesToolPolicy: %v", err)
+	}
+	if policy.simulate {
+		t.Fatal("simulation stayed on with nothing the client can execute")
+	}
+}
+
+func TestPinnedWebSearchIsNotAnError(t *testing.T) {
+	tools := []toolcalling.ToolDef{
+		{Type: "function", Function: toolcalling.ToolDefFunc{Name: "web_search"}},
+		{Type: "function", Function: toolcalling.ToolDefFunc{Name: "get_weather"}},
+	}
+	policy, err := newResponsesToolPolicy(tools, "web_search")
+	if err != nil {
+		t.Fatalf("a pinned web_search was rejected: %v", err)
+	}
+	if policy.required {
+		t.Fatal("a pinned web_search demanded a client tool call it can never receive")
 	}
 }

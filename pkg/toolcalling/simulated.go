@@ -18,6 +18,12 @@ import (
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
 )
 
+// webSearchInstruction states how a declared web_search tool is handled. M365
+// runs the search itself through the BingWebSearch built-in, so the client has
+// nothing to execute and a call to it would stall the turn.
+const webSearchInstruction = "If a tool named web_search is declared, do not emit a call to it. " +
+	"Web search runs on this side; put the search results directly into your answer text."
+
 // BuildSimulatedPrompt constructs the prompt sent to M365 Copilot in simulated
 // mode. It embeds the full OpenAI request JSON and instructs the model to
 // return a single ```json block containing a valid chat.completion response.
@@ -45,7 +51,8 @@ func BuildSimulatedPrompt(requestJSON string, hasTools bool, toolChoice, evidenc
 			"Every tool call MUST include all properties listed in that tool's parameters.required array, each with a concrete non-empty value inferred from the request; never emit a tool call with a missing or empty required field.",
 			"CRITICAL: Only use tool names that appear in the tools array of the request payload. Never invent tool names.",
 			"NEVER emit a tool_calls entry with name \"code_interpreter\" or any name not present in the request's tools array.",
-			"Do not use code_interpreter, web_search, or any built-in/baked-in tool. Only the client-supplied tools are valid.",
+			"Do not use code_interpreter or any built-in/baked-in tool. Only the client-supplied tools are valid.",
+			webSearchInstruction,
 			nativeToolBanInstruction,
 		)
 		normalizedChoice := strings.TrimSpace(toolChoice)
@@ -97,7 +104,8 @@ func BuildSimulatedPromptResponses(requestJSON string, hasTools bool, toolChoice
 			`For a function inside a "type": "namespace" tool, keep the short function name and copy the enclosing namespace name into the tool call's "namespace" field.`,
 			"CRITICAL: Only use tool names that appear in the tools array or in a prior tool_search_output item. Never invent tool names.",
 			`A tool entry with "type": "tool_search" is callable as "tool_search" and can load additional tools when needed.`,
-			"Do not use code_interpreter, web_search, or another built-in tool unless its exact name is in the callable set.",
+			"Do not use code_interpreter or another built-in tool unless its exact name is in the callable set.",
+			webSearchInstruction,
 			nativeToolBanInstruction,
 		)
 
@@ -148,7 +156,8 @@ func BuildSimulatedPromptAnthropic(requestJSON string, hasTools bool, toolChoice
 			"Every tool_use block MUST include all properties listed in that tool's input_schema.required array, each with a concrete non-empty value inferred from the request; never emit a tool_use block with a missing or empty required field.",
 			"CRITICAL: Only use tool names that appear in the tools array of the request payload. Never invent tool names.",
 			"NEVER emit a tool_use block with name \"code_interpreter\" or any name not present in the request's tools array.",
-			"Do not use code_interpreter, web_search, or any built-in/baked-in tool. Only the client-supplied tools are valid.",
+			"Do not use code_interpreter or any built-in/baked-in tool. Only the client-supplied tools are valid.",
+			webSearchInstruction,
 			nativeToolBanInstruction,
 		)
 		switch strings.ToLower(strings.TrimSpace(toolChoice)) {

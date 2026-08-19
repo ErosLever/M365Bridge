@@ -166,6 +166,9 @@ type Config struct {
 	CodeToolMaxIterations int
 	ContextWindowTokens   int
 	MaxOutputTokens       int
+	// EnableWebSearch declares the BingWebSearch built-in on every request so
+	// the backend can ground answers in live search results.
+	EnableWebSearch bool
 	// MaxToolRounds caps the tool rounds a client may drive within one user
 	// turn. The server keeps no state across such a loop, so without a cap a
 	// client that never stops calling tools keeps the upstream busy forever.
@@ -214,6 +217,7 @@ func LoadConfig() *Config {
 		ContextWindowTokens:   getEnvInt("M365_CONTEXT_WINDOW", 1_000_000),
 		MaxOutputTokens:       getEnvInt("M365_MAX_OUTPUT_TOKENS", 1_000_000),
 		MaxToolRounds:         min(getEnvInt("M365_MAX_TOOL_ROUNDS", DefaultMaxToolRounds), MaxToolRoundsCeiling),
+		EnableWebSearch:       getEnvBool("M365_ENABLE_WEB_SEARCH", true),
 	}
 
 	logging.Infof("LoadConfig: tenantID=%s userOID=%s clientID=%s apiKeys=%d", cfg.TenantID, cfg.UserOID, cfg.ClientID[:min(8, len(cfg.ClientID))]+"...", len(cfg.APIKeys))

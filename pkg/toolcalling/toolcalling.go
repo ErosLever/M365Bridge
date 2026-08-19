@@ -14,6 +14,7 @@ package toolcalling
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -96,6 +97,33 @@ func ToolName(t *ToolDef) string {
 		return t.Function.Name
 	}
 	return t.Name
+}
+
+// WebSearchToolName is the conventional name a client uses for web search.
+// M365 performs it server-side through the BingWebSearch built-in, so a call to
+// it can never be executed by the client.
+const WebSearchToolName = "web_search"
+
+// IsWebSearchTool reports whether a declared tool is the web search built-in,
+// by its type or its name.
+func IsWebSearchTool(t *ToolDef) bool {
+	return strings.EqualFold(t.Type, WebSearchToolName) ||
+		strings.EqualFold(ToolName(t), WebSearchToolName)
+}
+
+// RouteableTools drops web search from the set a tool call may be routed to.
+// The declaration itself stays in the prompt so the model knows the capability
+// exists; only a call to it is refused, because the backend already answers
+// with search results inline and the client has nothing to run.
+func RouteableTools(tools []ToolDef) []ToolDef {
+	out := make([]ToolDef, 0, len(tools))
+	for i := range tools {
+		if IsWebSearchTool(&tools[i]) {
+			continue
+		}
+		out = append(out, tools[i])
+	}
+	return out
 }
 
 // FormatToolResult converts a tool result (from the client) into text

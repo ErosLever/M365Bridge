@@ -33,6 +33,7 @@ func (cli *CLIServer) Run(options *CLIOptions) error {
 	// Initialize client if needed
 	if cli.m365Client == nil {
 		cli.m365Client = client.NewM365Client(cli.tokenManager)
+		cli.m365Client.SetWebSearchEnabled(cli.config.EnableWebSearch)
 	}
 
 	// Handle different modes
