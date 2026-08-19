@@ -602,6 +602,34 @@ func (api *APIServer) sendThrottledError(w http.ResponseWriter) {
 	})
 }
 
+// upstreamContentBlockedCode marks a reply that is M365's canned content
+// refusal rather than an answer.
+const upstreamContentBlockedCode = "upstream_content_blocked"
+
+// sendContentBlockedError reports a backend content refusal as HTTP 502.
+//
+// The refusal reads like an ordinary short answer, so an agent client would
+// otherwise accept it and continue on nothing. A distinct status lets the
+// client tell "the backend declined this request" apart from "here is the
+// answer".
+func (api *APIServer) sendContentBlockedError(w http.ResponseWriter, reply string) {
+	logging.Warn("upstream content refusal: M365 declined the request instead of answering")
+	api.sendJSON(w, http.StatusBadGateway, map[string]any{
+		"error": map[string]any{
+			"message": "M365 declined this request: " + strings.TrimSpace(reply),
+			"type":    upstreamContentBlockedCode,
+			"code":    http.StatusBadGateway,
+		},
+	})
+}
+
+// blockedByContentPolicy reports whether a finished turn is a content refusal
+// with nothing else to deliver. A turn that also produced tool calls is real
+// work and is left alone.
+func blockedByContentPolicy(respText string, toolCalls []client.ToolCall) bool {
+	return len(toolCalls) == 0 && toolcalling.IsContentPolicyBlock(respText)
+}
+
 // handleConversations lists or creates M365 conversations.
 func (api *APIServer) handleConversations(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
@@ -1700,6 +1728,11 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 			}
 		} else {
 			fullText = toolcalling.WithholdTransportEnvelope(fullText)
+			if toolcalling.IsContentPolicyBlock(fullText) {
+				// The stream is already open, so the refusal cannot be turned
+				// into an HTTP error the way the non-streaming paths do.
+				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
+			}
 		}
 	}
 
@@ -1893,6 +1926,14 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 			finishReason = "stop"
 			respText = toolcalling.WithholdTransportEnvelope(respText)
 		}
+	}
+
+	if blockedByContentPolicy(respText, toolCalls) {
+		if sid != "" {
+			api.ctxCache.Delete("session:" + sid)
+		}
+		api.sendContentBlockedError(w, respText)
+		return
 	}
 
 	// Enforce max_tokens on response text
@@ -2139,6 +2180,11 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 			}
 		} else {
 			fullText = toolcalling.WithholdTransportEnvelope(fullText)
+			if toolcalling.IsContentPolicyBlock(fullText) {
+				// The stream is already open, so the refusal cannot be turned
+				// into an HTTP error the way the non-streaming paths do.
+				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
+			}
 		}
 	}
 
@@ -2390,6 +2436,14 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 		stopReason = "tool_use"
 	}
 
+	if blockedByContentPolicy(respText, toolCalls) {
+		if sid != "" {
+			api.ctxCache.Delete("session:" + sid)
+		}
+		api.sendContentBlockedError(w, respText)
+		return
+	}
+
 	// Enforce max_tokens on response text
 	if maxTokens > 0 {
 		if truncated, ok := truncateToTokens(respText, maxTokens); ok {
@@ -2556,6 +2610,11 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 			}
 		} else {
 			fullText = toolcalling.WithholdTransportEnvelope(fullText)
+			if toolcalling.IsContentPolicyBlock(fullText) {
+				// The stream is already open, so the refusal cannot be turned
+				// into an HTTP error the way the non-streaming paths do.
+				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
+			}
 		}
 	}
 
@@ -2652,6 +2711,14 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 			finishReason = "stop"
 			respText = toolcalling.WithholdTransportEnvelope(respText)
 		}
+	}
+
+	if blockedByContentPolicy(respText, toolCalls) {
+		if sid != "" {
+			api.ctxCache.Delete("session:" + sid)
+		}
+		api.sendContentBlockedError(w, respText)
+		return
 	}
 
 	// Enforce max_tokens on response text
@@ -4528,6 +4595,13 @@ func (api *APIServer) nonStreamResponses(
 		finishReason = simulated.finishReason
 	}
 	thinking = responsesReasoningForOutput(thinking, toolPolicy.simulate)
+	if blockedByContentPolicy(respText, toolCalls) {
+		if sid != "" {
+			api.ctxCache.Delete("session:" + sid)
+		}
+		api.sendContentBlockedError(w, respText)
+		return
+	}
 	if responsesResultEmpty(respText, toolCalls) {
 		if sid != "" {
 			api.ctxCache.Delete("session:" + sid)
@@ -5547,6 +5621,11 @@ func (api *APIServer) streamResponsesCompact(w http.ResponseWriter, messages []p
 			fullText = sim.Content
 		} else {
 			fullText = toolcalling.WithholdTransportEnvelope(fullText)
+			if toolcalling.IsContentPolicyBlock(fullText) {
+				// The stream is already open, so the refusal cannot be turned
+				// into an HTTP error the way the non-streaming paths do.
+				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
+			}
 		}
 	}
 

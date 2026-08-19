@@ -91,3 +91,36 @@ func TestSimulatedPromptsCarryTheNativeToolBan(t *testing.T) {
 		}
 	}
 }
+
+func TestIsContentPolicyBlock(t *testing.T) {
+	refusals := []string{
+		"I'm sorry, I can't respond to that.",
+		"I am sorry, I cannot respond. Can I help with something else?",
+		"很抱歉，我无法响应。我可以提供其他方面的帮助吗？",
+	}
+	for _, text := range refusals {
+		if !IsContentPolicyBlock(text) {
+			t.Fatalf("content refusal not detected: %q", text)
+		}
+	}
+
+	if IsContentPolicyBlock("OK") {
+		t.Fatal("a short ordinary answer was flagged as a content refusal")
+	}
+
+	// A long answer that merely quotes the phrase is a real answer. The length
+	// guard is what keeps a discussion of refusals from being turned into one.
+	long := "The assistant replied: I'm sorry, I can't respond. " + strings.Repeat("Here is the analysis. ", 20)
+	if IsContentPolicyBlock(long) {
+		t.Fatalf("a %d-character answer quoting the phrase was flagged as a refusal", len(long))
+	}
+}
+
+// The tool detectors and the content-policy detector cover different failure
+// modes, so a content refusal must not be answered with a tool re-ask.
+func TestContentRefusalIsNotAToolRefusal(t *testing.T) {
+	const refusal = "I'm sorry, I can't respond."
+	if IsToolRefusal(refusal) || IsSandboxHallucination(refusal) {
+		t.Fatal("a content refusal would trigger the tool re-ask flow")
+	}
+}

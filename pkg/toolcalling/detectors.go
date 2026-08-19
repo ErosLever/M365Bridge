@@ -46,6 +46,31 @@ var sandboxHallucinationPatterns = []string{
 	"in my environment",
 }
 
+// contentPolicyPatterns match M365's canned content refusal. It is a different
+// failure from a tool refusal: the backend declined the request itself, so no
+// re-ask or tool instruction can recover it.
+var contentPolicyPatterns = []string{
+	"i'm sorry, i can't respond",
+	"i'm sorry, i cannot respond",
+	"i am sorry, i can't respond",
+	"i am sorry, i cannot respond",
+	"很抱歉，我无法响应",
+	"我很抱歉，我无法响应",
+}
+
+// contentPolicyMaxLen bounds the reply length that can be a canned refusal. A
+// long answer that quotes the phrase is a real answer, not a refusal.
+const contentPolicyMaxLen = 300
+
+// IsContentPolicyBlock reports whether the backend refused the request itself
+// rather than answering it.
+func IsContentPolicyBlock(text string) bool {
+	if len(text) > contentPolicyMaxLen {
+		return false
+	}
+	return matchesAny(text, contentPolicyPatterns)
+}
+
 // IsToolRefusal reports whether the reply denies that the caller's tools exist.
 func IsToolRefusal(text string) bool {
 	return matchesAny(text, toolRefusalPatterns)
