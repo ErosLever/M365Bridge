@@ -53,3 +53,13 @@ func TestUnverifiedClaimLeavesAnOrdinaryToolAnswerAlone(t *testing.T) {
 		t.Fatalf("an ordinary answer was rewritten to %q", got)
 	}
 }
+
+func TestReplaceUnverifiedClaimUsesTheCallCount(t *testing.T) {
+	var empty toolcalling.Ledger
+	if got := replaceUnverifiedCompletionClaim(completionClaim, true, empty, 1); got != completionClaim {
+		t.Fatalf("a turn with one parsed call was rewritten to %q", got)
+	}
+	if got := replaceUnverifiedCompletionClaim(completionClaim, true, empty, 0); got != unverifiedCompletionNotice {
+		t.Fatalf("got %q, want the not-verified notice", got)
+	}
+}

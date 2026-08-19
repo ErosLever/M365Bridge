@@ -643,7 +643,13 @@ const unverifiedCompletionNotice = "No tool was called in this turn and no tool 
 // drawn from omits that condition, so a plain chat answer such as "Go was
 // created at Google" trips it; here such an answer is never touched.
 func withoutUnverifiedCompletionClaim(respText string, hasTools bool, ledger toolcalling.Ledger, toolCalls []client.ToolCall) string {
-	if !unverifiedCompletionClaim(respText, hasTools, ledger, len(toolCalls)) {
+	return replaceUnverifiedCompletionClaim(respText, hasTools, ledger, len(toolCalls))
+}
+
+// replaceUnverifiedCompletionClaim is the count-based form, for the streaming
+// paths whose parsed calls are toolcalling.ToolCall rather than client.ToolCall.
+func replaceUnverifiedCompletionClaim(respText string, hasTools bool, ledger toolcalling.Ledger, toolCallCount int) string {
+	if !unverifiedCompletionClaim(respText, hasTools, ledger, toolCallCount) {
 		return respText
 	}
 	logging.Warn("replacing an unverified completion claim: the turn called no tool and holds no tool result")
@@ -660,8 +666,11 @@ func unverifiedCompletionClaim(respText string, hasTools bool, ledger toolcallin
 	return toolcalling.ClaimsUnverifiedCompletion(respText)
 }
 
-// warnOnUnverifiedCompletionClaim reports the same failure on a streaming turn,
-// where the text has already reached the client and can no longer be replaced.
+// warnOnUnverifiedCompletionClaim reports the same failure where the text has
+// already reached the client and can no longer be replaced. Only the Responses
+// stream is in that position: it publishes assistant content as it decodes it,
+// while the other streaming paths buffer a tool-enabled turn until the parse is
+// done and can still replace the answer.
 func warnOnUnverifiedCompletionClaim(respText string, hasTools bool, ledger toolcalling.Ledger, toolCallCount int) {
 	if unverifiedCompletionClaim(respText, hasTools, ledger, toolCallCount) {
 		logging.Warn("unverified completion claim on a streaming turn: the text was already sent to the client and could not be replaced")
@@ -1801,7 +1810,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
 			}
 		}
-		warnOnUnverifiedCompletionClaim(fullText, hasTools, buildToolLedger(messages), len(simToolCalls))
+		fullText = replaceUnverifiedCompletionClaim(fullText, hasTools, buildToolLedger(messages), len(simToolCalls))
 	}
 
 	if toolCallingEnabled {
@@ -2257,7 +2266,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
 			}
 		}
-		warnOnUnverifiedCompletionClaim(fullText, hasTools, buildToolLedger(messages), len(simToolCalls))
+		fullText = replaceUnverifiedCompletionClaim(fullText, hasTools, buildToolLedger(messages), len(simToolCalls))
 	}
 
 	// Flush any remaining filtered thinking when the response was thinking-only
@@ -2691,7 +2700,7 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 				logging.Warn("upstream content refusal on a streaming turn: M365 declined the request instead of answering")
 			}
 		}
-		warnOnUnverifiedCompletionClaim(fullText, hasTools, buildToolLedger(messages), len(simToolCalls))
+		fullText = replaceUnverifiedCompletionClaim(fullText, hasTools, buildToolLedger(messages), len(simToolCalls))
 	}
 
 	// If tool calling buffered text, send it now as a single chunk
@@ -5458,6 +5467,9 @@ func (api *APIServer) streamResponses(
 		fullText = simulated.content
 		toolCalls = simulated.toolCalls
 		finishReason = simulated.finishReason
+		// This is the one streaming path that publishes assistant content as it
+		// decodes it, so the claim cannot be replaced here.
+		warnOnUnverifiedCompletionClaim(fullText, toolPolicy.simulate, toolPolicy.ledger, len(toolCalls))
 		if truncated {
 			finishReason = "length"
 		}
