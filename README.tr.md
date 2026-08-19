@@ -701,6 +701,19 @@ Yanıt:
 - Konuşma geçmişindeki `tool_result` mesajları (OpenAI) ve `tool_use`/`tool_result` içerik blokları (Anthropic), M365 backend'i tool rollerini anlamadığı için M365'ye gönderilmeden önce düz metne dönüştürülür.
 - Streaming endpoint'leri, tool call'ları ayrıştırmadan önce tam yanıtı tampona alır (tool call JSON'u birden çok chunk'a yayılabilir).
 
+### İstemci Sürücülü Tool Loop'lar
+
+Claude Code ve Codex gibi agent istemcileri tool loop'u kendileri sürer ve her istekte tüm çağrı ve sonuç geçmişini yeniden gönderir. Proxy bu istekler arasında durum tutmadığı için güncel kullanıcı turunun kanıtını gelen geçmişten yeniden kurar. Tur, tool result taşımayan son user mesajından başlar; böylece her sonucun user mesajı olarak geldiği Anthropic şekli yeni bir tur sanılmaz.
+
+| Değişken               | Varsayılan | Açıklama                                                                     |
+|------------------------|------------|------------------------------------------------------------------------------|
+| `M365_MAX_TOOL_ROUNDS` | `32`       | Bir kullanıcı turunun sürebileceği tool round sayısı. Üst sınır `512`.        |
+
+- Sınır aşıldığında `tool_round_limit` tipiyle HTTP 409 döner ve round sayısı bildirilir. HTTP 409 Anthropic SDK'sının beklediği bir kod değildir, ama istemci bir tur daha isterken sonsuza kadar yanıt vermektense açık bir ret tercih edilir.
+- Tamamlanmış çağrılar ve sonuçları prompt'ta kesin kanıt olarak tekrar edilir; böylece model elindeki sonucu yeniden istemek yerine ondan yanıt verir. Aynı çağrı aynı hatayla birden fazla kez başarısız olduysa prompt ayrıca yaklaşım değiştirmeyi ister.
+- Sonucu turda zaten bulunan bir ad ve argüman ikilisini tekrarlayan tool call, üçüncü aynı denemede düşürülür. İlk tekrar geçer; çünkü yazma sonrası dosyayı okumak veya değişiklik sonrası testleri tekrar çalıştırmak olağandır. `tool_choice` ile talep edilen bir çağrı her zaman iletilir ve düşürme düzeltici re-ask'i tetiklemez; çünkü tekrar sorulduğunda model aynı çağrıyı üretir.
+- İstek tool tanımlıyor, tur hiç tool call üretmiyor ve hiç tool result yoksa, işi birinci tekil şahısla yaptığını iddia eden yanıt hiçbir şeyin doğrulanmadığını söyleyen kısa bir cümleyle değiştirilir; özgün metin debug seviyesinde loglanır. "Go was created at Google" gibi üçüncü şahıs bir ifadeye ve uzun düz metin yanıtlara dokunulmaz. Akışlı bir turda metin çoktan gönderildiği için yalnızca loglanır.
+
 ## Built-in Coding Tools (Opt-in)
 
 M365Bridge, sunucuda kısıtlı bir yerel coding işlemleri kümesi çalıştırabilir. Bu özellik **varsayılan olarak kapalıdır** ve ana gate `M365_ENABLE_CODE_TOOLS=1` ayarıdır. OpenAI Chat Completions (`/v1/chat/completions`), Anthropic Messages (`/v1/messages`) ve OpenAI Responses (`/v1/responses`) üzerinde kullanılabilir.

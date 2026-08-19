@@ -701,6 +701,19 @@ Response:
 - `tool_result` messages (OpenAI) and `tool_use`/`tool_result` content blocks (Anthropic) in conversation history are converted to plain text before being sent to M365, since the M365 backend does not understand tool roles.
 - Streaming endpoints buffer the full response before parsing tool calls (tool call JSON may span multiple chunks).
 
+### Client-Driven Tool Loops
+
+Agent clients such as Claude Code and Codex drive the tool loop themselves and resend the whole call and result history on every request. The proxy holds no state between those requests, so it rebuilds the evidence of the current user turn from the incoming history. A turn starts at the last user message that carries no tool result, which keeps the Anthropic shape, where every result arrives as a user message, from looking like a new turn.
+
+| Variable               | Default | Description                                                                 |
+|------------------------|---------|-----------------------------------------------------------------------------|
+| `M365_MAX_TOOL_ROUNDS` | `32`    | Tool rounds one user turn may drive before HTTP 409. Capped at `512`.        |
+
+- Exceeding the cap returns HTTP 409 with `tool_round_limit` and reports the round count. HTTP 409 is not a status the Anthropic SDK expects, but an explicit refusal is preferable to answering forever while the client asks for one more round.
+- The completed calls and their results are restated in the prompt as final evidence, so the model answers from a result it already has instead of asking for it again. When the same call has failed the same way more than once, the prompt also asks for a change of approach.
+- A tool call repeating a name and arguments whose result is already in the turn is dropped on the third identical attempt. The first repeat passes, because reading a file back after writing it or re-running the tests after a change are ordinary. A call demanded through `tool_choice` is always forwarded, and a drop never triggers the corrective re-ask, because re-asking would produce the same call again.
+- When the request declares tools, the turn emits no tool call, and no tool result exists, an answer claiming in the first person to have carried the work out is replaced with a short statement that nothing was verified; the original text is logged at debug level. A third-person statement such as "Go was created at Google" and a long prose answer are never touched. On a streaming turn the text has already been sent, so the case is only logged.
+
 ## Built-in Coding Tools (Opt-in)
 
 M365Bridge can execute a restricted set of local coding operations on the server. This feature is **disabled by default** and its main gate is `M365_ENABLE_CODE_TOOLS=1`. It is available on OpenAI Chat Completions (`/v1/chat/completions`), Anthropic Messages (`/v1/messages`), and OpenAI Responses (`/v1/responses`).
