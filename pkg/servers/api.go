@@ -1048,14 +1048,16 @@ func (api *APIServer) repairSimulatedToolCalls(provider toolLoopProvider, messag
 	}
 
 	var note string
+	narrated := false
 	switch {
 	case len(sim.DroppedCalls) > 0:
 		note = toolcalling.BuildRepairNote(sim.DroppedCalls, contracts)
 		logging.Warnf("repairSimulatedToolCalls: re-asking backend, tool calls failed validation: %v", sim.DroppedCalls)
 	default:
 		// The backend produced no tool call at all. That is only worth a re-ask
-		// when the reply denies the tools exist or claims the work already ran
-		// elsewhere; an ordinary text answer is a legitimate outcome.
+		// when the reply denies the tools exist, claims the work already ran
+		// elsewhere, or only announces which tool it means to use; an ordinary
+		// text answer is a legitimate outcome.
 		answer := sim.Content
 		if answer == "" {
 			answer = rawText
@@ -1065,6 +1067,9 @@ func (api *APIServer) repairSimulatedToolCalls(provider toolLoopProvider, messag
 			logging.Warn("repairSimulatedToolCalls: re-asking backend, reply denied the declared tools exist")
 		case toolcalling.IsSandboxHallucination(answer):
 			logging.Warn("repairSimulatedToolCalls: re-asking backend, reply claimed to have run the work itself")
+		case toolcalling.IsToolIntentNarration(answer, toolNamesFromDefs(tools)):
+			narrated = true
+			logging.Warn("repairSimulatedToolCalls: re-asking backend, reply only announced which tool it would use")
 		default:
 			return sim
 		}
@@ -1092,6 +1097,15 @@ func (api *APIServer) repairSimulatedToolCalls(provider toolLoopProvider, messag
 	if len(retried.ToolCalls) > 0 {
 		logging.Infof("repairSimulatedToolCalls: recovered %d tool call(s) after re-ask", len(retried.ToolCalls))
 		return retried
+	}
+	// An announcement that survived the re-ask is worse than useless to the
+	// client: it reads as work in progress that never arrives.
+	if narrated {
+		logging.Warn("repairSimulatedToolCalls: re-ask stayed an announcement; replacing the answer text")
+		sim.Content = toolcalling.ToolNarrationNotice
+		sim.FinishReason = "stop"
+		sim.HasPayload = true
+		return sim
 	}
 	logging.Warn("repairSimulatedToolCalls: re-ask did not yield valid tool calls; keeping original response")
 	return sim

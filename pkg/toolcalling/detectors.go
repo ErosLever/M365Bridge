@@ -85,6 +85,66 @@ func IsSandboxHallucination(text string) bool {
 	return matchesAny(text, sandboxHallucinationPatterns)
 }
 
+// toolIntentPhrase matches a statement of intent to use a tool. Tool selection
+// is a protocol decision, not an answer: a turn that announces which tool it
+// will use and then stops leaves the agent loop with nothing to execute.
+var toolIntentPhrase = regexp.MustCompile(
+	`(?i)(\bi(\s+am|\s+will|\s*'ll|\s*'m)\s+(going to\s+)?(now\s+)?(choos|select|us|call|invok|pick)` +
+		`|\bi\s+(choose|select|use|call|invoke|need to use|need to call)\b` +
+		`|\b(choosing|selecting|calling|invoking|using)\s+the\b` +
+		`|\btool\s+to\s+(inspect|check|read|run|list|implement|create|verify)\b)`,
+)
+
+// toolIntentMaxRunes bounds the length of a reply that can be a selection
+// notice. A long passage that names a tool is the explanation the caller asked
+// for, not a stray announcement.
+const toolIntentMaxRunes = 400
+
+// IsToolIntentNarration reports whether the reply only announces which tool it
+// intends to use.
+//
+// Three conditions must hold together: the text names one of the declared
+// tools, it phrases an intent, and it is short. A fence means the answer
+// carries code, which is real content whatever else it says.
+func IsToolIntentNarration(text string, toolNames []string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || len([]rune(trimmed)) > toolIntentMaxRunes {
+		return false
+	}
+	if strings.Contains(trimmed, "```") {
+		return false
+	}
+	if !mentionsDeclaredTool(trimmed, toolNames) {
+		return false
+	}
+	return toolIntentPhrase.MatchString(trimmed)
+}
+
+// mentionsDeclaredTool reports whether the text names one of the declared
+// tools. The spaced form is checked too, because a model writing prose turns
+// read_file into "read file".
+func mentionsDeclaredTool(text string, toolNames []string) bool {
+	lowered := strings.ToLower(text)
+	for _, name := range toolNames {
+		if name == "" {
+			continue
+		}
+		lowerName := strings.ToLower(name)
+		if strings.Contains(lowered, lowerName) {
+			return true
+		}
+		if spaced := strings.ReplaceAll(lowerName, "_", " "); spaced != lowerName && strings.Contains(lowered, spaced) {
+			return true
+		}
+	}
+	return false
+}
+
+// ToolNarrationNotice replaces an answer that stayed an announcement even after
+// the corrective re-ask. An empty or announcement-only turn reads to the client
+// as work in progress that never arrives.
+const ToolNarrationNotice = "The backend named the tool it intended to use but produced no tool call. Nothing was executed; retry this request."
+
 // unverifiedCompletionPatterns match a reply in which the model says it carried
 // the work out itself. The subject is what matters, not the verb: "the file was
 // created in 2019" is a fact about the world, while "I created the file" is a

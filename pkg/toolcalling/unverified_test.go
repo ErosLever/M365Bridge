@@ -1,6 +1,9 @@
 package toolcalling
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestClaimsUnverifiedCompletionCatchesFirstPersonReports(t *testing.T) {
 	claims := []string{
@@ -71,5 +74,55 @@ func TestClaimsUnverifiedCompletionIgnoresTheToolBanInstruction(t *testing.T) {
 	}
 	if ClaimsUnverifiedCompletion(RepeatedCallsNotice) {
 		t.Fatal("the repeated-calls notice trips the completion detector")
+	}
+}
+
+func TestIsToolIntentNarrationCatchesASelectionNotice(t *testing.T) {
+	names := []string{"shell_command", "read_file"}
+	notices := []string{
+		"I am choosing the shell_command tool to inspect relevant files.",
+		"I'll use read_file to look at main.go.",
+		"Selecting the shell_command tool now.",
+		"I need to use the read file tool to answer this.",
+	}
+	for _, notice := range notices {
+		if !IsToolIntentNarration(notice, names) {
+			t.Fatalf("a selection notice was missed: %q", notice)
+		}
+	}
+}
+
+func TestIsToolIntentNarrationLeavesRealContentAlone(t *testing.T) {
+	names := []string{"shell_command", "read_file"}
+	answers := []string{
+		"",
+		"The repository has three packages under pkg/.",
+		"I will use a semicolon here instead of a comma.",
+		"Run this:\n```bash\nshell_command --help\n```\nThat prints the usage.",
+		strings.Repeat("The read_file tool reads a file and I will use it when asked. ", 12),
+	}
+	for _, answer := range answers {
+		if IsToolIntentNarration(answer, names) {
+			t.Fatalf("real content was treated as a selection notice: %.60q", answer)
+		}
+	}
+}
+
+func TestIsToolIntentNarrationNeedsADeclaredToolName(t *testing.T) {
+	if IsToolIntentNarration("I am choosing the best approach for this.", []string{"read_file"}) {
+		t.Fatal("a sentence naming no declared tool was treated as a selection notice")
+	}
+}
+
+func TestIsToolIntentNarrationIgnoresOurOwnPromptText(t *testing.T) {
+	names := []string{"read_file", "run_tests", "web_search", "shell_command"}
+	if IsToolIntentNarration(nativeToolBanInstruction, names) {
+		t.Fatal("the native tool ban instruction trips the narration detector")
+	}
+	if IsToolIntentNarration(RepeatedCallsNotice, names) {
+		t.Fatal("the repeated-calls notice trips the narration detector")
+	}
+	if IsToolIntentNarration(ToolNarrationNotice, names) {
+		t.Fatal("the narration notice trips its own detector")
 	}
 }
