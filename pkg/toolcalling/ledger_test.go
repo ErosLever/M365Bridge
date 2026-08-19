@@ -223,3 +223,52 @@ func TestSimulatedPromptsCarryTheEvidenceNote(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactResultLeavesAShortResultAlone(t *testing.T) {
+	short := "sunny, 24C"
+	if got := compactResult(short); got != short {
+		t.Fatalf("got %q, want the result untouched", got)
+	}
+}
+
+func TestCompactResultKeepsTheHeadAndTheTail(t *testing.T) {
+	head := "FIRST LINE OF THE LOG"
+	tail := "LAST LINE OF THE LOG"
+	long := head + strings.Repeat("x", maxEvidenceResult*2) + tail
+
+	got := compactResult(long)
+	if len(got) >= len(long) {
+		t.Fatalf("compacted length %d, want less than %d", len(got), len(long))
+	}
+	if !strings.HasPrefix(got, head) {
+		t.Fatalf("head was lost: %q", got[:40])
+	}
+	if !strings.HasSuffix(got, tail) {
+		t.Fatalf("tail was lost: %q", got[len(got)-40:])
+	}
+	if !strings.Contains(got, "truncated") || !strings.Contains(got, "bytes") {
+		t.Fatalf("the marker does not report the removed size: %q", got)
+	}
+}
+
+func TestBuildLedgerCompactsTheResultButKeepsTheFailureVerdict(t *testing.T) {
+	// The failing line sits in the middle, which is the part compaction drops.
+	body := strings.Repeat("a", maxEvidenceResult) + "\nexit code 1\n" + strings.Repeat("b", maxEvidenceResult)
+	ledger := BuildLedger(
+		[]LedgerCall{{ID: "call_1", Name: "run_tests", Arguments: `{}`}},
+		[]LedgerResult{{ID: "call_1", Content: body}},
+		1,
+	)
+	if len(ledger.Completed) != 1 {
+		t.Fatalf("completed = %#v, want one record", ledger.Completed)
+	}
+	if !ledger.Completed[0].Failed {
+		t.Fatal("the failure verdict was computed on the compacted text")
+	}
+	if len(ledger.Completed[0].Result) > len(body) {
+		t.Fatal("the result was not compacted")
+	}
+	if len(ledger.Completed[0].Result) > maxEvidenceResult+200 {
+		t.Fatalf("compacted result is %d bytes, want near %d", len(ledger.Completed[0].Result), maxEvidenceResult)
+	}
+}

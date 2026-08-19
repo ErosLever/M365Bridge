@@ -3,6 +3,7 @@ package toolcalling
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -10,6 +11,16 @@ import (
 // A stack trace can be arbitrarily long and only its head distinguishes one
 // failure from another.
 const maxFailureSignature = 500
+
+// maxEvidenceResult caps the result text the ledger carries into the prompt. A
+// build log or a test run is unbounded, and every completed call of the turn is
+// restated on every request, so an uncapped result would grow the prompt until
+// the turn no longer fits.
+const maxEvidenceResult = 4000
+
+// minEvidenceTail is the smallest tail kept when a result is compacted. The end
+// of a command's output usually holds the verdict.
+const minEvidenceTail = 80
 
 // failureSignal matches the wording a tool result uses to report that the tool
 // did not do what it was asked. The ledger uses it to tell an answered call
@@ -90,6 +101,23 @@ func CanonicalArguments(arguments string) string {
 	return string(encoded)
 }
 
+// compactResult shortens a long tool result to a head and a tail around a
+// marker naming how much was removed. The middle of a long log is the least
+// informative part, and the reader is a model that only needs to recognize
+// which result this is.
+func compactResult(result string) string {
+	trimmed := strings.TrimSpace(result)
+	if len(trimmed) <= maxEvidenceResult {
+		return trimmed
+	}
+	head := maxEvidenceResult / 3
+	tail := max(maxEvidenceResult-head-minEvidenceTail, minEvidenceTail)
+	removed := len(trimmed) - head - tail
+	return trimmed[:head] +
+		"\n... [truncated " + strconv.Itoa(removed) + " bytes] ...\n" +
+		trimmed[len(trimmed)-tail:]
+}
+
 // normalizeFailure reduces a failure message to a signature that ignores the
 // numbers inside it and its tail.
 func normalizeFailure(result string) string {
@@ -132,8 +160,11 @@ func BuildLedger(calls []LedgerCall, results []LedgerResult, rounds int) Ledger 
 			ledger.Pending = append(ledger.Pending, evidence)
 			continue
 		}
-		evidence.Result = result
+		// The failure verdict and the repetition signature read the untrimmed
+		// result: the failing line can sit in the middle of a long log, which
+		// is exactly the part compactResult drops.
 		evidence.Failed = failureSignal.MatchString(result)
+		evidence.Result = compactResult(result)
 		ledger.Completed = append(ledger.Completed, evidence)
 
 		signature := callSignature(call.Name, call.Arguments)
