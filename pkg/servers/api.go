@@ -289,14 +289,13 @@ func (api *APIServer) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if len(api.config.APIKeys) > 0 {
-			provided := r.Header.Get("Authorization")
-			if provided == "" {
-				logging.Warnf("Auth: missing Authorization header from %s", r.RemoteAddr)
-				api.sendError(w, http.StatusUnauthorized, "Missing Authorization header")
+			offered := apiKeyCandidates(r)
+			if len(offered) == 0 {
+				logging.Warnf("Auth: no API key header from %s", r.RemoteAddr)
+				api.sendError(w, http.StatusUnauthorized, "Missing API key; send Authorization: Bearer <key> or x-api-key: <key>")
 				return
 			}
-			token := strings.TrimSpace(strings.TrimPrefix(provided, "Bearer "))
-			if !api.isValidAPIKey(token) {
+			if !slices.ContainsFunc(offered, api.isValidAPIKey) {
 				logging.Warnf("Auth: invalid API key from %s", r.RemoteAddr)
 				api.sendError(w, http.StatusUnauthorized, "Invalid API key")
 				return
@@ -304,6 +303,34 @@ func (api *APIServer) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// apiKeyCandidates returns every credential the client offered, in priority
+// order. An Anthropic SDK client sends the key as `x-api-key` under
+// ANTHROPIC_API_KEY and as `Authorization: Bearer` under ANTHROPIC_AUTH_TOKEN,
+// and Claude Code can send both at once with only one of them valid, so every
+// offered credential is checked rather than just the first.
+func apiKeyCandidates(r *http.Request) []string {
+	var offered []string
+	if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" {
+		offered = append(offered, key)
+	}
+	if header := strings.TrimSpace(r.Header.Get("Authorization")); header != "" {
+		// A bare token without the scheme is tolerated because some clients
+		// send the key unprefixed.
+		if key := strings.TrimSpace(trimBearerPrefix(header)); key != "" {
+			offered = append(offered, key)
+		}
+	}
+	return offered
+}
+
+// trimBearerPrefix removes a case-insensitive "Bearer " scheme prefix.
+func trimBearerPrefix(header string) string {
+	if len(header) >= 7 && strings.EqualFold(header[:7], "bearer ") {
+		return header[7:]
+	}
+	return header
 }
 
 // isValidAPIKey checks if the given token matches any configured API key.
