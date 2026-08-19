@@ -4544,7 +4544,11 @@ func countPromptTokens(messages []payload.Message, tools []toolcalling.ToolDef, 
 			total += countTokens(string(encoded))
 		}
 	}
-	if strings.TrimSpace(toolChoice) != "" {
+	// A tool choice only travels with the tools it selects from. The Responses
+	// policy defaults promptChoice to "auto" even for a request that declares
+	// none, so billing it unconditionally would charge every toolless turn for
+	// framing the backend never received.
+	if len(tools) > 0 && strings.TrimSpace(toolChoice) != "" {
 		total += toolChoiceProtocolTokens
 	}
 	return total

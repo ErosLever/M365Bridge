@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/payload"
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/toolcalling"
 )
 
 // usageProbeMessages is the turn every usage test counts, so a divergence
@@ -38,6 +39,30 @@ func TestStructPrintIsNotAPromptCount(t *testing.T) {
 	printed := fmt.Sprint(messages)
 	if !strings.Contains(printed, "[] []") {
 		t.Fatalf("fmt.Sprint no longer prints the empty fields; this guard is stale: %q", printed)
+	}
+}
+
+// The Responses policy defaults its prompt choice to "auto" for every request,
+// including one that declares no tools. Billing that framing would make the
+// same turn cost more on /v1/responses than on /v1/chat/completions.
+func TestToolChoiceFramingNeedsDeclaredTools(t *testing.T) {
+	messages := usageProbeMessages()
+
+	bare := countPromptTokens(messages, nil, "")
+	withDefaultChoice := countPromptTokens(messages, nil, "auto")
+	if bare != withDefaultChoice {
+		t.Fatalf("a tool choice without tools changed the count from %d to %d", bare, withDefaultChoice)
+	}
+
+	tools := []toolcalling.ToolDef{{
+		Type:     "function",
+		Function: toolcalling.ToolDefFunc{Name: "get_weather"},
+	}}
+	withTools := countPromptTokens(messages, tools, "")
+	withToolsAndChoice := countPromptTokens(messages, tools, "auto")
+	if withToolsAndChoice != withTools+toolChoiceProtocolTokens {
+		t.Fatalf("a real tool choice added %d tokens, want %d",
+			withToolsAndChoice-withTools, toolChoiceProtocolTokens)
 	}
 }
 
