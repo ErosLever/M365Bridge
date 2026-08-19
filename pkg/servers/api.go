@@ -1627,7 +1627,13 @@ func (api *APIServer) streamAnthropicComplete(w http.ResponseWriter, messages []
 
 	var finalConvID string
 	var finalToolCalls []client.ToolCall
-	for chunk := range ch {
+	keepalive := time.NewTicker(sseKeepaliveInterval)
+	defer keepalive.Stop()
+	for {
+		chunk, more := nextStreamChunk(ch, keepalive, func() { writeAnthropicKeepalive(w, flusher) })
+		if !more {
+			break
+		}
 		if chunk.Error != nil {
 			errData := map[string]any{
 				"type":  "error",
@@ -1740,7 +1746,13 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 
 	var finalConvID string
 	var finalToolCalls []client.ToolCall
-	for chunk := range ch {
+	keepalive := time.NewTicker(sseKeepaliveInterval)
+	defer keepalive.Stop()
+	for {
+		chunk, more := nextStreamChunk(ch, keepalive, func() { writeSSEKeepalive(w, flusher) })
+		if !more {
+			break
+		}
 		if chunk.Error != nil {
 			if sid != "" {
 				api.ctxCache.Delete("session:" + sid)
@@ -2153,7 +2165,13 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 
 	var finalConvID string
 	var finalToolCalls []client.ToolCall
-	for chunk := range ch {
+	keepalive := time.NewTicker(sseKeepaliveInterval)
+	defer keepalive.Stop()
+	for {
+		chunk, more := nextStreamChunk(ch, keepalive, func() { writeAnthropicKeepalive(w, flusher) })
+		if !more {
+			break
+		}
 		if chunk.Error != nil {
 			if sid != "" {
 				api.ctxCache.Delete("session:" + sid)
@@ -2620,7 +2638,13 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 
 	var finalConvID string
 	var finalToolCalls []client.ToolCall
-	for chunk := range ch {
+	keepalive := time.NewTicker(sseKeepaliveInterval)
+	defer keepalive.Stop()
+	for {
+		chunk, more := nextStreamChunk(ch, keepalive, func() { writeSSEKeepalive(w, flusher) })
+		if !more {
+			break
+		}
 		if chunk.Error != nil {
 			errChunk := map[string]any{
 				"id":      compID,
@@ -3158,6 +3182,49 @@ func (api *APIServer) injectJSONMode(messages *[]payload.Message) {
 	}
 
 	*messages = append([]payload.Message{{Role: "system", Content: instruction}}, *messages...)
+}
+
+// sseKeepaliveInterval bounds how long a streaming response may stay silent.
+// A tool-enabled turn buffers its text until the parse completes, and a turn on
+// a tone that emits no reasoning writes nothing at all until the first content
+// chunk arrives; measured at over nine seconds on a live turn. Clients drop a
+// stream that delivers no bytes for around thirty seconds.
+const sseKeepaliveInterval = 10 * time.Second
+
+// writeSSEKeepalive emits an SSE comment. Every client ignores a comment line,
+// so it keeps the connection alive without entering any field contract.
+func writeSSEKeepalive(w http.ResponseWriter, flusher http.Flusher) {
+	fmt.Fprint(w, ": keepalive\n\n")
+	flusher.Flush()
+}
+
+// writeAnthropicKeepalive emits the ping event the Anthropic wire format
+// defines for this purpose. An SSE comment would work too, but the SDK already
+// knows ping and dispatches it at any point in the stream.
+func writeAnthropicKeepalive(w http.ResponseWriter, flusher http.Flusher) {
+	fmt.Fprint(w, "event: ping\ndata: {\"type\":\"ping\"}\n\n")
+	flusher.Flush()
+}
+
+// nextStreamChunk returns the next upstream chunk, writing a keepalive frame
+// through write for every interval that passes while the upstream is silent.
+// The second result is false once the channel closes.
+//
+// The keepalive shares the caller's goroutine on purpose: http.ResponseWriter
+// tolerates no concurrent writes, so a background ticker goroutine would
+// interleave frames with the chunk loop.
+func nextStreamChunk(ch <-chan client.StreamChunk, keepalive *time.Ticker, write func()) (client.StreamChunk, bool) {
+	for {
+		select {
+		case chunk, ok := <-ch:
+			if ok {
+				keepalive.Reset(sseKeepaliveInterval)
+			}
+			return chunk, ok
+		case <-keepalive.C:
+			write()
+		}
+	}
 }
 
 // withoutBackendToolCalls drops the tool calls M365 raises for its own built-ins
@@ -5459,7 +5526,13 @@ func (api *APIServer) streamResponses(
 	}
 
 	var finalConvID string
-	for chunk := range ch {
+	keepalive := time.NewTicker(sseKeepaliveInterval)
+	defer keepalive.Stop()
+	for {
+		chunk, more := nextStreamChunk(ch, keepalive, func() { writeSSEKeepalive(w, flusher) })
+		if !more {
+			break
+		}
 		if chunk.Error != nil {
 			if sid != "" {
 				api.ctxCache.Delete("session:" + sid)
@@ -6203,7 +6276,13 @@ func (api *APIServer) streamResponsesCompact(w http.ResponseWriter, messages []p
 	fullText := ""
 
 	var finalToolCalls []client.ToolCall
-	for chunk := range ch {
+	keepalive := time.NewTicker(sseKeepaliveInterval)
+	defer keepalive.Stop()
+	for {
+		chunk, more := nextStreamChunk(ch, keepalive, func() { writeSSEKeepalive(w, flusher) })
+		if !more {
+			break
+		}
 		if chunk.Error != nil {
 			logging.Errorf("streamResponsesCompact: stream error: %v", chunk.Error)
 			if sid != "" {
