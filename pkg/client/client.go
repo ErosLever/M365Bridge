@@ -674,13 +674,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 											if lastMsg, ok := msgs[len(msgs)-1].(map[string]any); ok {
 												if carriesAnswerText(lastMsg) {
 													if newText, ok := lastMsg["text"].(string); ok && newText != "" {
-														if newText != accText {
-															var chunk string
-															if strings.HasPrefix(newText, accText) {
-																chunk = newText[len(accText):]
-															} else {
-																chunk = newText
-															}
+														if chunk, advanced := snapshotDelta(accText, newText); advanced {
 															accText = newText
 															if chunk != "" {
 																if !emit(StreamChunk{Text: chunk, IsFinal: false}) {
@@ -787,6 +781,36 @@ func (c *M365Client) sendRecv(conn *websocket.Conn, payload string) (string, err
 			}
 		}
 	}
+}
+
+// snapshotDelta reports the text a message snapshot adds to what was already
+// emitted, and whether the snapshot may become the new baseline.
+//
+// A turn arrives over two channels that carry the same answer. writeAtCursor
+// appends incrementally and renders citations as resolved markdown links, while
+// the messages[] snapshots restate the whole answer with raw citation markers.
+// The two encodings diverge mid-string, so a snapshot can fail a prefix test
+// against an accumulation that already ends with the same text: one measured
+// turn produced a 667-byte snapshot against 724 bytes emitted, with identical
+// tails. Emitting that snapshot as new text delivered the answer twice.
+//
+// So a snapshot only ever contributes its prefix extension. When it diverges
+// after text has already gone out, it is a re-encoding of delivered content and
+// contributes nothing; the longer accumulation stays the baseline, because
+// later writeAtCursor deltas append to what was emitted rather than to the
+// snapshot. A snapshot that arrives before any text is the answer itself, which
+// is how a turn that never streams still produces one.
+func snapshotDelta(emitted, snapshot string) (string, bool) {
+	if snapshot == emitted {
+		return "", false
+	}
+	if strings.HasPrefix(snapshot, emitted) {
+		return snapshot[len(emitted):], true
+	}
+	if emitted == "" {
+		return snapshot, true
+	}
+	return "", false
 }
 
 // carriesAnswerText reports whether a backend message holds assistant answer
