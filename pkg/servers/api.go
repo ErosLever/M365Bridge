@@ -1107,6 +1107,11 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		api.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	ledger := buildToolLedger(req.Messages)
+	if api.exceededToolRoundLimit(ledger) {
+		api.sendToolRoundLimitError(w, ledger)
+		return
+	}
 
 	// Handle JSON mode
 	if req.ResponseFormat != nil {
@@ -1347,6 +1352,11 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 	if err := validateToolResultMessages(req.Messages); err != nil {
 		logging.Errorf("handleAnthropicMessages: %v", err)
 		api.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ledger := buildToolLedger(req.Messages)
+	if api.exceededToolRoundLimit(ledger) {
+		api.sendToolRoundLimitError(w, ledger)
 		return
 	}
 
@@ -3220,6 +3230,93 @@ func validateToolResultMessages(messages []payload.Message) error {
 	return nil
 }
 
+// activeToolMessages returns the messages belonging to the current user turn.
+//
+// The turn starts at the last user message that carries no tool result: in the
+// Anthropic shape every tool result arrives as a user message, so taking the
+// plain last user message would land inside the loop instead of at its start.
+// Earlier turns stay out of the round count but remain in the history, where
+// they are still evidence.
+func activeToolMessages(messages []payload.Message) []payload.Message {
+	start := 0
+	for i := range messages {
+		if messages[i].Role != "user" || len(messages[i].ToolResults) > 0 {
+			continue
+		}
+		start = i
+	}
+	return messages[start:]
+}
+
+// buildToolLedger reconstructs the evidence of the client-driven tool loop from
+// the current user turn. The server holds no state across such a loop, so the
+// incoming history is the only record of what already ran.
+func buildToolLedger(messages []payload.Message) toolcalling.Ledger {
+	active := activeToolMessages(messages)
+
+	var calls []toolcalling.LedgerCall
+	var results []toolcalling.LedgerResult
+	rounds := 0
+	for i := range active {
+		if len(active[i].ToolCalls) > 0 {
+			rounds++
+		}
+		for _, call := range active[i].ToolCalls {
+			calls = append(calls, toolcalling.LedgerCall{
+				ID:        call.ID,
+				Name:      call.Name,
+				Arguments: call.Arguments,
+			})
+		}
+		for _, result := range active[i].ToolResults {
+			results = append(results, toolcalling.LedgerResult{
+				ID:      result.ID,
+				Content: result.Content,
+			})
+		}
+	}
+	return toolcalling.BuildLedger(calls, results, rounds)
+}
+
+// toolRoundLimitCode marks a client-driven tool loop that ran past its cap.
+const toolRoundLimitCode = "tool_round_limit"
+
+// exceededToolRoundLimit reports whether the client has driven more tool rounds
+// within this user turn than the configuration allows.
+func (api *APIServer) exceededToolRoundLimit(ledger toolcalling.Ledger) bool {
+	limit := api.config.MaxToolRounds
+	if limit <= 0 {
+		limit = models.DefaultMaxToolRounds
+	}
+	return ledger.Rounds > limit
+}
+
+// sendToolRoundLimitError stops a client-driven tool loop that is not
+// converging. HTTP 409 is not a status the Anthropic SDK expects, but an
+// explicit refusal is better than answering forever while the client keeps
+// asking for one more round.
+func (api *APIServer) sendToolRoundLimitError(w http.ResponseWriter, ledger toolcalling.Ledger) {
+	limit := api.config.MaxToolRounds
+	if limit <= 0 {
+		limit = models.DefaultMaxToolRounds
+	}
+	logging.Warnf(
+		"tool round limit reached: rounds=%d limit=%d completed=%d repeatedCall=%v repeatedFailure=%v",
+		ledger.Rounds, limit, len(ledger.Completed), ledger.RepeatedCall, ledger.RepeatedFailure,
+	)
+	message := fmt.Sprintf(
+		"tool round limit reached: this turn drove %d tool rounds with %d completed calls, above the limit of %d; raise M365_MAX_TOOL_ROUNDS or start a new turn",
+		ledger.Rounds, len(ledger.Completed), limit,
+	)
+	api.sendJSON(w, http.StatusConflict, map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    toolRoundLimitCode,
+			"code":    http.StatusConflict,
+		},
+	})
+}
+
 // anthropicToolChoiceString normalizes the Anthropic tool_choice field to a
 // string ("any", "auto", "tool", or "") for prompt-building purposes.
 func anthropicToolChoiceString(toolChoice map[string]any) string {
@@ -4143,6 +4240,11 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if err := validateToolResultMessages(messages); err != nil {
 		logging.Errorf("handleResponses: %v", err)
 		api.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ledger := buildToolLedger(messages)
+	if api.exceededToolRoundLimit(ledger) {
+		api.sendToolRoundLimitError(w, ledger)
 		return
 	}
 

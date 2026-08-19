@@ -166,11 +166,25 @@ type Config struct {
 	CodeToolMaxIterations int
 	ContextWindowTokens   int
 	MaxOutputTokens       int
+	// MaxToolRounds caps the tool rounds a client may drive within one user
+	// turn. The server keeps no state across such a loop, so without a cap a
+	// client that never stops calling tools keeps the upstream busy forever.
+	MaxToolRounds int
 	// ImageHostAllowlist names the hosts a generated-image URL may point at.
 	// Downloads send an access token, so an unlisted host must never be
 	// contacted. A leading dot matches that domain and its subdomains.
 	ImageHostAllowlist []string
 }
+
+const (
+	// DefaultMaxToolRounds is the tool round cap for one user turn when
+	// M365_MAX_TOOL_ROUNDS is unset. An agent session rarely needs more than a
+	// few dozen rounds to answer a single request.
+	DefaultMaxToolRounds = 32
+	// MaxToolRoundsCeiling caps what M365_MAX_TOOL_ROUNDS can raise the limit
+	// to, so a misconfigured value cannot remove the protection outright.
+	MaxToolRoundsCeiling = 512
+)
 
 // DefaultImageHostAllowlist holds the Microsoft hosts that serve generated
 // images. The designerapp access token is issued for this resource, so it must
@@ -199,6 +213,7 @@ func LoadConfig() *Config {
 		ImageHostAllowlist:    getEnvHostList("M365_IMAGE_HOST_ALLOWLIST", DefaultImageHostAllowlist),
 		ContextWindowTokens:   getEnvInt("M365_CONTEXT_WINDOW", 1_000_000),
 		MaxOutputTokens:       getEnvInt("M365_MAX_OUTPUT_TOKENS", 1_000_000),
+		MaxToolRounds:         min(getEnvInt("M365_MAX_TOOL_ROUNDS", DefaultMaxToolRounds), MaxToolRoundsCeiling),
 	}
 
 	logging.Infof("LoadConfig: tenantID=%s userOID=%s clientID=%s apiKeys=%d", cfg.TenantID, cfg.UserOID, cfg.ClientID[:min(8, len(cfg.ClientID))]+"...", len(cfg.APIKeys))
