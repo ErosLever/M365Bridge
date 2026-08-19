@@ -110,6 +110,10 @@ type ImageData struct {
 	Base64    string // raw base64 data without data: prefix
 	MediaType string // e.g. "image/png"
 	FileName  string // e.g. "upload.png"
+	// RemoteURL holds a caller-supplied https URL whose bytes have not been
+	// fetched yet. This package performs no network I/O, so the server layer
+	// resolves it before upload; Base64 is empty until then.
+	RemoteURL string
 }
 
 // MessageAnnotation represents an image annotation attached to a WebSocket message.
@@ -193,10 +197,14 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 			}
 		case "image_url":
 			// OpenAI format: {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+			// The url may also be a remote https address, which the server
+			// layer fetches later because this package does no network I/O.
 			if imgURL, ok := block["image_url"].(map[string]any); ok {
 				if url, ok := imgURL["url"].(string); ok {
 					if img := parseDataURL(url); img != nil {
 						m.Images = append(m.Images, *img)
+					} else if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
+						m.Images = append(m.Images, ImageData{RemoteURL: url})
 					}
 				}
 			}

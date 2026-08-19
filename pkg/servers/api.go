@@ -2883,7 +2883,119 @@ func (api *APIServer) sendAnthropicSSE(w http.ResponseWriter, eventType string, 
 // uploadImagesAndAnnotate uploads any images found in message Images fields
 // to the M365 backend and attaches the resulting docId annotations to the
 // last message with images. This enables multimodal image input support.
+// Limits for caller-supplied remote images. They bound how much work one
+// request can make the proxy do on someone else's behalf.
+const (
+	remoteImageMaxBytes   = 20 << 20
+	remoteImageMaxPerTurn = 16
+	remoteImageTimeout    = 30 * time.Second
+)
+
+// errRemoteImageRejected marks a caller-supplied image URL the proxy refuses to
+// fetch.
+var errRemoteImageRejected = errors.New("remote image URL rejected")
+
+// validateRemoteImageURL decides whether a caller-supplied image URL may be
+// fetched. No credential travels on this request, so any public https host is
+// acceptable; the guard exists to stop the proxy being used to reach addresses
+// inside its own network.
+func validateRemoteImageURL(rawURL string) error {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errRemoteImageRejected, err)
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("%w: scheme %q is not https", errRemoteImageRejected, parsed.Scheme)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return fmt.Errorf("%w: URL has no host", errRemoteImageRejected)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return fmt.Errorf("%w: %q does not resolve", errRemoteImageRejected, host)
+	}
+	if slices.ContainsFunc(ips, ipDisallowed) {
+		return fmt.Errorf("%w: %q resolves to a non-public address", errRemoteImageRejected, host)
+	}
+	return nil
+}
+
+// fetchRemoteImage downloads a caller-supplied image and returns it as base64
+// with its media type. It sends no Authorization header, so a hostile URL
+// learns nothing beyond the fact that the proxy fetched it.
+func fetchRemoteImage(rawURL string) (base64Data, mediaType string, err error) {
+	if err := validateRemoteImageURL(rawURL); err != nil {
+		return "", "", err
+	}
+
+	client := &http.Client{Timeout: remoteImageTimeout}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		return "", "", fmt.Errorf("fetch remote image: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("fetch remote image: HTTP %d", resp.StatusCode)
+	}
+
+	// One extra byte distinguishes "exactly at the limit" from "truncated".
+	body, err := io.ReadAll(io.LimitReader(resp.Body, remoteImageMaxBytes+1))
+	if err != nil {
+		return "", "", fmt.Errorf("read remote image: %w", err)
+	}
+	if len(body) > remoteImageMaxBytes {
+		return "", "", fmt.Errorf("%w: larger than %d bytes", errRemoteImageRejected, remoteImageMaxBytes)
+	}
+
+	mediaType = resp.Header.Get("Content-Type")
+	if semicolon := strings.IndexByte(mediaType, ';'); semicolon >= 0 {
+		mediaType = strings.TrimSpace(mediaType[:semicolon])
+	}
+	if !strings.HasPrefix(mediaType, "image/") {
+		return "", "", fmt.Errorf("%w: content type %q is not an image", errRemoteImageRejected, mediaType)
+	}
+	return base64.StdEncoding.EncodeToString(body), mediaType, nil
+}
+
+// resolveRemoteImages fetches every caller-supplied image URL in a message and
+// drops the ones that cannot be fetched, so a single bad URL does not fail the
+// whole turn.
+func resolveRemoteImages(msg *payload.Message) {
+	resolved := make([]payload.ImageData, 0, len(msg.Images))
+	fetched := 0
+	for _, img := range msg.Images {
+		if img.RemoteURL == "" {
+			resolved = append(resolved, img)
+			continue
+		}
+		if fetched >= remoteImageMaxPerTurn {
+			logging.Warnf("resolveRemoteImages: skipping image beyond the per-turn limit of %d", remoteImageMaxPerTurn)
+			continue
+		}
+		fetched++
+		data, mediaType, err := fetchRemoteImage(img.RemoteURL)
+		if err != nil {
+			logging.Errorf("resolveRemoteImages: %v", err)
+			continue
+		}
+		resolved = append(resolved, payload.ImageData{
+			Base64:    data,
+			MediaType: mediaType,
+			FileName:  "upload." + extFromMediaType(mediaType),
+		})
+	}
+	msg.Images = resolved
+}
+
 func (api *APIServer) uploadImagesAndAnnotate(messages *[]payload.Message, convID string) {
+	// Caller-supplied URLs arrive unfetched, so resolve them before the last
+	// message with images is chosen: a message whose only images were rejected
+	// must not be treated as an image turn.
+	for i := range *messages {
+		resolveRemoteImages(&(*messages)[i])
+	}
+
 	// Find the last message with images
 	lastImgIdx := -1
 	for i := range slices.Backward(*messages) {
