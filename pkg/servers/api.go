@@ -1728,6 +1728,14 @@ func (api *APIServer) streamChatCompletions(ctx context.Context, w http.Response
 		return
 	}
 
+	// Commit the response headers before the upstream turn starts. The first
+	// chunk can take almost ten seconds on a tool-enabled turn, and a client
+	// that sees no bytes at all cannot tell a slow provider from a dead one.
+	refreshStreamDeadline(w)
+	if err := writeSSEKeepalive(w, flusher); err != nil {
+		return
+	}
+
 	chunkID := fmt.Sprintf("chatcmpl-%s", uuid.New().String())
 	openaiModel := cfg.OpenAIID
 
@@ -2626,6 +2634,14 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		api.sendError(w, http.StatusInternalServerError, "Streaming not supported")
+		return
+	}
+
+	// Commit the response headers before the upstream turn starts. The first
+	// chunk can take almost ten seconds on a tool-enabled turn, and a client
+	// that sees no bytes at all cannot tell a slow provider from a dead one.
+	refreshStreamDeadline(w)
+	if err := writeSSEKeepalive(w, flusher); err != nil {
 		return
 	}
 
