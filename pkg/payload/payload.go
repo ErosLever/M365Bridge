@@ -104,6 +104,10 @@ type Message struct {
 	// rebuild the evidence ledger for a client-driven tool loop.
 	ToolCalls   []ToolCallRecord   `json:"-"`
 	ToolResults []ToolResultRecord `json:"-"`
+	// ToolProgress marks a message that reports a client tool still running.
+	// It travels as a user message so the model reads it, but it neither
+	// answers the pending call nor starts a new user turn.
+	ToolProgress bool `json:"-"`
 }
 
 // ToolCallRecord is one tool call announced by an assistant message, kept in

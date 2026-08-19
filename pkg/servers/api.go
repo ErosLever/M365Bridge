@@ -3320,15 +3320,16 @@ func validateToolResultMessages(messages []payload.Message) error {
 
 // activeToolMessages returns the messages belonging to the current user turn.
 //
-// The turn starts at the last user message that carries no tool result: in the
-// Anthropic shape every tool result arrives as a user message, so taking the
-// plain last user message would land inside the loop instead of at its start.
+// The turn starts at the last user message that carries neither a tool result
+// nor a progress note: in the Anthropic shape every tool result arrives as a
+// user message, and a progress note is transport metadata, so taking the plain
+// last user message would land inside the loop instead of at its start.
 // Earlier turns stay out of the round count but remain in the history, where
 // they are still evidence.
 func activeToolMessages(messages []payload.Message) []payload.Message {
 	start := 0
 	for i := range messages {
-		if messages[i].Role != "user" || len(messages[i].ToolResults) > 0 {
+		if messages[i].Role != "user" || len(messages[i].ToolResults) > 0 || messages[i].ToolProgress {
 			continue
 		}
 		start = i
@@ -4549,6 +4550,31 @@ func responsesInputToMessages(input any) []payload.Message {
 				Content:   fmt.Sprintf("Tool call: %s(%s)", name, input),
 				ToolCalls: []payload.ToolCallRecord{{ID: callID, Name: name, Arguments: input}},
 			})
+			continue
+		}
+
+		// A long-running client tool can report intermediate progress before it
+		// has a result. The item is transport metadata: it must reach the model
+		// as context but must never satisfy the pending call, or the loop would
+		// continue on an unfinished tool.
+		if itemType == "function_call_progress" {
+			callID, _ := m["call_id"].(string)
+			message, _ := m["message"].(string)
+			if strings.TrimSpace(callID) == "" || strings.TrimSpace(message) == "" {
+				logging.Debugf("responsesInputToMessages: dropping a function_call_progress item without call_id or message")
+				continue
+			}
+			phase, _ := m["phase"].(string)
+			if phase == "" {
+				phase = "running"
+			}
+			text := fmt.Sprintf("[Tool Progress (call_id: %s, phase: %s)]\n%s", callID, phase, message)
+			if output, _ := m["output"].(string); output != "" {
+				text += "\n" + output
+			}
+			// The role stays "user": a "tool" role would be flattened and
+			// counted as a result by the history and the evidence ledger.
+			messages = append(messages, payload.Message{Role: "user", Content: text, ToolProgress: true})
 			continue
 		}
 

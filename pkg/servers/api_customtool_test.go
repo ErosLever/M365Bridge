@@ -93,3 +93,47 @@ func TestResponsesInputReadsCustomToolHistory(t *testing.T) {
 		t.Fatalf("a matching custom tool pair was rejected: %v", err)
 	}
 }
+
+func TestFunctionCallProgressReachesTheModelWithoutAnsweringTheCall(t *testing.T) {
+	messages := responsesInputToMessages([]any{
+		map[string]any{"type": "function_call", "call_id": "fc_1", "name": "run_tests", "arguments": "{}"},
+		map[string]any{"type": "function_call_progress", "call_id": "fc_1", "phase": "running", "message": "compiling packages", "output": "3 of 9 done"},
+	})
+
+	if len(messages) != 2 {
+		t.Fatalf("messages = %d, want the call and its progress note", len(messages))
+	}
+	progress := messages[1]
+	if progress.Role != "user" {
+		t.Fatalf("progress role = %q, want user so it is not read as a result", progress.Role)
+	}
+	if !strings.Contains(progress.Content, "compiling packages") || !strings.Contains(progress.Content, "3 of 9 done") {
+		t.Fatalf("progress content lost detail: %q", progress.Content)
+	}
+	if len(progress.ToolResults) != 0 {
+		t.Fatalf("progress produced tool results %#v, want none", progress.ToolResults)
+	}
+
+	// The call is still pending: nothing answered it.
+	ledger := buildToolLedger(messages)
+	if len(ledger.Completed) != 0 {
+		t.Fatalf("completed = %#v, want the call still unanswered", ledger.Completed)
+	}
+	if len(ledger.Pending) != 1 {
+		t.Fatalf("pending = %#v, want the announced call", ledger.Pending)
+	}
+	if err := validateToolResultMessages(messages); err != nil {
+		t.Fatalf("a progress note was rejected as a bad tool result: %v", err)
+	}
+}
+
+func TestFunctionCallProgressWithoutTheRequiredFieldsIsDropped(t *testing.T) {
+	messages := responsesInputToMessages([]any{
+		map[string]any{"type": "function_call_progress", "call_id": "", "message": "working"},
+		map[string]any{"type": "function_call_progress", "call_id": "fc_1", "message": "   "},
+	})
+	// Nothing survived, so the converter falls back to one empty user message.
+	if len(messages) != 1 || messages[0].Content != "" || messages[0].ToolProgress {
+		t.Fatalf("messages = %#v, want both incomplete items dropped", messages)
+	}
+}
