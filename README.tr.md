@@ -608,9 +608,17 @@ Prompt ve completion token sayıları yerel olarak üretilen tahminlerdir; M365 
 {"prompt_tokens": 42, "completion_tokens": 17, "total_tokens": 59, "usage_source": "tiktoken_o200k_base_estimate"}
 ```
 
-`usage_source` standart dışı bir alandır; standart alanlar anlamını ve yerini korur. Akışlı veya akışsız, her uç nokta usage bildirir.
+`usage_source` standart dışı bir alandır; standart alanlar anlamını ve yerini korur. Akışlı veya akışsız, her uç nokta usage bildirir; kendi formatında usage nesnesi tanımlı olmayan `/v1/complete` dahil.
 
-`/v1/chat/completions` ve `/v1/completions` OpenAI `stream_options` nesnesini kabul eder. `{"include_usage": false}` akışlı bir turdan usage nesnesini kaldırır. `stream_options` hiç verilmezse usage nesnesi gönderilir; bu, OpenAI'nin `false` olan kendi varsayılanından farklıdır: bu proxy her akışlı turda usage bildirmiştir ve buradaki istemciler onu okur. Prompt token'ları mesaj rolleri ve içerikleri, serileştirilmiş tool tanımları ve `tool_choice` değeri üzerinden, artı mesaj başına ve tool başına sabit bir çerçeve payı ile sayılır. Önceki sürümler encoder'ı mesaj diliminin Go gösterimi üzerinde çalıştırıyordu, yani struct alan adları da prompt içeriği olarak faturalanıyordu. Bu nedenle aynı istek için sayılar öncekinden düşüktür.
+Anthropic uç noktaları aynı sayıları kendi alan adlarıyla bildirir, artı Anthropic formatının tanımlamadığı iki alan:
+
+```json
+{"input_tokens": 42, "output_tokens": 17, "reasoning_tokens": 6, "usage_source": "tiktoken_o200k_base_estimate"}
+```
+
+Akışlı bir `/v1/messages` turu bu nesneyi Anthropic wire format'ının böldüğü gibi böler: `message_start` girdi tarafını, `message_delta` çıktı tarafını taşır ve ikisi de kaynağını bildirir. Akışlı bir `/v1/complete` turu usage'ı son `completion` olayında bildirir, çünkü önceki olaylar delta taşır.
+
+`/v1/chat/completions` ve `/v1/completions` OpenAI `stream_options` nesnesini kabul eder. `{"include_usage": false}` akışlı bir turdan usage nesnesini kaldırır. `stream_options` hiç verilmezse usage nesnesi gönderilir; bu, OpenAI'nin `false` olan kendi varsayılanından farklıdır: bu proxy her akışlı turda usage bildirmiştir ve buradaki istemciler onu okur. Prompt token'ları mesaj rolleri ve içerikleri, serileştirilmiş tool tanımları ve `tool_choice` değeri üzerinden, artı mesaj başına ve tool başına sabit bir çerçeve payı ile sayılır. `tool_choice` payı yalnızca istek tool tanımladığında uygulanır. Aynı tur bu nedenle her uç noktada aynı maliyeti verir.
 
 ## MCP Sunucusu
 

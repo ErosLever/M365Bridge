@@ -608,9 +608,17 @@ Prompt and completion token counts are estimates produced locally; the M365 back
 {"prompt_tokens": 42, "completion_tokens": 17, "total_tokens": 59, "usage_source": "tiktoken_o200k_base_estimate"}
 ```
 
-`usage_source` is a non-standard field; the standard fields keep their meaning and position. Every endpoint reports usage, streaming and non-streaming alike.
+`usage_source` is a non-standard field; the standard fields keep their meaning and position. Every endpoint reports usage, streaming and non-streaming alike, including `/v1/complete`, whose own format defines no usage object.
 
-`/v1/chat/completions` and `/v1/completions` accept the OpenAI `stream_options` object. `{"include_usage": false}` withholds the usage object from a streaming turn. Leaving `stream_options` out keeps the usage object, which differs from OpenAI's own default of `false`: this proxy has always reported usage on every streaming turn and clients here read it. Prompt tokens are counted from the message roles and contents, the serialized tool definitions and the `tool_choice` value, plus a fixed per-message and per-tool framing allowance. Earlier versions ran the encoder over the Go representation of the message slice, so struct field names were billed as prompt content. Counts are therefore lower than before for the same request.
+The Anthropic endpoints report the same counts under their own field names, plus two fields the Anthropic format does not define:
+
+```json
+{"input_tokens": 42, "output_tokens": 17, "reasoning_tokens": 6, "usage_source": "tiktoken_o200k_base_estimate"}
+```
+
+A streaming `/v1/messages` turn splits that object the way the Anthropic wire format does: `message_start` carries the input side, `message_delta` carries the output side, and both name their source. A streaming `/v1/complete` turn reports usage on its final `completion` event, because the earlier events carry deltas.
+
+`/v1/chat/completions` and `/v1/completions` accept the OpenAI `stream_options` object. `{"include_usage": false}` withholds the usage object from a streaming turn. Leaving `stream_options` out keeps the usage object, which differs from OpenAI's own default of `false`: this proxy has always reported usage on every streaming turn and clients here read it. Prompt tokens are counted from the message roles and contents, the serialized tool definitions and the `tool_choice` value, plus a fixed per-message and per-tool framing allowance. The `tool_choice` allowance applies only when the request declared tools. The same turn therefore costs the same on every endpoint.
 
 ## MCP Server
 
