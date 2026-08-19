@@ -616,13 +616,7 @@ func (api *APIServer) sendThrottledError(w http.ResponseWriter) {
 	if summary := info.Summary(); summary != "" {
 		message = message + " (" + summary + ")"
 	}
-	api.sendJSON(w, http.StatusTooManyRequests, map[string]any{
-		"error": map[string]any{
-			"message": message,
-			"type":    upstreamThrottledCode,
-			"code":    http.StatusTooManyRequests,
-		},
-	})
+	api.sendErrorCode(w, http.StatusTooManyRequests, upstreamThrottledCode, message)
 }
 
 // upstreamContentBlockedCode marks a reply that is M365's canned content
@@ -637,13 +631,8 @@ const upstreamContentBlockedCode = "upstream_content_blocked"
 // answer".
 func (api *APIServer) sendContentBlockedError(w http.ResponseWriter, reply string) {
 	logging.Warn("upstream content refusal: M365 declined the request instead of answering")
-	api.sendJSON(w, http.StatusBadGateway, map[string]any{
-		"error": map[string]any{
-			"message": "M365 declined this request: " + strings.TrimSpace(reply),
-			"type":    upstreamContentBlockedCode,
-			"code":    http.StatusBadGateway,
-		},
-	})
+	api.sendErrorCode(w, http.StatusBadGateway, upstreamContentBlockedCode,
+		"M365 declined this request: "+strings.TrimSpace(reply))
 }
 
 // blockedByContentPolicy reports whether a finished turn is a content refusal
@@ -2953,11 +2942,19 @@ func (api *APIServer) sendJSON(w http.ResponseWriter, statusCode int, data any) 
 
 // sendError sends an error response.
 func (api *APIServer) sendError(w http.ResponseWriter, statusCode int, message string) {
+	api.sendErrorCode(w, statusCode, openAIErrorCode(statusCode), message)
+}
+
+// sendErrorCode sends an error body in the OpenAI shape: the category in
+// "type", a machine-readable string in "code". Callers with a specific code,
+// such as an exhausted quota, pass it here; sendError derives the default one
+// from the status.
+func (api *APIServer) sendErrorCode(w http.ResponseWriter, statusCode int, code, message string) {
 	api.sendJSON(w, statusCode, map[string]any{
 		"error": map[string]any{
 			"message": message,
-			"type":    "error",
-			"code":    statusCode,
+			"type":    openAIErrorType(statusCode),
+			"code":    code,
 		},
 	})
 }
@@ -3614,13 +3611,7 @@ func (api *APIServer) sendToolRoundLimitError(w http.ResponseWriter, ledger tool
 		"tool round limit reached: this turn drove %d tool rounds with %d completed calls, above the limit of %d; raise M365_MAX_TOOL_ROUNDS or start a new turn",
 		ledger.Rounds, len(ledger.Completed), limit,
 	)
-	api.sendJSON(w, http.StatusConflict, map[string]any{
-		"error": map[string]any{
-			"message": message,
-			"type":    toolRoundLimitCode,
-			"code":    http.StatusConflict,
-		},
-	})
+	api.sendErrorCode(w, http.StatusConflict, toolRoundLimitCode, message)
 }
 
 // anthropicToolChoiceString normalizes the Anthropic tool_choice field to a

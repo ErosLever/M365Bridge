@@ -82,13 +82,17 @@ func TestChatCompletionsRejectsARunawayToolLoop(t *testing.T) {
 		Error struct {
 			Message string `json:"message"`
 			Type    string `json:"type"`
+			Code    string `json:"code"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
-	if decoded.Error.Type != toolRoundLimitCode {
-		t.Fatalf("error type = %q, want %q", decoded.Error.Type, toolRoundLimitCode)
+	if decoded.Error.Code != toolRoundLimitCode {
+		t.Fatalf("error code = %q, want %q", decoded.Error.Code, toolRoundLimitCode)
+	}
+	if decoded.Error.Type != "invalid_request_error" {
+		t.Fatalf("error type = %q, want the OpenAI category", decoded.Error.Type)
 	}
 	if !strings.Contains(decoded.Error.Message, "5 tool rounds") {
 		t.Fatalf("message %q does not report the round count", decoded.Error.Message)
