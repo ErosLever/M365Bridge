@@ -408,19 +408,7 @@ func (api *APIServer) handleModels(w http.ResponseWriter, r *http.Request) {
 
 	modelList := make([]map[string]any, 0, len(ids))
 	for _, id := range ids {
-		modelList = append(modelList, map[string]any{
-			"id":                id,
-			"object":            "model",
-			"created":           1700000000,
-			"owned_by":          byID[id].OwnerOrDefault(),
-			"context_window":    contextWindow,
-			"max_input_tokens":  maxInput,
-			"max_output_tokens": maxOutput,
-			// Every model reaches caller-defined tools through the simulated
-			// tool calling layer, so the capability is a property of the proxy
-			// rather than of the tone.
-			"supports_tools": true,
-		})
+		modelList = append(modelList, modelCatalogEntry(id, byID[id], contextWindow, maxInput, maxOutput))
 	}
 
 	response := map[string]any{
@@ -430,6 +418,118 @@ func (api *APIServer) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.sendJSON(w, http.StatusOK, response)
+}
+
+// codexBaseInstructions is advertised in the model catalog. Codex builds its
+// own request instructions from it; the proxy never forwards it upstream.
+const codexBaseInstructions = "You are a helpful AI assistant. When asked to write code, always provide the complete implementation — never truncate, abbreviate, or return only a fragment. Write full, working code with all logic included."
+
+// modelCatalogEntry builds one /v1/models entry.
+//
+// Capability fields appear both at the top level and under `capabilities`
+// because OpenAI-compatible clients disagree on where to look, and Codex reads
+// a further set of fields that plain OpenAI clients ignore.
+func modelCatalogEntry(id string, cfg models.ModelConfig, contextWindow, maxInput, maxOutput int) map[string]any {
+	modalities := []string{"text", "image"}
+	features := []string{"tools", "function_calling", "streaming", "reasoning", "vision"}
+	capabilities := map[string]any{
+		"chat_completions":           true,
+		"responses":                  true,
+		"streaming":                  true,
+		"tools":                      true,
+		"supports_tools":             true,
+		"tool_calls":                 true,
+		"function_calling":           true,
+		"supports_function_calling":  true,
+		"reasoning":                  true,
+		"reasoning_efforts":          models.ReasoningEffortPresets,
+		"supported_reasoning_levels": models.ReasoningEffortPresets,
+		"reasoning_mode":             "gateway_tone_routing",
+		"vision":                     true,
+		"supports_vision":            true,
+		"modalities":                 modalities,
+		"input_modalities":           modalities,
+		"output_modalities":          []string{"text"},
+		"supported_features":         features,
+	}
+
+	return map[string]any{
+		"id":       id,
+		"slug":     id,
+		"object":   "model",
+		"created":  1700000000,
+		"owned_by": cfg.OwnerOrDefault(),
+
+		"display_name":      id,
+		"description":       "Public model endpoint.",
+		"visibility":        "list",
+		"supported_in_api":  true,
+		"priority":          1,
+		"base_instructions": codexBaseInstructions,
+		"model_messages":    codexModelMessages(),
+
+		"context_window":                   contextWindow,
+		"max_context_window":               contextWindow,
+		"effective_context_window_percent": 95,
+		"max_input_tokens":                 maxInput,
+		"max_output_tokens":                maxOutput,
+		"truncation_policy":                map[string]any{"mode": "tokens", "limit": 10000},
+
+		"default_reasoning_level":      "medium",
+		"supports_reasoning_summaries": true,
+		"default_reasoning_summary":    "none",
+		"supported_reasoning_levels":   models.ReasoningEffortPresets,
+		"support_verbosity":            true,
+		"default_verbosity":            "low",
+
+		// Every model reaches caller-defined tools through the simulated tool
+		// calling layer, so tool support is a property of the proxy rather than
+		// of the tone.
+		"supports_tools":                 true,
+		"tool_calls":                     true,
+		"function_calling":               true,
+		"supports_function_calling":      true,
+		"supports_parallel_tool_calls":   true,
+		"tool_mode":                      "code_mode_only",
+		"shell_type":                     "shell_command",
+		"apply_patch_tool_type":          "freeform",
+		"web_search_tool_type":           "text_and_image",
+		"supports_search_tool":           true,
+		"experimental_supported_tools":   []any{},
+		"supports_image_detail_original": true,
+
+		"vision":             true,
+		"supports_vision":    true,
+		"modalities":         modalities,
+		"input_modalities":   modalities,
+		"output_modalities":  []string{"text"},
+		"supported_features": features,
+
+		"additional_speed_tiers":            []string{},
+		"service_tiers":                     []any{},
+		"availability_nux":                  nil,
+		"upgrade":                           nil,
+		"include_skills_usage_instructions": false,
+		"use_responses_lite":                false,
+		"multi_agent_version":               "v2",
+
+		"capabilities": capabilities,
+	}
+}
+
+// codexModelMessages is the instruction template block Codex expects alongside
+// each catalog entry.
+func codexModelMessages() map[string]any {
+	return map[string]any{
+		"instructions_template": codexBaseInstructions,
+		"instructions_variables": map[string]string{
+			"personality_default":   "",
+			"personality_friendly":  "",
+			"personality_pragmatic": "",
+		},
+		"approvals":   nil,
+		"auto_review": nil,
+	}
 }
 
 // upstreamThrottledCode marks a response rejected because the M365
