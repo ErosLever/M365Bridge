@@ -556,7 +556,9 @@ Each entry in `GET /v1/models` advertises `context_window` and `max_output_token
 | `max_input_tokens`  | The window minus the output budget, or the full window when the output budget is not smaller.     |
 | `supports_tools`    | Always `true`; every model reaches caller-defined tools through the simulated tool calling layer. |
 
-The response also carries `reasoning_effort_presets`, the effort values the Responses API accepts.
+The response also carries `reasoning_effort_presets`, each an `{effort, description}` pair naming an effort value the Responses API accepts.
+
+Each entry additionally carries the model-catalog fields Codex CLI reads, which plain OpenAI clients ignore: `base_instructions`, `model_messages`, `default_reasoning_level`, `apply_patch_tool_type`, `shell_type`, `tool_mode`, `truncation_policy`, `supports_parallel_tool_calls`, and the verbosity and reasoning-summary defaults. Every capability is repeated both at the top level and under `capabilities`, because OpenAI-compatible clients disagree on where to look for it.
 
 ### Conversation Quota
 
@@ -694,6 +696,8 @@ Response:
 - A tool result whose `tool_call_id` (OpenAI), `tool_use_id` (Anthropic), or `call_id` (Responses) is missing, or names a call the same request never declared, is rejected with HTTP 400. A request that declares no tool calls at all skips the id check, so a client that trimmed its history is not blocked.
 - When the backend answers a tool request with prose that denies the tools exist or claims to have run the work in its own sandbox, the proxy re-asks once with an explicit instruction. An ordinary text answer passes through untouched.
 - When M365 Copilot runs its own server-side tools (web search, code interpreter) and returns plain text instead of a simulated JSON payload, the response is returned as a normal text completion with `finish_reason: "stop"`.
+- When the backend answers with an unparseable tool-calling envelope, the envelope is withheld instead of being forwarded as the assistant message; an answer that was nothing but envelope becomes a short notice.
+- When M365 refuses the request itself rather than answering it, non-streaming endpoints return HTTP 502 with `upstream_content_blocked`, so the refusal is not mistaken for an answer. A streaming turn has already opened its response, so it is logged instead.
 - `tool_result` messages (OpenAI) and `tool_use`/`tool_result` content blocks (Anthropic) in conversation history are converted to plain text before being sent to M365, since the M365 backend does not understand tool roles.
 - Streaming endpoints buffer the full response before parsing tool calls (tool call JSON may span multiple chunks).
 
@@ -748,7 +752,7 @@ The `/v1/responses` endpoint implements the OpenAI Responses API format. It acce
 
 ### Reasoning Effort
 
-Codex CLI sends `reasoning: {"effort": ..., "summary": ...}`. The accepted effort values are `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`; anything else is rejected with HTTP 400 rather than ignored.
+Codex CLI sends `reasoning: {"effort": ..., "summary": ...}`. The accepted effort values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; anything else is rejected with HTTP 400 rather than ignored.
 
 M365 exposes no separate effort dial, so effort steers the only lever that exists: `medium` and above routes the request to the model's reasoning variant when the registry has one, for example `gpt5.5` to `gpt5.5-reasoning`. A model without a variant, or a key that already names one, is left unchanged. `summary` is accepted and not acted on.
 
@@ -915,6 +919,7 @@ data/                    # Runtime data (gitignored): tokens/, setup.json, cache
 - No credentials stored in code or repository
 - `data/` directory is gitignored (contains tokens, cache, setup.json)
 - API key authentication protects all `/v1/*` endpoints when configured
+- The key is read from `Authorization: Bearer <key>` or `x-api-key: <key>`; when a client offers both, either one being valid is enough
 
 ## Image Input Support
 
@@ -924,6 +929,16 @@ The proxy supports multimodal image input via OpenAI and Anthropic API formats:
 - **Anthropic**: `content` array with `{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}}` blocks
 
 Images are uploaded to the M365 backend via `POST https://substrate.office.com/m365Copilot/UploadFile` and attached to the WebSocket message as `messageAnnotations`. Supported formats: PNG, JPEG, GIF, WebP.
+
+### Remote Image URLs
+
+An OpenAI `image_url` block may also carry a remote `https://` address instead of a data URL. The proxy downloads it before uploading.
+
+No credential is sent on that download, so any public https host is accepted. The request is still checked to keep the proxy from being used to reach addresses inside its own network: plain http, loopback, private, link-local, multicast, carrier-grade NAT and cloud metadata targets are rejected, and the host is re-checked after DNS resolution. A response larger than 20 MB, one whose content type is not an image, or one that fails outright drops that single image rather than the whole request. At most 16 remote images are fetched per turn.
+
+Anthropic `image` blocks carry base64 data directly and are unaffected.
+
+`input_file`, `file`, `input_audio` and `audio` content blocks are dropped with a DEBUG log entry, because the M365 backend accepts image attachments only.
 
 ## Image Generation
 

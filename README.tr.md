@@ -556,7 +556,9 @@ Hiç model göndermeyen bir istek (boş `model` alanı veya yalnızca `:session-
 | `max_input_tokens`  | Pencere eksi çıktı bütçesi; çıktı bütçesi pencereden küçük değilse pencerenin tamamı.                              |
 | `supports_tools`    | Her zaman `true`; her model, çağıranın tanımladığı tool'lara simüle tool calling katmanı üzerinden erişir.         |
 
-Yanıt ayrıca `reasoning_effort_presets` alanını taşır: Responses API'nin kabul ettiği effort değerleri.
+Yanıt ayrıca `reasoning_effort_presets` alanını taşır: her biri Responses API'nin kabul ettiği bir effort değerini adlandıran `{effort, description}` çiftleri.
+
+Her kayıt ayrıca Codex CLI'nin okuduğu, düz OpenAI istemcilerinin yok saydığı model katalog alanlarını taşır: `base_instructions`, `model_messages`, `default_reasoning_level`, `apply_patch_tool_type`, `shell_type`, `tool_mode`, `truncation_policy`, `supports_parallel_tool_calls` ve verbosity ile reasoning-summary varsayılanları. Her yetenek hem üst seviyede hem `capabilities` altında tekrarlanır, çünkü OpenAI uyumlu istemciler bu bilgiyi farklı yerlerde arar.
 
 ### Konuşma Kotası
 
@@ -694,6 +696,8 @@ Yanıt:
 - `tool_call_id` (OpenAI), `tool_use_id` (Anthropic) veya `call_id` (Responses) alanı eksik olan ya da aynı istekte hiç tanımlanmamış bir çağrıyı işaret eden tool sonucu HTTP 400 ile reddedilir. Hiç tool call tanımlamayan bir istek id kontrolünü atlar; böylece geçmişini kısaltmış bir istemci engellenmez.
 - Backend, tool içeren bir isteği tool'ların var olmadığını söyleyen ya da işi kendi sandbox'ında çalıştırdığını iddia eden düz metinle yanıtladığında, proxy açık bir talimatla bir kez yeniden sorar. Sıradan bir metin yanıtı olduğu gibi geçer.
 - M365 Copilot kendi sunucu tarafı araçlarını çalıştırdığında (web araması, code interpreter) ve simüle JSON yerine düz metin döndürdüğünde, yanıt normal bir metin tamamlaması olarak `finish_reason: "stop"` ile döndürülür.
+- Backend ayrıştırılamayan bir tool calling envelope döndürdüğünde, envelope asistan mesajı olarak iletilmek yerine ayıklanır; tamamen envelope'tan ibaret bir yanıt kısa bir uyarı metnine dönüşür.
+- M365 isteğin kendisini yanıtlamak yerine reddettiğinde, akışsız uç noktalar `upstream_content_blocked` ile HTTP 502 döndürür; böylece ret bir yanıt sanılmaz. Akışlı bir tur yanıtını çoktan açmış olduğu için yalnızca loglanır.
 - Konuşma geçmişindeki `tool_result` mesajları (OpenAI) ve `tool_use`/`tool_result` içerik blokları (Anthropic), M365 backend'i tool rollerini anlamadığı için M365'ye gönderilmeden önce düz metne dönüştürülür.
 - Streaming endpoint'leri, tool call'ları ayrıştırmadan önce tam yanıtı tampona alır (tool call JSON'u birden çok chunk'a yayılabilir).
 
@@ -748,7 +752,7 @@ Bu araçları etkinleştirmek, API'yi uzaktan kod ve dosya erişim yüzeyine dö
 
 ### Reasoning Effort
 
-Codex CLI `reasoning: {"effort": ..., "summary": ...}` gönderir. Kabul edilen effort değerleri `none`, `minimal`, `low`, `medium`, `high` ve `xhigh`'dır; başka bir değer yok sayılmak yerine HTTP 400 ile reddedilir.
+Codex CLI `reasoning: {"effort": ..., "summary": ...}` gönderir. Kabul edilen effort değerleri `none`, `minimal`, `low`, `medium`, `high`, `xhigh` ve `max`'dır; başka bir değer yok sayılmak yerine HTTP 400 ile reddedilir.
 
 M365 ayrı bir effort ayarı sunmaz; bu yüzden effort, var olan tek kolu yönlendirir: `medium` ve üzeri, registry'de bir reasoning varyantı varsa isteği o varyanta yönlendirir, örneğin `gpt5.5` yerine `gpt5.5-reasoning`. Varyantı olmayan bir model veya zaten varyantı adlandıran bir anahtar değişmeden kalır. `summary` kabul edilir ama işlenmez.
 
@@ -915,6 +919,7 @@ data/                    # Çalışma zamanı verisi (gitignore'lı): tokens/, s
 - Kod veya repoda kimlik bilgisi saklanmaz
 - `data/` dizini gitignore'lıdır (token, önbellek, setup.json içerir)
 - API anahtarı kimlik doğrulaması, yapılandırıldığında tüm `/v1/*` uç noktalarını korur
+- Anahtar `Authorization: Bearer <key>` veya `x-api-key: <key>` başlığından okunur; istemci ikisini birden gönderdiğinde birinin geçerli olması yeterlidir
 
 ## Görsel Girdi Desteği
 
@@ -924,6 +929,16 @@ Proxy, OpenAI ve Anthropic API formatları ile çok modlu görsel girdiyi destek
 - **Anthropic**: `{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}}` blokları içeren `content` dizisi
 
 Görseller, `POST https://substrate.office.com/m365Copilot/UploadFile` üzerinden M365 backend'ine yüklenir ve WebSocket mesajına `messageAnnotations` olarak eklenir. Desteklenen formatlar: PNG, JPEG, GIF, WebP.
+
+### Uzak Görsel URL'leri
+
+Bir OpenAI `image_url` bloğu, data URL yerine uzak bir `https://` adresi de taşıyabilir. Proxy bu adresi yüklemeden önce indirir.
+
+İndirmede hiçbir kimlik bilgisi gönderilmez, bu yüzden her public https host kabul edilir. İstek yine de kontrol edilir; amaç proxy'nin kendi ağı içindeki adreslere ulaşmak için kullanılmasını engellemektir: düz http, loopback, private, link-local, multicast, carrier-grade NAT ve cloud metadata hedefleri reddedilir, host DNS çözümlemesinden sonra yeniden kontrol edilir. 20 MB'tan büyük, içerik tipi görsel olmayan veya tamamen başarısız olan bir yanıt, tüm isteği değil yalnızca o görseli düşürür. Tur başına en fazla 16 uzak görsel indirilir.
+
+Anthropic `image` blokları base64 veriyi doğrudan taşır ve bu akıştan etkilenmez.
+
+`input_file`, `file`, `input_audio` ve `audio` içerik blokları DEBUG log kaydıyla düşürülür, çünkü M365 backend'i yalnızca görsel ek kabul eder.
 
 ## Görsel Üretimi
 
