@@ -152,3 +152,46 @@ func TestInjectedPromptStaysCleanWithoutEvidence(t *testing.T) {
 		t.Fatalf("an evidence section appeared without any tool history:\n%s", messages[0].Content)
 	}
 }
+
+func TestParseResponsesSimulationClaimsAnUnfencedGrammarBody(t *testing.T) {
+	policy, err := newResponsesToolPolicy([]toolcalling.ToolDef{{Type: "custom", Name: "exec"}}, "auto")
+	if err != nil {
+		t.Fatalf("newResponsesToolPolicy: %v", err)
+	}
+
+	result, err := parseResponsesSimulation(`{"input":"shell({cmd:\"cat README.md\"}); text(plan);"}`, policy)
+	if err != nil {
+		t.Fatalf("parseResponsesSimulation: %v", err)
+	}
+	if len(result.toolCalls) != 1 {
+		t.Fatalf("tool calls = %d, want the grammar body claimed as a call", len(result.toolCalls))
+	}
+	if result.toolCalls[0].Function.Name != "exec" {
+		t.Fatalf("name = %q, want exec", result.toolCalls[0].Function.Name)
+	}
+	if !strings.Contains(result.toolCalls[0].Function.Arguments, "cat README.md") {
+		t.Fatalf("arguments = %q, want the program body", result.toolCalls[0].Function.Arguments)
+	}
+	if result.finishReason != "tool_calls" {
+		t.Fatalf("finish reason = %q, want tool_calls", result.finishReason)
+	}
+}
+
+func TestParseResponsesSimulationLeavesProseAloneWithoutAGrammarTool(t *testing.T) {
+	policy, err := newResponsesToolPolicy(responsesTestTools(), "auto")
+	if err != nil {
+		t.Fatalf("newResponsesToolPolicy: %v", err)
+	}
+	answer := "shell({cmd:\"ls\"});"
+
+	result, err := parseResponsesSimulation(answer, policy)
+	if err != nil {
+		t.Fatalf("parseResponsesSimulation: %v", err)
+	}
+	if len(result.toolCalls) != 0 {
+		t.Fatalf("tool calls = %d, want none without a custom tool declared", len(result.toolCalls))
+	}
+	if result.content != answer {
+		t.Fatalf("content = %q, want the text passed through", result.content)
+	}
+}

@@ -3511,6 +3511,13 @@ type responsesToolPolicy struct {
 	ledger toolcalling.Ledger
 }
 
+// allows reports whether this policy still permits a call to the named tool.
+// allowedToolNames is already narrowed to the pinned tool when tool_choice
+// names one, so membership is the whole test.
+func (p responsesToolPolicy) allows(name string) bool {
+	return slices.Contains(p.allowedToolNames, name)
+}
+
 type responsesSimulationResult struct {
 	content      string
 	toolCalls    []client.ToolCall
@@ -3814,6 +3821,19 @@ func parseResponsesSimulation(text string, policy responsesToolPolicy) (response
 		finishReason: "stop",
 	}
 	simulated := toolcalling.ParseSimulatedResponseResponses(text, policy.allowedToolNames, toolcalling.ContractsFor(policy.tools))
+	// A grammar tool's body arrives unfenced, either as the lone bridge
+	// envelope or as bare source, so the envelope scan finds nothing. Without
+	// this the body would reach the client as escaped source in an assistant
+	// message instead of a call.
+	if !simulated.HasPayload && len(simulated.ToolCalls) == 0 {
+		if call, ok := toolcalling.GrammarBodyCall(text, policy.tools, policy.allows); ok {
+			logging.Infof("parseResponsesSimulation: claimed an unfenced grammar body as a %q call", call.Name)
+			simulated.HasPayload = true
+			simulated.FinishReason = "tool_calls"
+			simulated.Content = ""
+			simulated.ToolCalls = []toolcalling.ToolCall{call}
+		}
+	}
 	if !policy.required {
 		simulated = dropSettledToolCalls(policy.ledger, "", simulated)
 	}
