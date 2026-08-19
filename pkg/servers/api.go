@@ -1546,7 +1546,7 @@ func (api *APIServer) handleAnthropicComplete(w http.ResponseWriter, r *http.Req
 
 // nonStreamAnthropicComplete handles non-streaming Anthropic complete (FIM) requests.
 func (api *APIServer) nonStreamAnthropicComplete(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, model string, maxTokens int, stopSequences []string, sid, convID string) {
-	respText, _, _, _, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, false)
+	respText, thinking, _, _, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, false)
 	if err != nil {
 		api.sendUpstreamError(w, "completion", err)
 		return
@@ -1568,12 +1568,16 @@ func (api *APIServer) nonStreamAnthropicComplete(w http.ResponseWriter, messages
 		}
 	}
 
+	// The legacy Complete format defines no usage object. It is reported anyway
+	// so a caller reads the same counts here as on every other endpoint; a
+	// client written to the original format ignores the extra field.
 	response := map[string]any{
 		"completion":  respText,
 		"stop_reason": stopReason,
 		"model":       model,
 		"stop":        nil,
 		"log_id":      fmt.Sprintf("cmpl_%s", uuid.New().String()),
+		"usage":       anthropicUsage(messages, nil, "", respText, thinking),
 	}
 
 	api.sendJSON(w, http.StatusOK, response)
@@ -1613,6 +1617,7 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 	ch := api.m365Client.ChatConversationStreamGenContext(ctx, messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, false)
 
 	var fullTextBuilder strings.Builder
+	var thinkingText strings.Builder
 	truncated := false
 
 	var finalConvID string
@@ -1641,9 +1646,10 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 			break
 		}
 
-		// The Complete wire format carries neither a thinking block nor a
-		// usage object, so reasoning has no field to travel in here.
+		// The Complete wire format carries no thinking block, so reasoning is
+		// counted for the usage object but never emitted.
 		if chunk.Thinking != "" {
+			thinkingText.WriteString(chunk.Thinking)
 			continue
 		}
 
@@ -1692,6 +1698,10 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 		"model":       model,
 		"stop":        nil,
 		"log_id":      logID,
+		// The intermediate events carry deltas, so usage belongs on the last
+		// one. The legacy Complete format defines no such field; it is reported
+		// so a caller reads the same counts here as on every other endpoint.
+		"usage": anthropicUsage(messages, nil, "", fullText, thinkingText.String()),
 	}
 	finalJSON, _ := json.Marshal(finalData)
 	fmt.Fprintf(w, "event: completion\ndata: %s\n\n", finalJSON)
