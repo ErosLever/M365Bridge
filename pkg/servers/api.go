@@ -226,6 +226,10 @@ func (api *APIServer) Start(port int) error {
 	mux.HandleFunc("/v1/conversations", api.withAuth(api.handleConversations))
 	mux.HandleFunc("/v1/conversations/", api.withAuth(api.handleConversation))
 	mux.HandleFunc("/v1/models", api.handleModels)
+	// Codex probes /v1/health before it sends any chat request and treats a
+	// 404 as an unreachable provider. It stays public alongside /v1/models
+	// because the probe carries no credential.
+	mux.HandleFunc("/v1/health", api.handleV1Health)
 	// MCP exposes Copilot as a tool; it stays behind the API key middleware
 	// because it drives real upstream turns.
 	mux.HandleFunc("/mcp", api.withAuth(api.handleMCP))
@@ -371,6 +375,23 @@ func (api *APIServer) Stop() error {
 func (api *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
+}
+
+// handleV1Health answers the OpenAI-style health probe. It reports reachability
+// only and never touches the upstream, so it stays cheap enough for a client to
+// call it before every session.
+//
+// It returns JSON rather than the plain "OK" of /health, because every other
+// /v1 route speaks JSON and a probe that parses the body would choke on text.
+func (api *APIServer) handleV1Health(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		api.handleCORS(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // handleModels handles model list requests.
