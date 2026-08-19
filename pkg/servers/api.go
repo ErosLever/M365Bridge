@@ -2929,8 +2929,17 @@ func fetchRemoteImage(rawURL string) (base64Data, mediaType string, err error) {
 		return "", "", err
 	}
 
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("fetch remote image: %w", err)
+	}
+	// Go's default agent string is rejected outright by several image CDNs,
+	// including Wikimedia, so the request identifies the proxy instead.
+	req.Header.Set("User-Agent", "M365Bridge/"+models.Version)
+	req.Header.Set("Accept", "image/*")
+
 	client := &http.Client{Timeout: remoteImageTimeout}
-	resp, err := client.Get(rawURL)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("fetch remote image: %w", err)
 	}
