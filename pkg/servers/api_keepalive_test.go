@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +43,7 @@ func TestNextStreamChunkWritesWhileUpstreamIsSilent(t *testing.T) {
 		ch <- client.StreamChunk{Text: "hello"}
 	}()
 
-	chunk, more := nextStreamChunk(ch, keepalive, httptest.NewRecorder(), func() error {
+	chunk, more := nextStreamChunk(context.Background(), ch, keepalive, httptest.NewRecorder(), func() error {
 		writes <- struct{}{}
 		return nil
 	})
@@ -64,7 +65,7 @@ func TestNextStreamChunkStopsWhenTheKeepaliveWriteFails(t *testing.T) {
 	keepalive := time.NewTicker(5 * time.Millisecond)
 	defer keepalive.Stop()
 
-	if _, more := nextStreamChunk(ch, keepalive, httptest.NewRecorder(), func() error {
+	if _, more := nextStreamChunk(context.Background(), ch, keepalive, httptest.NewRecorder(), func() error {
 		return errors.New("connection reset by peer")
 	}); more {
 		t.Fatal("a failed keepalive write did not end the stream")
@@ -77,7 +78,7 @@ func TestNextStreamChunkReportsAClosedChannel(t *testing.T) {
 	keepalive := time.NewTicker(time.Hour)
 	defer keepalive.Stop()
 
-	if _, more := nextStreamChunk(ch, keepalive, httptest.NewRecorder(), func() error {
+	if _, more := nextStreamChunk(context.Background(), ch, keepalive, httptest.NewRecorder(), func() error {
 		t.Fatal("a closed channel must not produce a keepalive")
 		return nil
 	}); more {
@@ -91,7 +92,7 @@ func TestNextStreamChunkStaysQuietOnABusyStream(t *testing.T) {
 	keepalive := time.NewTicker(time.Hour)
 	defer keepalive.Stop()
 
-	if _, more := nextStreamChunk(ch, keepalive, httptest.NewRecorder(), func() error {
+	if _, more := nextStreamChunk(context.Background(), ch, keepalive, httptest.NewRecorder(), func() error {
 		t.Fatal("a ready chunk must not produce a keepalive")
 		return nil
 	}); !more {
@@ -104,4 +105,21 @@ func TestRefreshStreamDeadlineToleratesAnUnsupportedWriter(t *testing.T) {
 	// reports ErrNotSupported. A stream must not fail over that.
 	var w http.ResponseWriter = httptest.NewRecorder()
 	refreshStreamDeadline(w)
+}
+
+func TestNextStreamChunkStopsOnACanceledRequest(t *testing.T) {
+	// The client hung up mid-turn. The handler must stop instead of writing
+	// into a dead socket until the upstream finishes.
+	ch := make(chan client.StreamChunk)
+	keepalive := time.NewTicker(time.Hour)
+	defer keepalive.Stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, more := nextStreamChunk(ctx, ch, keepalive, httptest.NewRecorder(), func() error {
+		t.Fatal("a canceled request must not produce a keepalive")
+		return nil
+	}); more {
+		t.Fatal("a canceled request reported more chunks")
+	}
 }

@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -22,6 +23,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 			name: "chat stream",
 			run: func(api *APIServer, w http.ResponseWriter, sid string) {
 				api.streamChatCompletions(
+					context.Background(),
 					w,
 					[]payload.Message{{Role: "user", Content: "hello"}},
 					models.ModelConfig{OpenAIID: "gpt-test"},
@@ -54,6 +56,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 			name: "anthropic stream",
 			run: func(api *APIServer, w http.ResponseWriter, sid string) {
 				api.streamAnthropicMessages(
+					context.Background(),
 					w,
 					[]payload.Message{{Role: "user", Content: "hello"}},
 					models.ModelConfig{OpenAIID: "gpt-test"},

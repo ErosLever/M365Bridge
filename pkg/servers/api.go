@@ -1255,7 +1255,7 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if req.Stream {
-		api.streamChatCompletions(w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
+		api.streamChatCompletions(r.Context(), w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
 	} else {
 		api.nonStreamChatCompletions(w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
 	}
@@ -1324,7 +1324,7 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 	hasTools := len(toolcalling.RouteableTools(req.Tools)) > 0
 
 	if req.Stream {
-		api.streamCompletions(w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
+		api.streamCompletions(r.Context(), w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
 	} else {
 		api.nonStreamCompletions(w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
 	}
@@ -1500,7 +1500,7 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if req.Stream {
-		api.streamAnthropicMessages(w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice))
+		api.streamAnthropicMessages(r.Context(), w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice))
 	} else {
 		api.nonStreamAnthropicMessages(w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice))
 	}
@@ -1547,7 +1547,7 @@ func (api *APIServer) handleAnthropicComplete(w http.ResponseWriter, r *http.Req
 	}
 
 	if req.Stream {
-		api.streamAnthropicComplete(w, messages, cfg, req.Model, req.MaxTokensToSample, req.StopSequences, sid, convID)
+		api.streamAnthropicComplete(r.Context(), w, messages, cfg, req.Model, req.MaxTokensToSample, req.StopSequences, sid, convID)
 	} else {
 		api.nonStreamAnthropicComplete(w, messages, cfg, req.Model, req.MaxTokensToSample, req.StopSequences, sid, convID)
 	}
@@ -1599,7 +1599,7 @@ func (api *APIServer) nonStreamAnthropicComplete(w http.ResponseWriter, messages
 // Anthropic Complete streaming uses SSE with event: completion and
 // data containing {"type":"completion","completion":"<delta>","stop_reason":null}.
 // The final event has stop_reason set and completion empty.
-func (api *APIServer) streamAnthropicComplete(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, model string, maxTokens int, stopSequences []string, sid, convID string) {
+func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, model string, maxTokens int, stopSequences []string, sid, convID string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -1619,7 +1619,7 @@ func (api *APIServer) streamAnthropicComplete(w http.ResponseWriter, messages []
 	fmt.Fprintf(w, "event: ping\ndata: %s\n\n", pingJSON)
 	flusher.Flush()
 
-	ch := api.m365Client.ChatConversationStreamGen(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, false)
+	ch := api.m365Client.ChatConversationStreamGenContext(ctx, messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, false)
 
 	var fullTextBuilder strings.Builder
 	var thinkingBuilder strings.Builder
@@ -1630,7 +1630,7 @@ func (api *APIServer) streamAnthropicComplete(w http.ResponseWriter, messages []
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ch, keepalive, w, func() error { return writeAnthropicKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, func() error { return writeAnthropicKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -1716,7 +1716,7 @@ func (api *APIServer) streamAnthropicComplete(w http.ResponseWriter, messages []
 }
 
 // streamChatCompletions streams chat completion responses in OpenAI format.
-func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
+func (api *APIServer) streamChatCompletions(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -1731,7 +1731,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 	chunkID := fmt.Sprintf("chatcmpl-%s", uuid.New().String())
 	openaiModel := cfg.OpenAIID
 
-	ch := api.m365Client.ChatConversationStreamGen(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
+	ch := api.m365Client.ChatConversationStreamGenContext(ctx, messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 
 	hasContent := false
 	var fullTextBuilder strings.Builder
@@ -1750,7 +1750,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -2119,7 +2119,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 }
 
 // streamAnthropicMessages streams messages in Anthropic SSE format.
-func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
+func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -2163,14 +2163,14 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 	textBlockOpen := false
 	blockIndex := 0
 	toolCallingEnabled := hasTools
-	ch := api.m365Client.ChatConversationStreamGen(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
+	ch := api.m365Client.ChatConversationStreamGenContext(ctx, messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 
 	var finalConvID string
 	var finalToolCalls []client.ToolCall
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ch, keepalive, w, func() error { return writeAnthropicKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, func() error { return writeAnthropicKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -2617,7 +2617,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 }
 
 // streamCompletions streams text completion responses in OpenAI text_completion format.
-func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
+func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -2632,7 +2632,7 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 	compID := fmt.Sprintf("cmpl-%s", uuid.New().String())
 	openaiModel := cfg.OpenAIID
 
-	ch := api.m365Client.ChatConversationStreamGen(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
+	ch := api.m365Client.ChatConversationStreamGenContext(ctx, messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 
 	var fullTextBuilder strings.Builder
 	var thinkingBuilder strings.Builder
@@ -2644,7 +2644,7 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -3232,15 +3232,18 @@ func writeAnthropicKeepalive(w http.ResponseWriter, flusher http.Flusher) error 
 
 // nextStreamChunk returns the next upstream chunk, writing a keepalive frame
 // through write for every interval that passes while the upstream is silent.
-// The second result is false once the channel closes or a keepalive write
-// fails, which is how a stream to a gone client ends while it sits idle.
+// The second result is false once the channel closes, the request context is
+// canceled, or a keepalive write fails; the last two are how a stream to a gone
+// client ends while it sits idle.
 //
 // The keepalive shares the caller's goroutine on purpose: http.ResponseWriter
 // tolerates no concurrent writes, so a background ticker goroutine would
 // interleave frames with the chunk loop.
-func nextStreamChunk(ch <-chan client.StreamChunk, keepalive *time.Ticker, w http.ResponseWriter, write func() error) (client.StreamChunk, bool) {
+func nextStreamChunk(ctx context.Context, ch <-chan client.StreamChunk, keepalive *time.Ticker, w http.ResponseWriter, write func() error) (client.StreamChunk, bool) {
 	for {
 		select {
+		case <-ctx.Done():
+			return client.StreamChunk{}, false
 		case chunk, ok := <-ch:
 			if ok {
 				keepalive.Reset(sseKeepaliveInterval)
@@ -5559,7 +5562,7 @@ func (api *APIServer) streamResponses(
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -6178,7 +6181,7 @@ func (api *APIServer) handleResponsesCompact(w http.ResponseWriter, r *http.Requ
 	logging.Infof("handleResponsesCompact: model=%s sid=%s convID=%s stream=%t tools=%d", modelKey, sid, convID, req.Stream, len(req.Tools))
 
 	if req.Stream {
-		api.streamResponsesCompact(w, messages, cfg, sid, convID, req.MaxOutputTokens, hasTools, req.Tools)
+		api.streamResponsesCompact(r.Context(), w, messages, cfg, sid, convID, req.MaxOutputTokens, hasTools, req.Tools)
 	} else {
 		api.nonStreamResponsesCompact(w, messages, cfg, sid, convID, req.MaxOutputTokens, hasTools, req.Tools)
 	}
@@ -6259,7 +6262,7 @@ func (api *APIServer) nonStreamResponsesCompact(w http.ResponseWriter, messages 
 // streamResponsesCompact handles streaming compact requests.
 // It emits a standard Responses SSE stream but replaces the output item
 // with a single compaction item containing the summary.
-func (api *APIServer) streamResponsesCompact(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef) {
+func (api *APIServer) streamResponsesCompact(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -6302,7 +6305,7 @@ func (api *APIServer) streamResponsesCompact(w http.ResponseWriter, messages []p
 		},
 	})
 
-	ch := api.m365Client.ChatConversationStreamGen(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
+	ch := api.m365Client.ChatConversationStreamGenContext(ctx, messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 
 	var fullTextBuilder strings.Builder
 
@@ -6310,7 +6313,7 @@ func (api *APIServer) streamResponsesCompact(w http.ResponseWriter, messages []p
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
 		if !more {
 			break
 		}
