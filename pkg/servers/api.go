@@ -1241,7 +1241,7 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 			api.sendUpstreamError(w, "chat", err)
 			return
 		}
-		api.respondBufferedChat(w, result, cfg, sid, req.MaxTokens, req.Stream)
+		api.respondBufferedChat(w, result, req.Messages, cfg, sid, req.MaxTokens, req.Stream, req.Tools, toolChoiceString(req.ToolChoice))
 		return
 	}
 	if req.Stream {
@@ -1487,7 +1487,7 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 			api.sendUpstreamError(w, "chat", err)
 			return
 		}
-		api.respondBufferedAnthropic(w, result, chatMessages, req.Model, sid, req.MaxTokens, req.Stream)
+		api.respondBufferedAnthropic(w, result, chatMessages, req.Model, sid, req.MaxTokens, req.Stream, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice))
 		return
 	}
 	if req.Stream {
@@ -1962,7 +1962,7 @@ func (api *APIServer) updateChatStreamSession(sid, finalConvID, fullText, thinki
 	}
 }
 
-func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoopResult, cfg models.ModelConfig, sid string, maxTokens int, stream bool) {
+func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, cfg models.ModelConfig, sid string, maxTokens int, stream bool, tools []toolcalling.ToolDef, toolChoice string) {
 	if maxTokens > 0 {
 		if truncated, ok := truncateToTokens(result.text, maxTokens); ok {
 			result.text, result.finishReason = truncated, "length"
@@ -1971,6 +1971,7 @@ func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoop
 	if sid != "" && result.conversationID != "" {
 		api.ctxCache.Set("session:"+sid, result.conversationID)
 	}
+	usage := openAIUsage(messages, tools, toolChoice, result.text, result.thinking)
 	if stream {
 		w.Header().Set("Content-Type", "text/event-stream")
 		id := fmt.Sprintf("chatcmpl-%s", uuid.New().String())
@@ -1980,7 +1981,7 @@ func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoop
 		for i, call := range result.toolCalls {
 			api.sendSSEChunk(w, id, cfg.OpenAIID, map[string]any{"tool_calls": []map[string]any{{"index": i, "id": call.ID, "type": "function", "function": map[string]string{"name": call.Function.Name, "arguments": call.Function.Arguments}}}})
 		}
-		api.sendSSEDone(w, id, cfg.OpenAIID, result.finishReason, nil)
+		api.sendSSEDone(w, id, cfg.OpenAIID, result.finishReason, usage)
 		return
 	}
 	message := map[string]any{"role": "assistant", "content": result.text}
@@ -1988,7 +1989,7 @@ func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoop
 		message["content"] = nil
 		message["tool_calls"] = result.toolCalls
 	}
-	api.sendJSON(w, http.StatusOK, map[string]any{"id": fmt.Sprintf("chatcmpl-%s", uuid.New().String()), "object": "chat.completion", "created": time.Now().Unix(), "model": cfg.OpenAIID, "choices": []map[string]any{{"index": 0, "message": message, "finish_reason": result.finishReason}}})
+	api.sendJSON(w, http.StatusOK, map[string]any{"id": fmt.Sprintf("chatcmpl-%s", uuid.New().String()), "object": "chat.completion", "created": time.Now().Unix(), "model": cfg.OpenAIID, "choices": []map[string]any{{"index": 0, "message": message, "finish_reason": result.finishReason}}, "usage": usage})
 }
 
 // nonStreamChatCompletions handles non-streaming chat completion in OpenAI format.
@@ -2444,7 +2445,7 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 	}
 }
 
-func (api *APIServer) respondBufferedAnthropic(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, model, sid string, maxTokens int, stream bool) {
+func (api *APIServer) respondBufferedAnthropic(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, model, sid string, maxTokens int, stream bool, tools []toolcalling.ToolDef, toolChoice string) {
 	stopReason := "end_turn"
 	if len(result.toolCalls) > 0 {
 		stopReason = "tool_use"
@@ -2468,13 +2469,14 @@ func (api *APIServer) respondBufferedAnthropic(w http.ResponseWriter, result too
 	if sid != "" && result.conversationID != "" {
 		api.ctxCache.Set("session:"+sid, result.conversationID)
 	}
-	response := map[string]any{"id": fmt.Sprintf("msg_%s", uuid.New().String()), "type": "message", "role": "assistant", "content": content, "model": model, "stop_reason": stopReason, "stop_sequence": nil, "usage": map[string]any{"input_tokens": countTokens(fmt.Sprint(messages)), "output_tokens": countTokens(result.text)}}
+	usage := anthropicUsage(messages, tools, toolChoice, result.text, result.thinking)
+	response := map[string]any{"id": fmt.Sprintf("msg_%s", uuid.New().String()), "type": "message", "role": "assistant", "content": content, "model": model, "stop_reason": stopReason, "stop_sequence": nil, "usage": usage}
 	if !stream {
 		api.sendJSON(w, http.StatusOK, response)
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
-	api.sendAnthropicSSE(w, "message_start", map[string]any{"type": "message_start", "message": map[string]any{"id": response["id"], "type": "message", "role": "assistant", "content": []any{}, "model": model, "stop_reason": nil, "stop_sequence": nil, "usage": map[string]any{"input_tokens": countTokens(fmt.Sprint(messages)), "output_tokens": 0}}})
+	api.sendAnthropicSSE(w, "message_start", map[string]any{"type": "message_start", "message": map[string]any{"id": response["id"], "type": "message", "role": "assistant", "content": []any{}, "model": model, "stop_reason": nil, "stop_sequence": nil, "usage": map[string]any{"input_tokens": usage["input_tokens"], "output_tokens": 0, "usage_source": usageSource()}}})
 	for i, block := range content {
 		switch block["type"] {
 		case "tool_use":
@@ -4554,6 +4556,34 @@ func countPromptTokens(messages []payload.Message, tools []toolcalling.ToolDef, 
 	return total
 }
 
+// openAIUsage builds the usage object for the OpenAI wire format. The buffered
+// coding-tool responder has no streaming loop to accumulate counts in, so it
+// takes the finished text and counts it the same way the streaming handlers do.
+func openAIUsage(messages []payload.Message, tools []toolcalling.ToolDef, toolChoice, answer, thinking string) map[string]any {
+	promptTok := countPromptTokens(messages, tools, toolChoice)
+	completionTok := countTokens(answer) + outputProtocolTokens
+	reasoningTok := countTokens(thinking)
+	return map[string]any{
+		"prompt_tokens":     promptTok,
+		"completion_tokens": completionTok,
+		"reasoning_tokens":  reasoningTok,
+		"total_tokens":      promptTok + completionTok + reasoningTok,
+		"usage_source":      usageSource(),
+	}
+}
+
+// anthropicUsage builds the usage object for the Anthropic wire format. The
+// field names differ from OpenAI's and the format carries no total, but the
+// counts behind them are the same.
+func anthropicUsage(messages []payload.Message, tools []toolcalling.ToolDef, toolChoice, answer, thinking string) map[string]any {
+	return map[string]any{
+		"input_tokens":     countPromptTokens(messages, tools, toolChoice),
+		"output_tokens":    countTokens(answer) + outputProtocolTokens,
+		"reasoning_tokens": countTokens(thinking),
+		"usage_source":     usageSource(),
+	}
+}
+
 // truncateToTokens truncates text to at most maxTokens tokens using tiktoken.
 // Returns the truncated text and true if truncation occurred.
 func truncateToTokens(text string, maxTokens int) (string, bool) {
@@ -4760,6 +4790,8 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 			req.MaxOutputTokens,
 			req.Stream,
 			responsesToolTypes(toolPolicy.tools),
+			toolPolicy.tools,
+			toolPolicy.promptChoice,
 		)
 		return
 	}
@@ -5138,7 +5170,7 @@ func buildResponsesObject(responseID, model, text, thinking string, toolCalls []
 	return resp
 }
 
-func (api *APIServer) respondBufferedResponses(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, cfg models.ModelConfig, sid string, maxTokens int, stream bool, toolTypes map[string]string) {
+func (api *APIServer) respondBufferedResponses(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, cfg models.ModelConfig, sid string, maxTokens int, stream bool, toolTypes map[string]string, tools []toolcalling.ToolDef, toolChoice string) {
 	if maxTokens > 0 {
 		if truncated, ok := truncateToTokens(result.text, maxTokens); ok {
 			result.text, result.finishReason = truncated, "length"
@@ -5148,7 +5180,7 @@ func (api *APIServer) respondBufferedResponses(w http.ResponseWriter, result too
 		api.ctxCache.Set("session:"+sid, result.conversationID)
 	}
 	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
-	response := buildResponsesObject(responseID, cfg.OpenAIID, result.text, result.thinking, result.toolCalls, toolTypes, result.finishReason, countTokens(fmt.Sprint(messages)), countTokens(result.text), countTokens(result.thinking))
+	response := buildResponsesObject(responseID, cfg.OpenAIID, result.text, result.thinking, result.toolCalls, toolTypes, result.finishReason, countPromptTokens(messages, tools, toolChoice), countTokens(result.text)+outputProtocolTokens, countTokens(result.thinking))
 	if !stream {
 		api.sendJSON(w, http.StatusOK, response)
 		return

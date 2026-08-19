@@ -3,9 +3,11 @@ package servers
 import (
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/models"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/payload"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/toolcalling"
 )
@@ -96,5 +98,104 @@ func requireUsageSource(t *testing.T, usage map[string]any) {
 	source, ok := usage["usage_source"].(string)
 	if !ok || source == "" {
 		t.Fatalf("usage does not name its source: %#v", usage)
+	}
+}
+
+// bufferedProbeResult is the finished turn the buffered responders receive from
+// runToolLoop. They reach no upstream, so they can be driven directly.
+func bufferedProbeResult() toolLoopResult {
+	return toolLoopResult{
+		text:           "OK",
+		thinking:       "Checking the request.",
+		finishReason:   "stop",
+		conversationID: "conv-usage-probe",
+	}
+}
+
+// The buffered coding-tool responders answer a turn that runToolLoop already
+// finished. They used to report either no usage at all or a count taken from
+// the Go representation of the message slice.
+func TestBufferedChatReportsUsage(t *testing.T) {
+	api := &APIServer{ctxCache: NewContextCache(t.TempDir())}
+	cfg := models.ModelConfig{OpenAIID: "gpt-5.5"}
+	messages := usageProbeMessages()
+
+	rec := httptest.NewRecorder()
+	api.respondBufferedChat(rec, bufferedProbeResult(), messages, cfg, "", 0, false, nil, "")
+
+	usage := decodeUsage(t, rec.Body.Bytes())
+	requireUsageSource(t, usage)
+	prompt := usageNumber(t, usage, "prompt_tokens")
+	completion := usageNumber(t, usage, "completion_tokens")
+	reasoning := usageNumber(t, usage, "reasoning_tokens")
+	if total := usageNumber(t, usage, "total_tokens"); total != prompt+completion+reasoning {
+		t.Fatalf("total_tokens = %d, want %d", total, prompt+completion+reasoning)
+	}
+	if want := countPromptTokens(messages, nil, ""); prompt != want {
+		t.Fatalf("prompt_tokens = %d, want %d", prompt, want)
+	}
+	if reasoning == 0 {
+		t.Fatal("the turn carried thinking but reported no reasoning tokens")
+	}
+}
+
+func TestBufferedChatStreamEndsWithUsage(t *testing.T) {
+	api := &APIServer{ctxCache: NewContextCache(t.TempDir())}
+	cfg := models.ModelConfig{OpenAIID: "gpt-5.5"}
+
+	rec := httptest.NewRecorder()
+	api.respondBufferedChat(rec, bufferedProbeResult(), usageProbeMessages(), cfg, "", 0, true, nil, "")
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"usage"`) {
+		t.Fatalf("the streamed turn carried no usage:\n%s", body)
+	}
+	if !strings.Contains(body, "usage_source") {
+		t.Fatalf("the streamed usage did not name its source:\n%s", body)
+	}
+}
+
+func TestBufferedAnthropicMatchesTheChatPromptCount(t *testing.T) {
+	api := &APIServer{ctxCache: NewContextCache(t.TempDir())}
+	messages := usageProbeMessages()
+
+	rec := httptest.NewRecorder()
+	api.respondBufferedAnthropic(rec, bufferedProbeResult(), messages, "claude-sonnet-4", "", 0, false, nil, "")
+
+	usage := decodeUsage(t, rec.Body.Bytes())
+	requireUsageSource(t, usage)
+	if got, want := usageNumber(t, usage, "input_tokens"), countPromptTokens(messages, nil, ""); got != want {
+		t.Fatalf("input_tokens = %d, want %d", got, want)
+	}
+
+	// The same turn must cost the same on both wire formats.
+	chatRec := httptest.NewRecorder()
+	api.respondBufferedChat(chatRec, bufferedProbeResult(), messages, models.ModelConfig{OpenAIID: "gpt-5.5"}, "", 0, false, nil, "")
+	chatUsage := decodeUsage(t, chatRec.Body.Bytes())
+	if a, o := usageNumber(t, usage, "input_tokens"), usageNumber(t, chatUsage, "prompt_tokens"); a != o {
+		t.Fatalf("anthropic counted %d prompt tokens, openai counted %d", a, o)
+	}
+	if a, o := usageNumber(t, usage, "output_tokens"), usageNumber(t, chatUsage, "completion_tokens"); a != o {
+		t.Fatalf("anthropic counted %d output tokens, openai counted %d", a, o)
+	}
+}
+
+func TestBufferedResponsesMatchesTheChatPromptCount(t *testing.T) {
+	api := &APIServer{ctxCache: NewContextCache(t.TempDir())}
+	messages := usageProbeMessages()
+
+	rec := httptest.NewRecorder()
+	api.respondBufferedResponses(rec, bufferedProbeResult(), messages, models.ModelConfig{OpenAIID: "gpt-5.5"}, "", 0, false, nil, nil, "")
+
+	usage := decodeUsage(t, rec.Body.Bytes())
+	requireUsageSource(t, usage)
+	if got, want := usageNumber(t, usage, "input_tokens"), countPromptTokens(messages, nil, ""); got != want {
+		t.Fatalf("input_tokens = %d, want %d", got, want)
+	}
+	input := usageNumber(t, usage, "input_tokens")
+	output := usageNumber(t, usage, "output_tokens")
+	reasoning := usageNumber(t, usage, "reasoning_tokens")
+	if total := usageNumber(t, usage, "total_tokens"); total != input+output+reasoning {
+		t.Fatalf("total_tokens = %d, want %d", total, input+output+reasoning)
 	}
 }
