@@ -85,10 +85,12 @@ var sandboxHallucinationPatterns = []string{
 	"执行环境已经切换",
 	"只提供 linux 容器",
 
-	// Turkish forms. These were written without observing M365's own Turkish
-	// refusal text, so they are the least certain entries in this list. They
-	// also match sentence case only: matchesAny lowercases with the Unicode
-	// rule, under which an uppercase I becomes i rather than ı.
+	// Turkish forms. Only the first entry is the backend's observed wording;
+	// the rest are plausible variants written without seeing them, so they are
+	// the least certain entries in this list. All of them match sentence case
+	// only: matchesAny lowercases with the Unicode rule, under which an
+	// uppercase I becomes i rather than ı.
+	"komut çalıştırma erişimim",
 	"komut çalıştıramıyorum",
 	"komut çalıştıramam",
 	"komut yürütemiyorum",

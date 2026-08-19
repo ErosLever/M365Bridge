@@ -75,9 +75,13 @@ func TestEverySandboxPatternIsReachable(t *testing.T) {
 // The backend answers in the request's language, so a refusal that arrives in
 // Chinese or Turkish has to be recognized the same way.
 func TestSandboxHallucinationDetectsNonEnglishRefusals(t *testing.T) {
-	// Each sample carries exactly one pattern, so removing that pattern breaks
-	// the sample it belongs to instead of being covered by a neighbour.
+	// The first sample is the backend's own wording, captured from a Turkish
+	// turn that declared a tool and answered without calling it. The rest carry
+	// exactly one pattern each, so removing that pattern breaks the sample it
+	// belongs to instead of being covered by a neighbour.
 	refusals := []string{
+		"Windows makinenizdeki C:\\Users dizininin içeriğini göremem çünkü " +
+			"bilgisayarınızda komut çalıştırma erişimim yok.",
 		"抱歉，我无法执行命令。",
 		"这个请求没有执行通道。",
 		"Üzgünüm, komut çalıştıramıyorum.",
