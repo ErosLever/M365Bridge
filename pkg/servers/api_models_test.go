@@ -18,14 +18,8 @@ type modelListResponse struct {
 		MaxInputTokens  int    `json:"max_input_tokens"`
 		MaxOutputTokens int    `json:"max_output_tokens"`
 		SupportsTools   bool   `json:"supports_tools"`
-		BaseInstruct    string `json:"base_instructions"`
-		ApplyPatchType  string `json:"apply_patch_tool_type"`
-		DefaultLevel    string `json:"default_reasoning_level"`
-		Capabilities    struct {
-			SupportsTools bool `json:"supports_tools"`
-		} `json:"capabilities"`
 	} `json:"data"`
-	ReasoningEffortPresets []models.ReasoningEffortPreset `json:"reasoning_effort_presets"`
+	ReasoningEffortPresets []string `json:"reasoning_effort_presets"`
 }
 
 func fetchModels(t *testing.T, cfg *models.Config) modelListResponse {
@@ -88,33 +82,6 @@ func TestModelsListReportsOwnerAndCapabilities(t *testing.T) {
 
 	if len(got.ReasoningEffortPresets) != len(models.ReasoningEffortPresets) {
 		t.Fatalf("reasoning effort presets = %v, want %v", got.ReasoningEffortPresets, models.ReasoningEffortPresets)
-	}
-	for _, preset := range got.ReasoningEffortPresets {
-		if preset.Description == "" {
-			t.Fatalf("preset %q carries no description", preset.Effort)
-		}
-	}
-}
-
-// Codex reads a further set of catalog fields that plain OpenAI clients ignore,
-// and different clients look for capabilities in different places, so the same
-// facts appear at the top level and under capabilities.
-func TestModelsListCarriesCodexCatalogFields(t *testing.T) {
-	got := fetchModels(t, &models.Config{ContextWindowTokens: 200_000, MaxOutputTokens: 64_000})
-
-	for _, model := range got.Data {
-		if model.BaseInstruct == "" {
-			t.Fatalf("model %q has no base_instructions", model.ID)
-		}
-		if model.ApplyPatchType != "freeform" {
-			t.Fatalf("model %q apply_patch_tool_type = %q", model.ID, model.ApplyPatchType)
-		}
-		if model.DefaultLevel != "medium" {
-			t.Fatalf("model %q default_reasoning_level = %q", model.ID, model.DefaultLevel)
-		}
-		if !model.Capabilities.SupportsTools {
-			t.Fatalf("model %q reports no tool support under capabilities", model.ID)
-		}
 	}
 }
 

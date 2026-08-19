@@ -48,34 +48,9 @@ func (c ModelConfig) OwnerOrDefault() string {
 	return c.Owner
 }
 
-// ReasoningEffortPreset is one advertised reasoning effort value. Codex reads
-// the description to label the choice in its own UI.
-type ReasoningEffortPreset struct {
-	Effort      string `json:"effort"`
-	Description string `json:"description"`
-}
-
 // ReasoningEffortPresets lists the reasoning effort values the Responses API
 // accepts, from cheapest to most thorough.
-var ReasoningEffortPresets = []ReasoningEffortPreset{
-	{Effort: "none", Description: "Disable additional reasoning."},
-	{Effort: "minimal", Description: "Fast responses with minimal reasoning."},
-	{Effort: "low", Description: "Fast responses with lighter reasoning."},
-	{Effort: "medium", Description: "Balances speed and reasoning depth for everyday tasks."},
-	{Effort: "high", Description: "Greater reasoning depth for complex problems."},
-	{Effort: "xhigh", Description: "Extra high reasoning depth for complex problems."},
-	{Effort: "max", Description: "Maximum reasoning depth for the most complex problems."},
-}
-
-// ReasoningEffortNames lists the accepted effort values without their
-// descriptions, for error messages and validation.
-func ReasoningEffortNames() []string {
-	names := make([]string, len(ReasoningEffortPresets))
-	for i, preset := range ReasoningEffortPresets {
-		names[i] = preset.Effort
-	}
-	return names
-}
+var ReasoningEffortPresets = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 
 // ModelRegistry maps model keys to their configurations.
 var ModelRegistry = map[string]ModelConfig{

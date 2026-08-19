@@ -13,7 +13,7 @@ func TestReasoningEffortValidation(t *testing.T) {
 	}
 
 	// Codex sends the effort with varying case and spacing.
-	for _, effort := range []string{"none", "minimal", "low", "MEDIUM", " high ", "xhigh", "max"} {
+	for _, effort := range []string{"none", "minimal", "low", "MEDIUM", " high ", "xhigh"} {
 		if _, err := reasoningEffortRequestsDeliberation(&responsesReasoning{Effort: effort}); err != nil {
 			t.Fatalf("effort %q rejected: %v", effort, err)
 		}
@@ -23,9 +23,9 @@ func TestReasoningEffortValidation(t *testing.T) {
 	if !strings.Contains(err, "turbo") {
 		t.Fatalf("error %q does not name the rejected value", err)
 	}
-	for _, name := range models.ReasoningEffortNames() {
-		if !strings.Contains(err, name) {
-			t.Fatalf("error %q does not list the accepted value %q", err, name)
+	for _, preset := range models.ReasoningEffortPresets {
+		if !strings.Contains(err, preset) {
+			t.Fatalf("error %q does not list the accepted value %q", err, preset)
 		}
 	}
 }
@@ -47,7 +47,6 @@ func TestReasoningEffortThreshold(t *testing.T) {
 		"medium":  true,
 		"high":    true,
 		"xhigh":   true,
-		"max":     true,
 	}
 	for effort, want := range cases {
 		got, err := reasoningEffortRequestsDeliberation(&responsesReasoning{Effort: effort})
