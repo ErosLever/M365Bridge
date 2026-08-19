@@ -1,6 +1,8 @@
 package servers
 
 import (
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -10,14 +12,18 @@ import (
 
 func TestKeepaliveFramesMatchTheirWireFormat(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	writeSSEKeepalive(recorder, recorder)
+	if err := writeSSEKeepalive(recorder, recorder); err != nil {
+		t.Fatalf("openai keepalive returned %v", err)
+	}
 	// An SSE comment carries no field, so no client parses it as data.
 	if got := recorder.Body.String(); got != ": keepalive\n\n" {
 		t.Fatalf("openai keepalive = %q", got)
 	}
 
 	recorder = httptest.NewRecorder()
-	writeAnthropicKeepalive(recorder, recorder)
+	if err := writeAnthropicKeepalive(recorder, recorder); err != nil {
+		t.Fatalf("anthropic keepalive returned %v", err)
+	}
 	if got := recorder.Body.String(); got != "event: ping\ndata: {\"type\":\"ping\"}\n\n" {
 		t.Fatalf("anthropic keepalive = %q", got)
 	}
@@ -36,7 +42,10 @@ func TestNextStreamChunkWritesWhileUpstreamIsSilent(t *testing.T) {
 		ch <- client.StreamChunk{Text: "hello"}
 	}()
 
-	chunk, more := nextStreamChunk(ch, keepalive, func() { writes <- struct{}{} })
+	chunk, more := nextStreamChunk(ch, keepalive, httptest.NewRecorder(), func() error {
+		writes <- struct{}{}
+		return nil
+	})
 	if !more {
 		t.Fatal("the channel reported closed while a chunk was pending")
 	}
@@ -48,14 +57,29 @@ func TestNextStreamChunkWritesWhileUpstreamIsSilent(t *testing.T) {
 	}
 }
 
+func TestNextStreamChunkStopsWhenTheKeepaliveWriteFails(t *testing.T) {
+	// A client that stopped reading is only detected on the next write, so a
+	// failed keepalive has to end the turn instead of looping forever.
+	ch := make(chan client.StreamChunk)
+	keepalive := time.NewTicker(5 * time.Millisecond)
+	defer keepalive.Stop()
+
+	if _, more := nextStreamChunk(ch, keepalive, httptest.NewRecorder(), func() error {
+		return errors.New("connection reset by peer")
+	}); more {
+		t.Fatal("a failed keepalive write did not end the stream")
+	}
+}
+
 func TestNextStreamChunkReportsAClosedChannel(t *testing.T) {
 	ch := make(chan client.StreamChunk)
 	close(ch)
 	keepalive := time.NewTicker(time.Hour)
 	defer keepalive.Stop()
 
-	if _, more := nextStreamChunk(ch, keepalive, func() {
+	if _, more := nextStreamChunk(ch, keepalive, httptest.NewRecorder(), func() error {
 		t.Fatal("a closed channel must not produce a keepalive")
+		return nil
 	}); more {
 		t.Fatal("a closed channel reported more chunks")
 	}
@@ -67,9 +91,17 @@ func TestNextStreamChunkStaysQuietOnABusyStream(t *testing.T) {
 	keepalive := time.NewTicker(time.Hour)
 	defer keepalive.Stop()
 
-	if _, more := nextStreamChunk(ch, keepalive, func() {
+	if _, more := nextStreamChunk(ch, keepalive, httptest.NewRecorder(), func() error {
 		t.Fatal("a ready chunk must not produce a keepalive")
+		return nil
 	}); !more {
 		t.Fatal("a ready chunk was reported as a closed channel")
 	}
+}
+
+func TestRefreshStreamDeadlineToleratesAnUnsupportedWriter(t *testing.T) {
+	// httptest.ResponseRecorder exposes no connection, so SetWriteDeadline
+	// reports ErrNotSupported. A stream must not fail over that.
+	var w http.ResponseWriter = httptest.NewRecorder()
+	refreshStreamDeadline(w)
 }

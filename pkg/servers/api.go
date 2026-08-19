@@ -1630,7 +1630,7 @@ func (api *APIServer) streamAnthropicComplete(w http.ResponseWriter, messages []
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ch, keepalive, func() { writeAnthropicKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ch, keepalive, w, func() error { return writeAnthropicKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -1750,7 +1750,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ch, keepalive, func() { writeSSEKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -2170,7 +2170,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ch, keepalive, func() { writeAnthropicKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ch, keepalive, w, func() error { return writeAnthropicKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -2644,7 +2644,7 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ch, keepalive, func() { writeSSEKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -3195,38 +3195,64 @@ func (api *APIServer) injectJSONMode(messages *[]payload.Message) {
 // stream that delivers no bytes for around thirty seconds.
 const sseKeepaliveInterval = 10 * time.Second
 
+// sseWriteTimeout bounds how long one SSE write may block. Without it a client
+// that stopped reading but never closed its socket holds the handler goroutine
+// and its upstream WebSocket open for the rest of the turn.
+const sseWriteTimeout = 30 * time.Second
+
+// refreshStreamDeadline extends the write deadline of an SSE response.
+//
+// The error is deliberately ignored: httptest.ResponseRecorder and any wrapped
+// writer that hides the underlying connection report ErrNotSupported, and a
+// stream must not fail because the deadline could not be armed.
+func refreshStreamDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+}
+
 // writeSSEKeepalive emits an SSE comment. Every client ignores a comment line,
 // so it keeps the connection alive without entering any field contract.
-func writeSSEKeepalive(w http.ResponseWriter, flusher http.Flusher) {
-	fmt.Fprint(w, ": keepalive\n\n")
+func writeSSEKeepalive(w http.ResponseWriter, flusher http.Flusher) error {
+	if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+		return err
+	}
 	flusher.Flush()
+	return nil
 }
 
 // writeAnthropicKeepalive emits the ping event the Anthropic wire format
 // defines for this purpose. An SSE comment would work too, but the SDK already
 // knows ping and dispatches it at any point in the stream.
-func writeAnthropicKeepalive(w http.ResponseWriter, flusher http.Flusher) {
-	fmt.Fprint(w, "event: ping\ndata: {\"type\":\"ping\"}\n\n")
+func writeAnthropicKeepalive(w http.ResponseWriter, flusher http.Flusher) error {
+	if _, err := fmt.Fprint(w, "event: ping\ndata: {\"type\":\"ping\"}\n\n"); err != nil {
+		return err
+	}
 	flusher.Flush()
+	return nil
 }
 
 // nextStreamChunk returns the next upstream chunk, writing a keepalive frame
 // through write for every interval that passes while the upstream is silent.
-// The second result is false once the channel closes.
+// The second result is false once the channel closes or a keepalive write
+// fails, which is how a stream to a gone client ends while it sits idle.
 //
 // The keepalive shares the caller's goroutine on purpose: http.ResponseWriter
 // tolerates no concurrent writes, so a background ticker goroutine would
 // interleave frames with the chunk loop.
-func nextStreamChunk(ch <-chan client.StreamChunk, keepalive *time.Ticker, write func()) (client.StreamChunk, bool) {
+func nextStreamChunk(ch <-chan client.StreamChunk, keepalive *time.Ticker, w http.ResponseWriter, write func() error) (client.StreamChunk, bool) {
 	for {
 		select {
 		case chunk, ok := <-ch:
 			if ok {
 				keepalive.Reset(sseKeepaliveInterval)
+				refreshStreamDeadline(w)
 			}
 			return chunk, ok
 		case <-keepalive.C:
-			write()
+			refreshStreamDeadline(w)
+			if err := write(); err != nil {
+				logging.Debugf("nextStreamChunk: keepalive write failed, ending stream: %v", err)
+				return client.StreamChunk{}, false
+			}
 		}
 	}
 }
@@ -5533,7 +5559,7 @@ func (api *APIServer) streamResponses(
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ch, keepalive, func() { writeSSEKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -6284,7 +6310,7 @@ func (api *APIServer) streamResponsesCompact(w http.ResponseWriter, messages []p
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ch, keepalive, func() { writeSSEKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
 		if !more {
 			break
 		}
