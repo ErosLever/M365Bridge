@@ -1189,7 +1189,10 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	preparedTools, localTools := api.prepareCodingTools(req.Tools, false)
 	req.Tools = preparedTools
 	requestJSON := replaceRequestTools(bodyBytes, req.Tools)
-	if len(req.Tools) > 0 {
+	// The declaration list stays whole in requestJSON so the model sees every
+	// capability, but simulation only runs when something is left for the
+	// client to execute.
+	if len(toolcalling.RouteableTools(req.Tools)) > 0 {
 		injectSimulatedPrompt(&req.Messages, requestJSON, toolChoiceString(req.ToolChoice), ledger.EvidenceNote())
 	}
 
@@ -1281,7 +1284,7 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 	messages := api.fimToChat(req.Prompt, req.Suffix)
 
 	// Inject simulated tool prompt if tool calling is enabled
-	if len(req.Tools) > 0 {
+	if len(toolcalling.RouteableTools(req.Tools)) > 0 {
 		// A FIM completion carries no tool history, so there is no evidence.
 		injectSimulatedPrompt(&messages, string(bodyBytes), toolChoiceString(req.ToolChoice), "")
 	}
@@ -1445,7 +1448,7 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 	preparedTools, localTools := api.prepareCodingTools(req.Tools, true)
 	req.Tools = preparedTools
 	requestJSON := replaceRequestTools(bodyBytes, req.Tools)
-	if len(req.Tools) > 0 {
+	if len(toolcalling.RouteableTools(req.Tools)) > 0 {
 		injectSimulatedPromptAnthropic(&chatMessages, requestJSON, anthropicToolChoiceString(req.ToolChoice), ledger.EvidenceNote())
 	}
 
@@ -1846,10 +1849,13 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 	// Send tool calls in stream if any (from M365 backend or simulated)
 	toolCalls := finalToolCalls
 
-	// In simulated mode, discard backend-injected tool calls (e.g.
-	// code_interpreter) — only client-declared tools parsed from the
-	// simulated JSON response are valid.
-	if hasTools {
+	// Discard backend-injected tool calls (search, code_interpreter) whenever
+	// the caller declared tools of its own: those calls name no client tool,
+	// so forwarding them hands the client work it cannot run. The declaration
+	// list is the test rather than hasTools, because a request declaring only
+	// web_search runs no simulation yet still must not leak the backend's own
+	// search call.
+	if len(tools) > 0 {
 		toolCalls = nil
 	}
 
@@ -1969,11 +1975,15 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 		return
 	}
 
-	// In simulated mode, discard backend-injected tool calls (e.g.
-	// code_interpreter) — only client-declared tools parsed from the
-	// simulated JSON response are valid.
-	if hasTools {
+	// Discard backend-injected tool calls (search, code_interpreter) whenever
+	// the caller declared tools of its own; see the note on the streaming path.
+	if len(tools) > 0 {
 		toolCalls = nil
+		// The backend reported tool_use for a call that is now gone, so the
+		// turn ends on its text instead.
+		if finishReason == "tool_calls" || finishReason == "tool_use" {
+			finishReason = "stop"
+		}
 		thinking = chatAnthropicThinkingForOutput(thinking, true)
 	}
 
@@ -2320,10 +2330,13 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 	// Send tool_use content blocks if any (server-side tools from M365 backend or simulated)
 	toolCalls := finalToolCalls
 
-	// In simulated mode, discard backend-injected tool calls (e.g.
-	// code_interpreter) — only client-declared tools parsed from the
-	// simulated JSON response are valid.
-	if hasTools {
+	// Discard backend-injected tool calls (search, code_interpreter) whenever
+	// the caller declared tools of its own: those calls name no client tool,
+	// so forwarding them hands the client work it cannot run. The declaration
+	// list is the test rather than hasTools, because a request declaring only
+	// web_search runs no simulation yet still must not leak the backend's own
+	// search call.
+	if len(tools) > 0 {
 		toolCalls = nil
 	}
 
@@ -2476,11 +2489,15 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 		return
 	}
 
-	// In simulated mode, discard backend-injected tool calls (e.g.
-	// code_interpreter) — only client-declared tools parsed from the
-	// simulated JSON response are valid.
-	if hasTools {
+	// Discard backend-injected tool calls (search, code_interpreter) whenever
+	// the caller declared tools of its own; see the note on the streaming path.
+	if len(tools) > 0 {
 		toolCalls = nil
+		// The backend reported tool_use for a call that is now gone, so the
+		// turn ends on its text instead.
+		if finishReason == "tool_calls" || finishReason == "tool_use" {
+			finishReason = "stop"
+		}
 		thinking = chatAnthropicThinkingForOutput(thinking, true)
 	}
 
@@ -2769,9 +2786,12 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 		return
 	}
 
-	// In simulated mode, discard backend-injected tool calls
-	if hasTools {
+	// Discard backend-injected tool calls whenever the caller declared tools.
+	if len(tools) > 0 {
 		toolCalls = nil
+		if finishReason == "tool_calls" {
+			finishReason = "stop"
+		}
 	}
 
 	// Parse simulated tool calls from response text

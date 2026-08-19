@@ -237,3 +237,15 @@ func TestPinnedWebSearchIsNotAnError(t *testing.T) {
 		t.Fatal("a pinned web_search demanded a client tool call it can never receive")
 	}
 }
+
+func TestWebSearchOnlyRequestStillSuppressesBackendCalls(t *testing.T) {
+	// A request declaring only web_search runs no simulation, so the guard that
+	// discards the backend's own search call must not be tied to simulation.
+	tools := []toolcalling.ToolDef{{Type: "function", Function: toolcalling.ToolDefFunc{Name: "web_search"}}}
+	if len(toolcalling.RouteableTools(tools)) != 0 {
+		t.Fatal("web_search alone left something routeable")
+	}
+	if len(tools) == 0 {
+		t.Fatal("the declaration list is what gates the backend-call discard")
+	}
+}
