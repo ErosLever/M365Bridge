@@ -3,6 +3,7 @@
 package servers
 
 import (
+	"cmp"
 	"context"
 	"crypto/md5"
 	"encoding/base64"
@@ -41,6 +42,21 @@ const (
 	// contextCacheMaxSize is the maximum number of in-memory cache entries.
 	contextCacheMaxSize = 256
 )
+
+// sessionKeyPrefix namespaces the conversation mapping inside the cache. It is
+// the only key shape the cache holds.
+const sessionKeyPrefix = "session:"
+
+// sessionRecord is the stored form of one session-to-conversation mapping.
+//
+// The file name is an md5 of the cache key, so the session ID cannot be read
+// back from disk. Storing it inside the file is what makes the mapping
+// listable at all.
+type sessionRecord struct {
+	SessionID      string `json:"session_id"`
+	ConversationID string `json:"conversation_id"`
+	UpdatedAt      int64  `json:"updated_at"`
+}
 
 // ContextCache provides session-based conversation persistence across requests.
 type ContextCache struct {
@@ -82,8 +98,8 @@ func (cc *ContextCache) Get(key string) string {
 	if err != nil {
 		return ""
 	}
-	var convID string
-	if err := json.Unmarshal(data, &convID); err != nil {
+	convID, ok := decodeCacheEntry(data)
+	if !ok {
 		return ""
 	}
 
@@ -92,6 +108,21 @@ func (cc *ContextCache) Get(key string) string {
 	cc.evict()
 
 	return convID
+}
+
+// decodeCacheEntry reads either stored shape. Entries written before the
+// record format are a bare JSON string, and they must keep working, because
+// they are live session mappings.
+func decodeCacheEntry(data []byte) (string, bool) {
+	var record sessionRecord
+	if err := json.Unmarshal(data, &record); err == nil && record.ConversationID != "" {
+		return record.ConversationID, true
+	}
+	var convID string
+	if err := json.Unmarshal(data, &convID); err == nil {
+		return convID, true
+	}
+	return "", false
 }
 
 // Set stores a conversation ID by session key.
@@ -105,8 +136,70 @@ func (cc *ContextCache) Set(key, convID string) {
 	cc.order = append(cc.order, key)
 	cc.evict()
 
-	data, _ := json.Marshal(convID)
+	data, _ := json.Marshal(sessionRecord{
+		SessionID:      strings.TrimPrefix(key, sessionKeyPrefix),
+		ConversationID: convID,
+		UpdatedAt:      time.Now().Unix(),
+	})
 	_ = cc.writeFile(cc.path(key), data, 0600)
+}
+
+// List returns every mapping the cache dir holds, newest first, together with
+// the number of entries written before the record format. Those carry no
+// session ID and none can be recovered, because the file name is an md5, so
+// they are reported as a count rather than dropped silently.
+func (cc *ContextCache) List() ([]sessionRecord, int) {
+	entries, err := os.ReadDir(cc.cacheDir)
+	if err != nil {
+		return nil, 0
+	}
+
+	var records []sessionRecord
+	legacy := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(cc.cacheDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var record sessionRecord
+		if json.Unmarshal(data, &record) != nil || record.SessionID == "" {
+			legacy++
+			continue
+		}
+		records = append(records, record)
+	}
+
+	slices.SortFunc(records, func(a, b sessionRecord) int {
+		return cmp.Compare(b.UpdatedAt, a.UpdatedAt)
+	})
+	return records, legacy
+}
+
+// Lookup returns the stored mapping for one session ID. An entry in the legacy
+// format has no timestamp of its own, so the file modification time stands in.
+func (cc *ContextCache) Lookup(sid string) (sessionRecord, bool) {
+	convID := cc.Get(sessionKeyPrefix + sid)
+	if convID == "" {
+		return sessionRecord{}, false
+	}
+	record := sessionRecord{SessionID: sid, ConversationID: convID}
+
+	data, err := os.ReadFile(cc.path(sessionKeyPrefix + sid))
+	if err == nil {
+		var stored sessionRecord
+		if json.Unmarshal(data, &stored) == nil && stored.UpdatedAt > 0 {
+			record.UpdatedAt = stored.UpdatedAt
+		}
+	}
+	if record.UpdatedAt == 0 {
+		if info, err := os.Stat(cc.path(sessionKeyPrefix + sid)); err == nil {
+			record.UpdatedAt = info.ModTime().Unix()
+		}
+	}
+	return record, true
 }
 
 // Delete removes a conversation ID from memory and disk.
@@ -1226,7 +1319,7 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 
 	var convID string
 	if sid != "" {
-		convID = api.ctxCache.Get("session:" + sid)
+		convID = api.ctxCache.Get(sessionKeyPrefix + sid)
 	}
 
 	// Upload any images found in multimodal content and attach annotations
@@ -1309,7 +1402,7 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	var convID string
 	if sid != "" {
-		convID = api.ctxCache.Get("session:" + sid)
+		convID = api.ctxCache.Get(sessionKeyPrefix + sid)
 	}
 
 	hasTools := len(toolcalling.RouteableTools(req.Tools)) > 0
@@ -1472,7 +1565,7 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 	}
 	var convID string
 	if sid != "" {
-		convID = api.ctxCache.Get("session:" + sid)
+		convID = api.ctxCache.Get(sessionKeyPrefix + sid)
 	}
 
 	// Upload any images found in multimodal content and attach annotations
@@ -1534,7 +1627,7 @@ func (api *APIServer) handleAnthropicComplete(w http.ResponseWriter, r *http.Req
 	}
 	var convID string
 	if sid != "" {
-		convID = api.ctxCache.Get("session:" + sid)
+		convID = api.ctxCache.Get(sessionKeyPrefix + sid)
 	}
 
 	if req.Stream {
@@ -1585,7 +1678,7 @@ func (api *APIServer) nonStreamAnthropicComplete(w http.ResponseWriter, messages
 	// Cache conversation ID for session continuity
 	if sid != "" {
 		if finalConvID != "" {
-			api.ctxCache.Set("session:"+sid, finalConvID)
+			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 		}
 	}
 }
@@ -1710,7 +1803,7 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 	// Cache conversation ID for session continuity
 	if sid != "" {
 		if finalConvID != "" {
-			api.ctxCache.Set("session:"+sid, finalConvID)
+			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 		}
 	}
 }
@@ -1764,7 +1857,7 @@ func (api *APIServer) streamChatCompletions(ctx context.Context, w http.Response
 		}
 		if chunk.Error != nil {
 			if sid != "" {
-				api.ctxCache.Delete("session:" + sid)
+				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
 			api.sendSSEError(w, chunkID, openaiModel, chunk.Error)
 			return
@@ -1963,12 +2056,12 @@ func (api *APIServer) updateChatStreamSession(sid, finalConvID, fullText, thinki
 	if strings.TrimSpace(fullText) == "" &&
 		strings.TrimSpace(thinkingText) == "" &&
 		len(toolCalls) == 0 {
-		api.ctxCache.Delete("session:" + sid)
+		api.ctxCache.Delete(sessionKeyPrefix + sid)
 		return
 	}
 
 	if finalConvID != "" {
-		api.ctxCache.Set("session:"+sid, finalConvID)
+		api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 	}
 }
 
@@ -1979,7 +2072,7 @@ func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoop
 		}
 	}
 	if sid != "" && result.conversationID != "" {
-		api.ctxCache.Set("session:"+sid, result.conversationID)
+		api.ctxCache.Set(sessionKeyPrefix+sid, result.conversationID)
 	}
 	usage := openAIUsage(messages, tools, toolChoice, result.text, result.thinking)
 	if stream {
@@ -2007,7 +2100,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 	respText, thinking, toolCalls, finishReason, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 	if err != nil {
 		if sid != "" {
-			api.ctxCache.Delete("session:" + sid)
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
 		}
 		api.sendUpstreamError(w, "chat", err)
 		return
@@ -2053,7 +2146,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 
 	if blockedByContentPolicy(respText, toolCalls) {
 		if sid != "" {
-			api.ctxCache.Delete("session:" + sid)
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
 		}
 		api.sendContentBlockedError(w, respText)
 		return
@@ -2125,7 +2218,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 	// Cache conversation ID for session continuity
 	if sid != "" {
 		if finalConvID != "" {
-			api.ctxCache.Set("session:"+sid, finalConvID)
+			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 		}
 	}
 }
@@ -2192,7 +2285,7 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 		}
 		if chunk.Error != nil {
 			if sid != "" {
-				api.ctxCache.Delete("session:" + sid)
+				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
 			errEvent := map[string]any{
 				"type": "error",
@@ -2450,7 +2543,7 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 	// Cache conversation ID for session continuity
 	if sid != "" {
 		if finalConvID != "" {
-			api.ctxCache.Set("session:"+sid, finalConvID)
+			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 		}
 	}
 }
@@ -2477,7 +2570,7 @@ func (api *APIServer) respondBufferedAnthropic(w http.ResponseWriter, result too
 		content = append(content, map[string]any{"type": "tool_use", "id": call.ID, "name": call.Function.Name, "input": input})
 	}
 	if sid != "" && result.conversationID != "" {
-		api.ctxCache.Set("session:"+sid, result.conversationID)
+		api.ctxCache.Set(sessionKeyPrefix+sid, result.conversationID)
 	}
 	usage := anthropicUsage(messages, tools, toolChoice, result.text, result.thinking)
 	response := map[string]any{"id": fmt.Sprintf("msg_%s", uuid.New().String()), "type": "message", "role": "assistant", "content": content, "model": model, "stop_reason": stopReason, "stop_sequence": nil, "usage": usage}
@@ -2519,7 +2612,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 	respText, thinking, toolCalls, finishReason, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 	if err != nil {
 		if sid != "" {
-			api.ctxCache.Delete("session:" + sid)
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
 		}
 		api.sendUpstreamError(w, "chat", err)
 		return
@@ -2570,7 +2663,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 
 	if blockedByContentPolicy(respText, toolCalls) {
 		if sid != "" {
-			api.ctxCache.Delete("session:" + sid)
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
 		}
 		api.sendContentBlockedError(w, respText)
 		return
@@ -2630,7 +2723,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 	// Cache conversation ID for session continuity
 	if sid != "" {
 		if finalConvID != "" {
-			api.ctxCache.Set("session:"+sid, finalConvID)
+			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 		}
 	}
 }
@@ -2834,7 +2927,7 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 	// Cache conversation ID for session continuity
 	if sid != "" {
 		if finalConvID != "" {
-			api.ctxCache.Set("session:"+sid, finalConvID)
+			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 		}
 	}
 }
@@ -2878,7 +2971,7 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 
 	if blockedByContentPolicy(respText, toolCalls) {
 		if sid != "" {
-			api.ctxCache.Delete("session:" + sid)
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
 		}
 		api.sendContentBlockedError(w, respText)
 		return
@@ -2944,7 +3037,7 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 	// Cache conversation ID for session continuity
 	if sid != "" {
 		if finalConvID != "" {
-			api.ctxCache.Set("session:"+sid, finalConvID)
+			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 		}
 	}
 }
@@ -4779,7 +4872,7 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 
 	var convID string
 	if sid != "" {
-		convID = api.ctxCache.Get("session:" + sid)
+		convID = api.ctxCache.Get(sessionKeyPrefix + sid)
 	}
 
 	// Upload any images found in multimodal content
@@ -5187,7 +5280,7 @@ func (api *APIServer) respondBufferedResponses(w http.ResponseWriter, result too
 		}
 	}
 	if sid != "" && result.conversationID != "" {
-		api.ctxCache.Set("session:"+sid, result.conversationID)
+		api.ctxCache.Set(sessionKeyPrefix+sid, result.conversationID)
 	}
 	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
 	response := buildResponsesObject(responseID, cfg.OpenAIID, result.text, result.thinking, result.toolCalls, toolTypes, result.finishReason, countPromptTokens(messages, tools, toolChoice), countTokens(result.text)+outputProtocolTokens, countTokens(result.thinking))
@@ -5239,7 +5332,7 @@ func (api *APIServer) responsesRequestCanceled(
 		return false
 	}
 	if sid != "" && api.ctxCache != nil {
-		api.ctxCache.Delete("session:" + sid)
+		api.ctxCache.Delete(sessionKeyPrefix + sid)
 	}
 	return true
 }
@@ -5294,13 +5387,13 @@ func (api *APIServer) nonStreamResponses(
 		toolPolicy.simulate,
 		func() {
 			if sid != "" {
-				api.ctxCache.Delete("session:" + sid)
+				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
 		},
 	)
 	if err != nil {
 		if sid != "" {
-			api.ctxCache.Delete("session:" + sid)
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
 		}
 		if api.responsesRequestCanceled(ctx, sid) {
 			return
@@ -5323,7 +5416,7 @@ func (api *APIServer) nonStreamResponses(
 			toolPolicy,
 			func() (string, error) {
 				if sid != "" {
-					api.ctxCache.Delete("session:" + sid)
+					api.ctxCache.Delete(sessionKeyPrefix + sid)
 				}
 				retryResult, retryErr := api.responsesConversationOnce(
 					ctx,
@@ -5344,7 +5437,7 @@ func (api *APIServer) nonStreamResponses(
 			},
 			func() (string, error) {
 				if sid != "" {
-					api.ctxCache.Delete("session:" + sid)
+					api.ctxCache.Delete(sessionKeyPrefix + sid)
 				}
 				retryResult, retryErr := api.responsesConversationOnce(
 					ctx,
@@ -5366,7 +5459,7 @@ func (api *APIServer) nonStreamResponses(
 		)
 		if parseErr != nil {
 			if sid != "" {
-				api.ctxCache.Delete("session:" + sid)
+				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
 			if api.responsesRequestCanceled(ctx, sid) {
 				return
@@ -5398,7 +5491,7 @@ func (api *APIServer) nonStreamResponses(
 	thinking = responsesReasoningForOutput(thinking, toolPolicy.simulate)
 	if blockedByContentPolicy(respText, toolCalls) {
 		if sid != "" {
-			api.ctxCache.Delete("session:" + sid)
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
 		}
 		api.sendContentBlockedError(w, respText)
 		return
@@ -5408,7 +5501,7 @@ func (api *APIServer) nonStreamResponses(
 	respText = withoutUnverifiedCompletionClaim(respText, toolPolicy.simulate, toolPolicy.ledger, toolCalls)
 	if responsesResultEmpty(respText, toolCalls) {
 		if sid != "" {
-			api.ctxCache.Delete("session:" + sid)
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
 		}
 		// An exhausted conversation quota is the one empty-response cause the
 		// client can act on, so report it as 429 rather than a generic empty.
@@ -5445,9 +5538,9 @@ func (api *APIServer) nonStreamResponses(
 	// Cache conversation ID for session continuity
 	if sid != "" {
 		if shouldResetResponsesSession(respText, toolCalls, nil) {
-			api.ctxCache.Delete("session:" + sid)
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
 		} else if finalConvID != "" {
-			api.ctxCache.Set("session:"+sid, finalConvID)
+			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 		}
 	}
 }
@@ -5528,7 +5621,7 @@ func (api *APIServer) streamResponses(
 		toolPolicy.simulate,
 		func() {
 			if sid != "" {
-				api.ctxCache.Delete("session:" + sid)
+				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
 		},
 		func(
@@ -5660,7 +5753,7 @@ func (api *APIServer) streamResponses(
 		}
 		if chunk.Error != nil {
 			if sid != "" {
-				api.ctxCache.Delete("session:" + sid)
+				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
 			sendFailed("upstream_error", chunk.Error.Error())
 			return
@@ -5775,7 +5868,7 @@ func (api *APIServer) streamResponses(
 
 	if !toolCallingEnabled && responsesResultEmpty(fullText, nil) {
 		if sid != "" {
-			api.ctxCache.Delete("session:" + sid)
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
 		}
 		sendFailed(
 			upstreamEmptyResponseCode,
@@ -5837,7 +5930,7 @@ func (api *APIServer) streamResponses(
 			toolPolicy,
 			func() (string, error) {
 				if sid != "" {
-					api.ctxCache.Delete("session:" + sid)
+					api.ctxCache.Delete(sessionKeyPrefix + sid)
 				}
 				retryResult, retryErr := api.responsesConversationOnce(
 					ctx,
@@ -5859,7 +5952,7 @@ func (api *APIServer) streamResponses(
 			},
 			func() (string, error) {
 				if sid != "" {
-					api.ctxCache.Delete("session:" + sid)
+					api.ctxCache.Delete(sessionKeyPrefix + sid)
 				}
 				retryResult, retryErr := api.responsesConversationOnce(
 					ctx,
@@ -5882,7 +5975,7 @@ func (api *APIServer) streamResponses(
 		)
 		if parseErr != nil {
 			if sid != "" {
-				api.ctxCache.Delete("session:" + sid)
+				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
 			if api.responsesRequestCanceled(ctx, sid) {
 				return
@@ -5918,7 +6011,7 @@ func (api *APIServer) streamResponses(
 		}
 		if responsesResultEmpty(fullText, toolCalls) {
 			if sid != "" {
-				api.ctxCache.Delete("session:" + sid)
+				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
 			sendFailed(
 				upstreamEmptyResponseCode,
@@ -6156,9 +6249,9 @@ func (api *APIServer) streamResponses(
 	// Cache conversation ID for session continuity
 	if sid != "" {
 		if shouldResetResponsesSession(fullText, toolCalls, nil) {
-			api.ctxCache.Delete("session:" + sid)
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
 		} else if finalConvID != "" {
-			api.ctxCache.Set("session:"+sid, finalConvID)
+			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 		}
 	}
 }
@@ -6262,7 +6355,7 @@ func (api *APIServer) handleResponsesCompact(w http.ResponseWriter, r *http.Requ
 	}
 
 	convID := responsesCompactionConversationID(
-		api.ctxCache.Get("session:" + sid),
+		api.ctxCache.Get(sessionKeyPrefix + sid),
 	)
 
 	// Upload any images found in multimodal content
@@ -6314,7 +6407,7 @@ func (api *APIServer) nonStreamResponsesCompact(w http.ResponseWriter, messages 
 	if err != nil {
 		logging.Errorf("nonStreamResponsesCompact: chat failed: %v", err)
 		if sid != "" {
-			api.ctxCache.Delete("session:" + sid)
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
 		}
 		api.sendUpstreamError(w, "compaction", err)
 		return
@@ -6347,7 +6440,7 @@ func (api *APIServer) nonStreamResponsesCompact(w http.ResponseWriter, messages 
 	api.sendJSON(w, http.StatusOK, response)
 
 	if sid != "" && strings.TrimSpace(respText) != "" {
-		api.ctxCache.Delete("session:" + sid)
+		api.ctxCache.Delete(sessionKeyPrefix + sid)
 	}
 }
 
@@ -6412,7 +6505,7 @@ func (api *APIServer) streamResponsesCompact(ctx context.Context, w http.Respons
 		if chunk.Error != nil {
 			logging.Errorf("streamResponsesCompact: stream error: %v", chunk.Error)
 			if sid != "" {
-				api.ctxCache.Delete("session:" + sid)
+				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
 			sendEvent("response.failed", map[string]any{
 				"response": map[string]any{
@@ -6488,7 +6581,7 @@ func (api *APIServer) streamResponsesCompact(ctx context.Context, w http.Respons
 	flusher.Flush()
 
 	if sid != "" && strings.TrimSpace(fullText) != "" {
-		api.ctxCache.Delete("session:" + sid)
+		api.ctxCache.Delete(sessionKeyPrefix + sid)
 	}
 }
 
@@ -6702,7 +6795,7 @@ func (api *APIServer) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 
 	var convID string
 	if sid != "" {
-		convID = api.ctxCache.Get("session:" + sid)
+		convID = api.ctxCache.Get(sessionKeyPrefix + sid)
 	}
 
 	// Build prompt with hints
@@ -6733,7 +6826,7 @@ func (api *APIServer) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	// Cache conversation ID
 	if sid != "" {
 		if finalConvID != "" {
-			api.ctxCache.Set("session:"+sid, finalConvID)
+			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 		}
 	}
 
