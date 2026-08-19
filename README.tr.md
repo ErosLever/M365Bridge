@@ -870,6 +870,10 @@ Codex CLI, herhangi bir sohbet isteği göndermeden önce sağlayıcıyı iki pr
 
 Her akışlı uç nokta ayrıca on saniyelik sessizlikten sonra bir keepalive çerçevesi yazar, çünkü tool tanımlı bir tur metnini tool call parse'ı bitene kadar tamponlar. OpenAI biçimli yollar hiçbir istemcinin veri olarak ayrıştırmadığı bir SSE yorumu gönderir; `/v1/messages` ve `/v1/complete` Anthropic `ping` olayını gönderir.
 
+`/v1/chat/completions` ve `/v1/completions` bu yorumu ayrıca akış açılır açılmaz, upstream tur başlamadan önce yazar. Diğer her akışlı yol zaten önce bir çerçeve üretiyor (`message_start`, `ping` veya `response.created`); böylece istemci yavaş bir sağlayıcı ile ölü bir sağlayıcıyı ayırt etmek zorunda kalmaz.
+
+İstemcisi gitmiş bir akışı iki kural daha korur. Her çerçeve otuz saniyelik bir yazma zaman sınırı kurar, böylece okumayı bırakan bir istemci handler'ı ve upstream WebSocket'i açık tutamaz. Başarısız bir keepalive yazımı veya iptal edilen bir istek context'i turu bitirir ve kapanmış bir sokete yazmak yerine upstream bağlantısını bırakır.
+
 ## Responses Compact API
 
 `/v1/responses/compact` uç noktası, Codex uzaktan sıkıştırma için OpenAI Responses Compact API'yi uygular. `/v1/responses` ile aynı istek gövdesini kabul eder (model, input, instructions, tools, stream) ve tam olarak bir `compaction` output item içeren sıkıştırılmış bir response döndürür.

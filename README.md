@@ -870,6 +870,10 @@ Codex CLI opens a provider with two probes before it sends any chat request.
 
 Every streaming endpoint also writes a keepalive frame after ten idle seconds, because a tool-enabled turn buffers its text until the tool-call parse completes. The OpenAI-shaped routes send an SSE comment, which no client parses as data; `/v1/messages` and `/v1/complete` send the Anthropic `ping` event.
 
+`/v1/chat/completions` and `/v1/completions` also write that comment the moment the stream opens, before the upstream turn starts. Every other streaming route already emits a frame first (`message_start`, `ping`, or `response.created`), so a client never has to tell a slow provider from a dead one.
+
+Two more rules protect a stream whose client went away. Each frame arms a thirty-second write deadline, so a reader that stopped consuming cannot hold the handler and its upstream WebSocket open. A failed keepalive write, or a canceled request context, ends the turn and releases the upstream connection instead of writing into a closed socket.
+
 ## Responses Compact API
 
 The `/v1/responses/compact` endpoint implements the OpenAI Responses Compact API for Codex remote compaction. It accepts the same request body as `/v1/responses` (model, input, instructions, tools, stream) and returns a compacted response containing exactly one `compaction` output item.
