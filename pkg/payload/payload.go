@@ -97,12 +97,28 @@ type Message struct {
 	Images      []ImageData         `json:"-"`
 	Annotations []MessageAnnotation `json:"-"`
 	ToolCallID  string              `json:"tool_call_id,omitempty"` // OpenAI tool role messages
-	// ToolCallIDs lists the tool call ids this assistant message announced and
-	// ToolResultIDs lists the ids it answers. The conversation payload flattens
-	// both into text, so the ids are kept here for the server to check that a
-	// result refers to a call the same request actually declared.
-	ToolCallIDs   []string `json:"-"`
-	ToolResultIDs []string `json:"-"`
+	// ToolCalls lists the tool calls this assistant message announced and
+	// ToolResults lists the results it carries. The conversation payload
+	// flattens both into text, so the structure is kept here for the server to
+	// check that a result answers a call the same request declared, and to
+	// rebuild the evidence ledger for a client-driven tool loop.
+	ToolCalls   []ToolCallRecord   `json:"-"`
+	ToolResults []ToolResultRecord `json:"-"`
+}
+
+// ToolCallRecord is one tool call announced by an assistant message, kept in
+// its structured form after the message content has been flattened to text.
+type ToolCallRecord struct {
+	ID        string
+	Name      string
+	Arguments string
+}
+
+// ToolResultRecord is one tool result carried by a message, kept in its
+// structured form after the message content has been flattened to text.
+type ToolResultRecord struct {
+	ID      string
+	Content string
 }
 
 // ImageData represents an image extracted from multimodal content.
@@ -148,26 +164,34 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	m.Role = raw.Role
 	m.Name = raw.Name
 	m.ToolCallID = raw.ToolCallID
-	if raw.Role == "tool" && raw.ToolCallID != "" {
-		m.ToolResultIDs = append(m.ToolResultIDs, raw.ToolCallID)
-	}
+	isToolRole := raw.Role == "tool" && raw.ToolCallID != ""
 
 	// Handle OpenAI assistant messages with tool_calls field
 	if len(raw.ToolCalls) > 0 {
 		var sb strings.Builder
 		for _, tc := range raw.ToolCalls {
 			fmt.Fprintf(&sb, "[Previous Tool Call: %s]\nArguments: %s\n\n", tc.Function.Name, tc.Function.Arguments)
-			m.ToolCallIDs = append(m.ToolCallIDs, tc.ID)
+			m.ToolCalls = append(m.ToolCalls, ToolCallRecord{
+				ID:        tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			})
 		}
 		m.Content = strings.TrimSpace(sb.String())
 	}
 
 	if len(raw.Content) == 0 {
+		if isToolRole {
+			m.ToolResults = append(m.ToolResults, ToolResultRecord{ID: raw.ToolCallID})
+		}
 		return nil
 	}
 
 	// Handle null content (e.g. assistant message with tool_calls and content=null)
 	if string(raw.Content) == "null" {
+		if isToolRole {
+			m.ToolResults = append(m.ToolResults, ToolResultRecord{ID: raw.ToolCallID})
+		}
 		return nil
 	}
 
@@ -176,7 +200,8 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(raw.Content, &s); err == nil {
 		m.Content = s
 		// Convert tool role messages to formatted text
-		if m.Role == "tool" && m.ToolCallID != "" {
+		if isToolRole {
+			m.ToolResults = append(m.ToolResults, ToolResultRecord{ID: raw.ToolCallID, Content: s})
 			m.Content = fmt.Sprintf("[Tool Result (call_id: %s)]\n%s", m.ToolCallID, s)
 		}
 		return nil
@@ -227,15 +252,16 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 			// Anthropic assistant message: previous tool call
 			name, _ := block["name"].(string)
 			id, _ := block["id"].(string)
-			m.ToolCallIDs = append(m.ToolCallIDs, id)
 			input := block["input"]
+			arguments := ""
 			if inputBytes, err := json.Marshal(input); err == nil {
-				m.Content += fmt.Sprintf("\n[Previous Tool Call: %s]\nArguments: %s\n", name, string(inputBytes))
+				arguments = string(inputBytes)
+				m.Content += fmt.Sprintf("\n[Previous Tool Call: %s]\nArguments: %s\n", name, arguments)
 			}
+			m.ToolCalls = append(m.ToolCalls, ToolCallRecord{ID: id, Name: name, Arguments: arguments})
 		case "tool_result":
 			// Anthropic user message: tool result
 			toolUseID, _ := block["tool_use_id"].(string)
-			m.ToolResultIDs = append(m.ToolResultIDs, toolUseID)
 			resultContent := ""
 			if c, ok := block["content"].(string); ok {
 				resultContent = c
@@ -248,6 +274,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 					}
 				}
 			}
+			m.ToolResults = append(m.ToolResults, ToolResultRecord{ID: toolUseID, Content: resultContent})
 			m.Content += fmt.Sprintf("\n[Tool Result (call_id: %s)]\n%s\n", toolUseID, resultContent)
 		case "input_file", "file", "input_audio", "audio":
 			// The M365 backend accepts image attachments only, so these blocks
@@ -256,6 +283,13 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 			// rather than looking like the client never sent anything.
 			logging.Debugf("Message.UnmarshalJSON: dropping unsupported %q content block", blockType)
 		}
+	}
+
+	// A tool role message whose content is a block array carries its result as
+	// text blocks rather than a tool_result block, so the record is built from
+	// the accumulated text instead.
+	if isToolRole && len(m.ToolResults) == 0 {
+		m.ToolResults = append(m.ToolResults, ToolResultRecord{ID: raw.ToolCallID, Content: m.Content})
 	}
 
 	return nil

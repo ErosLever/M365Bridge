@@ -3197,9 +3197,9 @@ func applyReasoningEffort(modelKey string, cfg models.ModelConfig, deliberate bo
 func validateToolResultMessages(messages []payload.Message) error {
 	known := make(map[string]bool)
 	for i := range messages {
-		for _, id := range messages[i].ToolCallIDs {
-			if id != "" {
-				known[id] = true
+		for _, call := range messages[i].ToolCalls {
+			if call.ID != "" {
+				known[call.ID] = true
 			}
 		}
 	}
@@ -3208,12 +3208,12 @@ func validateToolResultMessages(messages []payload.Message) error {
 		if messages[i].Role == "tool" && messages[i].ToolCallID == "" {
 			return errors.New(`a message with role "tool" is missing tool_call_id`)
 		}
-		for _, id := range messages[i].ToolResultIDs {
-			if id == "" {
+		for _, result := range messages[i].ToolResults {
+			if result.ID == "" {
 				return errors.New("a tool result is missing the id of the tool call it answers")
 			}
-			if len(known) > 0 && !known[id] {
-				return fmt.Errorf("tool result %q does not answer any tool call in this request", id)
+			if len(known) > 0 && !known[result.ID] {
+				return fmt.Errorf("tool result %q does not answer any tool call in this request", result.ID)
 			}
 		}
 	}
@@ -4271,8 +4271,8 @@ func responsesInputToMessages(input any) []payload.Message {
 					callID,
 					output,
 				),
-				ToolCallID:    callID,
-				ToolResultIDs: []string{callID},
+				ToolCallID:  callID,
+				ToolResults: []payload.ToolResultRecord{{ID: callID, Content: output}},
 			})
 			continue
 		}
@@ -4282,9 +4282,9 @@ func responsesInputToMessages(input any) []payload.Message {
 			input, _ := m["input"].(string)
 			callID, _ := m["call_id"].(string)
 			messages = append(messages, payload.Message{
-				Role:        "assistant",
-				Content:     fmt.Sprintf("Tool call: %s(%s)", name, input),
-				ToolCallIDs: []string{callID},
+				Role:      "assistant",
+				Content:   fmt.Sprintf("Tool call: %s(%s)", name, input),
+				ToolCalls: []payload.ToolCallRecord{{ID: callID, Name: name, Arguments: input}},
 			})
 			continue
 		}
@@ -4303,8 +4303,8 @@ func responsesInputToMessages(input any) []payload.Message {
 					callID,
 					output,
 				),
-				ToolCallID:    callID,
-				ToolResultIDs: []string{callID},
+				ToolCallID:  callID,
+				ToolResults: []payload.ToolResultRecord{{ID: callID, Content: output}},
 			})
 			continue
 		}
@@ -4320,9 +4320,9 @@ func responsesInputToMessages(input any) []payload.Message {
 				qualifiedName = namespace + "/" + name
 			}
 			messages = append(messages, payload.Message{
-				Role:        "assistant",
-				Content:     fmt.Sprintf("Tool call: %s(%s)", qualifiedName, args),
-				ToolCallIDs: []string{callID},
+				Role:      "assistant",
+				Content:   fmt.Sprintf("Tool call: %s(%s)", qualifiedName, args),
+				ToolCalls: []payload.ToolCallRecord{{ID: callID, Name: qualifiedName, Arguments: args}},
 			})
 			continue
 		}

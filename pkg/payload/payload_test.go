@@ -93,3 +93,63 @@ func TestUnsupportedContentBlocksAreDropped(t *testing.T) {
 		t.Fatalf("a non-image block became an attachment: %#v", message.Images)
 	}
 }
+
+func TestOpenAIToolStructureSurvivesFlattening(t *testing.T) {
+	// The content is flattened to text for the backend, but the name, the
+	// arguments and the result body have to stay reachable so the server can
+	// tell which call a later turn is repeating.
+	var call Message
+	raw := `{"role":"assistant","content":null,"tool_calls":[
+		{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Ankara\"}"}}
+	]}`
+	if err := json.Unmarshal([]byte(raw), &call); err != nil {
+		t.Fatalf("decode assistant tool call: %v", err)
+	}
+	if len(call.ToolCalls) != 1 {
+		t.Fatalf("tool calls = %#v, want one record", call.ToolCalls)
+	}
+	if call.ToolCalls[0].Name != "get_weather" {
+		t.Fatalf("tool name = %q, want get_weather", call.ToolCalls[0].Name)
+	}
+	if !strings.Contains(call.ToolCalls[0].Arguments, "Ankara") {
+		t.Fatalf("arguments = %q, want the city preserved", call.ToolCalls[0].Arguments)
+	}
+
+	var result Message
+	if err := json.Unmarshal([]byte(`{"role":"tool","tool_call_id":"call_1","content":"sunny, 24C"}`), &result); err != nil {
+		t.Fatalf("decode tool result: %v", err)
+	}
+	if len(result.ToolResults) != 1 {
+		t.Fatalf("tool results = %#v, want one record", result.ToolResults)
+	}
+	if result.ToolResults[0].Content != "sunny, 24C" {
+		t.Fatalf("result body = %q, want the raw result without the text wrapper", result.ToolResults[0].Content)
+	}
+}
+
+func TestAnthropicToolStructureSurvivesFlattening(t *testing.T) {
+	var call Message
+	raw := `{"role":"assistant","content":[
+		{"type":"tool_use","id":"toolu_1","name":"read_file","input":{"path":"main.go"}}
+	]}`
+	if err := json.Unmarshal([]byte(raw), &call); err != nil {
+		t.Fatalf("decode tool_use: %v", err)
+	}
+	if len(call.ToolCalls) != 1 || call.ToolCalls[0].Name != "read_file" {
+		t.Fatalf("tool calls = %#v, want one read_file record", call.ToolCalls)
+	}
+	if !strings.Contains(call.ToolCalls[0].Arguments, "main.go") {
+		t.Fatalf("arguments = %q, want the path preserved", call.ToolCalls[0].Arguments)
+	}
+
+	var result Message
+	raw = `{"role":"user","content":[
+		{"type":"tool_result","tool_use_id":"toolu_1","content":"package main"}
+	]}`
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatalf("decode tool_result: %v", err)
+	}
+	if len(result.ToolResults) != 1 || result.ToolResults[0].Content != "package main" {
+		t.Fatalf("tool results = %#v, want the raw result body", result.ToolResults)
+	}
+}
