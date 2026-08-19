@@ -4509,6 +4509,15 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 
 	// Convert Responses API input to payload.Message list
 	messages := responsesInputToMessages(req.Input)
+
+	// Codex CLI opens a provider with a reachability probe: a POST carrying no
+	// input at all. Answer it here rather than sending an empty turn upstream,
+	// which costs a round trip and one message of the conversation quota.
+	if strings.TrimSpace(req.Instructions) == "" && responsesInputIsEmpty(messages) {
+		api.respondResponsesProbe(w, cfg.OpenAIID, req.Stream)
+		return
+	}
+
 	if err := validateToolResultMessages(messages); err != nil {
 		logging.Errorf("handleResponses: %v", err)
 		api.sendError(w, http.StatusBadRequest, err.Error())
@@ -4818,6 +4827,64 @@ func responsesExtractContent(content any) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// responsesInputIsEmpty reports whether a converted Responses input carries no
+// work at all: no text, no image, no tool call and no tool result.
+//
+// responsesInputToMessages returns one empty user message for an empty input,
+// so the message count alone cannot tell a probe from a real turn.
+func responsesInputIsEmpty(messages []payload.Message) bool {
+	for i := range messages {
+		m := &messages[i]
+		if strings.TrimSpace(m.Content) != "" {
+			return false
+		}
+		if len(m.Images) > 0 || len(m.ToolCalls) > 0 || len(m.ToolResults) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// respondResponsesProbe answers a reachability probe without reaching M365. It
+// writes a well-formed but empty Response, streaming or not, and touches no
+// session state.
+func (api *APIServer) respondResponsesProbe(w http.ResponseWriter, model string, stream bool) {
+	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
+	response := buildResponsesObject(responseID, model, "", "", nil, nil, "stop", 0, 0, 0)
+
+	if !stream {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "close")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		api.sendError(w, http.StatusInternalServerError, "Streaming not supported")
+		return
+	}
+
+	sequenceNumber := 0
+	sendEvent := func(eventType string, data map[string]any) {
+		data["type"] = eventType
+		data["sequence_number"] = sequenceNumber
+		sequenceNumber++
+		jsonData, _ := json.Marshal(data)
+		fmt.Fprintf(w, "data: %s\n\n", jsonData)
+		flusher.Flush()
+	}
+
+	// Codex validates the item lifecycle, so the probe emits the envelope
+	// events even though it carries no output item.
+	sendEvent("response.created", map[string]any{"response": response})
+	sendEvent("response.in_progress", map[string]any{"response": response})
+	sendEvent("response.completed", map[string]any{"response": response})
 }
 
 // buildResponsesObject constructs the non-streaming Responses API response object.
