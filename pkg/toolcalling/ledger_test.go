@@ -284,3 +284,21 @@ func TestFailureSignalRecognizesEveryExitForm(t *testing.T) {
 		t.Fatal("a zero exit code was reported as a failure")
 	}
 }
+
+func TestEvidenceNoteStaysBoundedForAHugeResult(t *testing.T) {
+	// The note is restated in the prompt on every request of a client-driven
+	// loop, so an unbounded result would grow the prompt without limit.
+	huge := strings.Repeat("line of build output\n", 3000)
+	ledger := BuildLedger(
+		[]LedgerCall{{ID: "call_1", Name: "run_tests", Arguments: `{}`}},
+		[]LedgerResult{{ID: "call_1", Content: huge + "exit status 1\n" + huge}},
+		1,
+	)
+	note := ledger.EvidenceNote()
+	if len(note) > maxEvidenceResult*2 {
+		t.Fatalf("note is %d bytes for a %d byte result, want it bounded", len(note), len(huge)*2)
+	}
+	if !strings.Contains(note, "truncated") {
+		t.Fatalf("note does not report the truncation: %.200q", note)
+	}
+}
