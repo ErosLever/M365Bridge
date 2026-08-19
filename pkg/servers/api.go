@@ -1621,8 +1621,8 @@ func (api *APIServer) streamAnthropicComplete(w http.ResponseWriter, messages []
 
 	ch := api.m365Client.ChatConversationStreamGen(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, false)
 
-	fullText := ""
-	thinkingText := ""
+	var fullTextBuilder strings.Builder
+	var thinkingBuilder strings.Builder
 	truncated := false
 
 	var finalConvID string
@@ -1653,19 +1653,19 @@ func (api *APIServer) streamAnthropicComplete(w http.ResponseWriter, messages []
 
 		// Accumulate thinking (not sent as content for Complete API)
 		if chunk.Thinking != "" {
-			thinkingText += chunk.Thinking
+			thinkingBuilder.WriteString(chunk.Thinking)
 			continue
 		}
 
 		// Check max_tokens limit
-		if maxTokens > 0 && countTokens(fullText) >= maxTokens {
+		if maxTokens > 0 && countTokens(fullTextBuilder.String()) >= maxTokens {
 			truncated = true
 			for range ch {
 			}
 			break
 		}
 
-		fullText += chunk.Text
+		fullTextBuilder.WriteString(chunk.Text)
 
 		// Send completion event with delta text
 		compData := map[string]any{
@@ -1680,6 +1680,7 @@ func (api *APIServer) streamAnthropicComplete(w http.ResponseWriter, messages []
 		flusher.Flush()
 	}
 	_ = finalToolCalls
+	fullText := fullTextBuilder.String()
 
 	// Determine stop reason
 	stopReason := "end_turn"
@@ -1733,7 +1734,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 	ch := api.m365Client.ChatConversationStreamGen(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 
 	hasContent := false
-	fullText := ""
+	var fullTextBuilder strings.Builder
 	var thinkingText strings.Builder
 	var thinkingFilter toolcalling.ThinkingStreamFilter
 	truncated := false
@@ -1800,7 +1801,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 		}
 
 		// Check max_tokens limit before sending more content
-		if maxTokens > 0 && countTokens(fullText) >= maxTokens {
+		if maxTokens > 0 && countTokens(fullTextBuilder.String()) >= maxTokens {
 			truncated = true
 			// Drain remaining chunks
 			for range ch {
@@ -1808,7 +1809,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 			break
 		}
 
-		fullText += chunk.Text
+		fullTextBuilder.WriteString(chunk.Text)
 
 		// If tool calling is not enabled, stream text directly
 		if !toolCallingEnabled {
@@ -1826,6 +1827,7 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 			flusher.Flush()
 		}
 	}
+	fullText := fullTextBuilder.String()
 
 	// Parse simulated tool calls from full text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
@@ -2152,7 +2154,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 	flusher.Flush()
 
 	// Stream content with optional thinking block
-	fullText := ""
+	var fullTextBuilder strings.Builder
 	var thinkingText strings.Builder
 	var thinkingFilter toolcalling.ThinkingStreamFilter
 	thinkingClosed := false
@@ -2260,14 +2262,14 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 		}
 
 		// Check max_tokens limit before sending more content
-		if maxTokens > 0 && countTokens(fullText) >= maxTokens {
+		if maxTokens > 0 && countTokens(fullTextBuilder.String()) >= maxTokens {
 			truncated = true
 			for range ch {
 			}
 			break
 		}
 
-		fullText += chunk.Text
+		fullTextBuilder.WriteString(chunk.Text)
 
 		// If tool calling is not enabled, stream text deltas directly
 		if !toolCallingEnabled {
@@ -2280,6 +2282,7 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 			flusher.Flush()
 		}
 	}
+	fullText := fullTextBuilder.String()
 
 	// Parse simulated tool calls from full text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
@@ -2631,8 +2634,8 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 
 	ch := api.m365Client.ChatConversationStreamGen(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 
-	fullText := ""
-	thinkingText := ""
+	var fullTextBuilder strings.Builder
+	var thinkingBuilder strings.Builder
 	truncated := false
 	toolCallingEnabled := hasTools
 
@@ -2675,19 +2678,19 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 
 		// Accumulate thinking text (not sent as content for text_completion)
 		if chunk.Thinking != "" {
-			thinkingText += chunk.Thinking
+			thinkingBuilder.WriteString(chunk.Thinking)
 			continue
 		}
 
 		// Check max_tokens limit before sending more content
-		if maxTokens > 0 && countTokens(fullText) >= maxTokens {
+		if maxTokens > 0 && countTokens(fullTextBuilder.String()) >= maxTokens {
 			truncated = true
 			for range ch {
 			}
 			break
 		}
 
-		fullText += chunk.Text
+		fullTextBuilder.WriteString(chunk.Text)
 
 		// If tool calling is not enabled, stream text directly
 		if !toolCallingEnabled {
@@ -2712,6 +2715,7 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 		}
 	}
 	_ = finalToolCalls
+	fullText := fullTextBuilder.String()
 
 	// Parse simulated tool calls from buffered text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
@@ -5423,7 +5427,7 @@ func (api *APIServer) streamResponses(
 		},
 	)
 
-	fullText := ""
+	var fullTextBuilder strings.Builder
 	var thinkingText strings.Builder
 	truncated := false
 
@@ -5568,7 +5572,7 @@ func (api *APIServer) streamResponses(
 				}
 				// Keep the raw transport for final tool-call parsing, while
 				// publishing only decoded assistant content.
-				fullText += chunk.Text
+				fullTextBuilder.WriteString(chunk.Text)
 				emitSimulatedDelta(contentExtractor.Feed(chunk.Text))
 			} else {
 				if !messageItemEmitted {
@@ -5602,12 +5606,12 @@ func (api *APIServer) streamResponses(
 				}
 
 				// Check max_tokens
-				if maxTokens > 0 && countTokens(fullText+chunk.Text) > maxTokens {
-					remaining := maxTokens - countTokens(fullText)
+				if maxTokens > 0 && countTokens(fullTextBuilder.String()+chunk.Text) > maxTokens {
+					remaining := maxTokens - countTokens(fullTextBuilder.String())
 					if remaining > 0 {
 						delta, _ := truncateToTokens(chunk.Text, remaining)
 						if delta != "" {
-							fullText += delta
+							fullTextBuilder.WriteString(delta)
 							outputIdx := 0
 							if reasoningItemEmitted {
 								outputIdx = 1
@@ -5629,7 +5633,7 @@ func (api *APIServer) streamResponses(
 					break
 				}
 
-				fullText += chunk.Text
+				fullTextBuilder.WriteString(chunk.Text)
 				outputIdx := 0
 				if reasoningItemEmitted {
 					outputIdx = 1
@@ -5643,6 +5647,7 @@ func (api *APIServer) streamResponses(
 			}
 		}
 	}
+	fullText := fullTextBuilder.String()
 	if api.responsesRequestCanceled(ctx, sid) {
 		return
 	}
@@ -6273,7 +6278,7 @@ func (api *APIServer) streamResponsesCompact(w http.ResponseWriter, messages []p
 
 	ch := api.m365Client.ChatConversationStreamGen(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 
-	fullText := ""
+	var fullTextBuilder strings.Builder
 
 	var finalToolCalls []client.ToolCall
 	keepalive := time.NewTicker(sseKeepaliveInterval)
@@ -6302,10 +6307,11 @@ func (api *APIServer) streamResponsesCompact(w http.ResponseWriter, messages []p
 			return
 		}
 		if chunk.Text != "" {
-			fullText += chunk.Text
+			fullTextBuilder.WriteString(chunk.Text)
 		}
 	}
 	_ = finalToolCalls
+	fullText := fullTextBuilder.String()
 
 	// In simulated mode, extract plain content
 	if hasTools {

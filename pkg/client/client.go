@@ -409,9 +409,12 @@ func (c *M365Client) ChatConversationContext(
 		hasTools,
 	)
 
-	var fullText, thinking, convID string
+	var convID string
 	var toolCalls []ToolCall
 	var finishReason string
+	// A long answer arrives as hundreds of chunks. String concatenation would
+	// copy the whole text on every one of them.
+	var fullText, thinking strings.Builder
 
 	for chunk := range ch {
 		if chunk.Error != nil {
@@ -422,15 +425,15 @@ func (c *M365Client) ChatConversationContext(
 			toolCalls = chunk.ToolCalls
 			finishReason = chunk.FinishReason
 		} else {
-			fullText += chunk.Text
-			thinking += chunk.Thinking
+			fullText.WriteString(chunk.Text)
+			thinking.WriteString(chunk.Thinking)
 		}
 	}
 
 	if err := ctx.Err(); err != nil {
 		return "", "", nil, "", "", err
 	}
-	return cleanText(fullText), thinking, toolCalls, finishReason, convID, nil
+	return cleanText(fullText.String()), thinking.String(), toolCalls, finishReason, convID, nil
 }
 
 // ChatConversationStreamGen generates a stream of conversation response chunks.
