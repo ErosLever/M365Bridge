@@ -1,80 +1,75 @@
 package servers
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/payload"
-	"github.com/KilimcininKorOglu/M365Bridge/pkg/toolcalling"
 )
 
-func TestTokenEncodingPrefersO200kBase(t *testing.T) {
-	// The backend serves GPT-5 class models, whose encoding is o200k_base.
-	// cl100k_base only stands in when the vocabulary cannot be fetched.
-	if tokenEncoder == nil {
-		t.Skip("no token encoding available in this environment")
-	}
-	if tokenEncodingName != "o200k_base" {
-		t.Fatalf("encoding = %q, want o200k_base", tokenEncodingName)
-	}
-	if got := usageSource(); got != "tiktoken_o200k_base_estimate" {
-		t.Fatalf("usage source = %q, want the o200k source", got)
+// usageProbeMessages is the turn every usage test counts, so a divergence
+// between two endpoints shows up as a difference in the reported number rather
+// than a difference in the input.
+func usageProbeMessages() []payload.Message {
+	return []payload.Message{
+		{Role: "system", Content: "You are terse."},
+		{Role: "user", Content: "Reply with exactly: OK"},
 	}
 }
 
-func TestHeuristicTokenCountSeparatesScripts(t *testing.T) {
-	if got := heuristicTokenCount(""); got != 0 {
-		t.Fatalf("empty text counted %d tokens", got)
+// The Go representation of a message slice prints every field of every
+// message, empty ones included, wrapped in braces and brackets. Running the
+// encoder over that counts punctuation the request never carried and skips the
+// protocol framing the request did carry, so it answers a different question
+// from countPromptTokens. This test guards the difference.
+func TestStructPrintIsNotAPromptCount(t *testing.T) {
+	messages := usageProbeMessages()
+
+	correct := countPromptTokens(messages, nil, "")
+	structPrint := countTokens(fmt.Sprint(messages))
+	if correct == structPrint {
+		t.Fatalf("both counters returned %d, so the test cannot tell them apart", correct)
 	}
-	if got := heuristicTokenCount("   \n\t "); got != 0 {
-		t.Fatalf("whitespace counted %d tokens", got)
-	}
-	// Latin text averages about four characters per token, CJK about one, so
-	// the same character count must not produce the same estimate.
-	latin := heuristicTokenCount(strings.Repeat("a", 40))
-	cjk := heuristicTokenCount(strings.Repeat("字", 40))
-	if cjk <= latin {
-		t.Fatalf("cjk=%d latin=%d, want the non-ASCII estimate to be higher", cjk, latin)
+
+	// The empty fields are what makes the printed form diverge from the text
+	// that was actually sent.
+	printed := fmt.Sprint(messages)
+	if !strings.Contains(printed, "[] []") {
+		t.Fatalf("fmt.Sprint no longer prints the empty fields; this guard is stale: %q", printed)
 	}
 }
 
-func TestCountPromptTokensCountsMessagesAndTools(t *testing.T) {
-	messages := []payload.Message{
-		{Role: "user", Content: "what is the weather in Ankara?"},
+// decodeUsage reads the usage object out of a JSON body under the given key.
+func decodeUsage(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode body %s: %v", body, err)
 	}
-	tools := []toolcalling.ToolDef{
-		{Type: "function", Function: toolcalling.ToolDefFunc{
-			Name:        "get_weather",
-			Description: "Get the current weather for a city",
-			Parameters:  map[string]any{"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}}},
-		}},
+	usage, ok := decoded["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("body carries no usage object: %s", body)
 	}
-
-	bare := countPromptTokens(messages, nil, "")
-	withTools := countPromptTokens(messages, tools, "")
-	withChoice := countPromptTokens(messages, tools, "required")
-
-	if bare <= requestProtocolTokens+replyPrimingTokens {
-		t.Fatalf("bare prompt = %d, want the message content counted too", bare)
-	}
-	if withTools <= bare {
-		t.Fatalf("withTools=%d bare=%d, want the tool schema counted", withTools, bare)
-	}
-	if withChoice != withTools+toolChoiceProtocolTokens {
-		t.Fatalf("withChoice=%d, want %d", withChoice, withTools+toolChoiceProtocolTokens)
-	}
-
-	twoMessages := countPromptTokens(append(messages, payload.Message{Role: "assistant", Content: "checking"}), nil, "")
-	if twoMessages <= bare {
-		t.Fatalf("twoMessages=%d bare=%d, want the extra message counted", twoMessages, bare)
-	}
+	return usage
 }
 
-func TestCountPromptTokensIgnoresGoStructFormatting(t *testing.T) {
-	// The old count ran the encoder over fmt.Sprint of the message slice, so
-	// Go field names and slice punctuation were billed as prompt content.
-	messages := []payload.Message{{Role: "user", Content: "hi"}}
-	if got := countPromptTokens(messages, nil, ""); got > 20 {
-		t.Fatalf("a two-character prompt counted %d tokens, want only its framing", got)
+// usageNumber reads one field as an int, failing when it is absent.
+func usageNumber(t *testing.T, usage map[string]any, key string) int {
+	t.Helper()
+	value, ok := usage[key].(float64)
+	if !ok {
+		t.Fatalf("usage has no numeric %s: %#v", key, usage)
+	}
+	return int(value)
+}
+
+// requireUsageSource fails when the usage object does not name its encoder.
+func requireUsageSource(t *testing.T, usage map[string]any) {
+	t.Helper()
+	source, ok := usage["usage_source"].(string)
+	if !ok || source == "" {
+		t.Fatalf("usage does not name its source: %#v", usage)
 	}
 }

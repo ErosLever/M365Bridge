@@ -2133,6 +2133,9 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 	}
 
 	msgID := fmt.Sprintf("msg_%s", uuid.New().String())
+	// The Anthropic wire format splits usage across message_start and
+	// message_delta, so the input side is counted once here and not repeated.
+	promptTok := countPromptTokens(messages, tools, toolChoice)
 
 	// Send message_start event
 	header := map[string]any{
@@ -2146,8 +2149,9 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 			"stop_reason":   nil,
 			"stop_sequence": nil,
 			"usage": map[string]any{
-				"input_tokens":  countTokens(fmt.Sprint(messages)),
+				"input_tokens":  promptTok,
 				"output_tokens": 0,
+				"usage_source":  usageSource(),
 			},
 		},
 	}
@@ -2419,8 +2423,9 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 			"stop_sequence": nil,
 		},
 		"usage": map[string]any{
-			"output_tokens":    countTokens(fullText),
+			"output_tokens":    countTokens(fullText) + outputProtocolTokens,
 			"reasoning_tokens": countTokens(thinkingText.String()),
+			"usage_source":     usageSource(),
 		},
 	}
 	api.sendAnthropicSSE(w, "message_delta", msgDelta)
@@ -2601,9 +2606,10 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 		"stop_reason":   stopReason,
 		"stop_sequence": nil,
 		"usage": map[string]any{
-			"input_tokens":     countTokens(fmt.Sprint(messages)),
-			"output_tokens":    countTokens(respText),
+			"input_tokens":     countPromptTokens(messages, tools, toolChoice),
+			"output_tokens":    countTokens(respText) + outputProtocolTokens,
 			"reasoning_tokens": countTokens(thinking),
+			"usage_source":     usageSource(),
 		},
 	}
 
