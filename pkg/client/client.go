@@ -36,6 +36,8 @@ const (
 	defaultRecvTimeout = 45 * time.Second
 	// defaultRecvFinalTimeout is the timeout for final message in streaming.
 	defaultRecvFinalTimeout = 60 * time.Second
+	// progressMessageType marks a status message rather than answer text.
+	progressMessageType = "Progress"
 )
 
 var (
@@ -634,7 +636,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 														}
 													}
 													// Extract thinking from Progress + ChainOfThoughtSummary
-													if messageType == "Progress" {
+													if messageType == progressMessageType {
 														if co, _ := msgMap["contentOrigin"].(string); co == "ChainOfThoughtSummary" {
 															if t, _ := msgMap["text"].(string); t != "" {
 																accThinking += t
@@ -665,10 +667,12 @@ func (c *M365Client) ChatConversationStreamGenContext(
 												}
 											}
 										}
-										// Only process text from the last message (skip Progress messages)
+										// Only process text from the last message, and only when
+										// that message is the answer rather than the backend's
+										// own tool traffic.
 										if len(msgs) > 0 {
 											if lastMsg, ok := msgs[len(msgs)-1].(map[string]any); ok {
-												if lastMsgType, _ := lastMsg["messageType"].(string); lastMsgType != "Progress" {
+												if carriesAnswerText(lastMsg) {
 													if newText, ok := lastMsg["text"].(string); ok && newText != "" {
 														if newText != accText {
 															var chunk string
@@ -768,7 +772,7 @@ func (c *M365Client) sendRecv(conn *websocket.Conn, payload string) (string, err
 						for _, arg := range args {
 							if argMap, ok := arg.(map[string]any); ok {
 								if msgs, ok := argMap["messages"].([]any); ok && len(msgs) > 0 {
-									if lastMsg, ok := msgs[len(msgs)-1].(map[string]any); ok {
+									if lastMsg, ok := msgs[len(msgs)-1].(map[string]any); ok && carriesAnswerText(lastMsg) {
 										if text, ok := lastMsg["text"].(string); ok {
 											fullText = text
 										}
@@ -783,6 +787,29 @@ func (c *M365Client) sendRecv(conn *websocket.Conn, payload string) (string, err
 			}
 		}
 	}
+}
+
+// carriesAnswerText reports whether a backend message holds assistant answer
+// text. M365 mixes its own tool traffic into the same messages array: a
+// Progress message carries status, and a GeneratedCode message carries the
+// code interpreter's source and then its raw result object. Treating those as
+// answer text puts backend internals into the reply, which is the same reason
+// servers.withoutBackendToolCalls discards the matching tool calls.
+//
+// The rule excludes the known backend types rather than admitting only the
+// empty messageType that a plain answer carries. Dropping answer text is the
+// worse failure, and no evidence rules out an answer arriving under a
+// messageType this package has not seen.
+func carriesAnswerText(msg map[string]any) bool {
+	messageType, _ := msg["messageType"].(string)
+	if messageType == "" {
+		return true
+	}
+	if messageType == progressMessageType {
+		return false
+	}
+	_, backendTool := models.ToolMessageType[messageType]
+	return !backendTool
 }
 
 // extractToolCall extracts a tool call from a message.
