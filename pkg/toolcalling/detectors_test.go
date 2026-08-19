@@ -55,6 +55,56 @@ func TestIsSandboxHallucination(t *testing.T) {
 	}
 }
 
+// Every pattern in the list has to be reachable through the public detector.
+// A typo or a pattern written with an uppercase letter would never match,
+// because matchesAny lowercases the reply and compares it against the pattern
+// verbatim.
+func TestEverySandboxPatternIsReachable(t *testing.T) {
+	for _, pattern := range sandboxHallucinationPatterns {
+		if pattern != strings.ToLower(pattern) {
+			t.Fatalf("pattern %q holds an uppercase letter and can never match", pattern)
+		}
+		runes := []rune(pattern)
+		reply := "Sorry, " + strings.ToUpper(string(runes[0])) + string(runes[1:]) + " right now."
+		if !IsSandboxHallucination(reply) {
+			t.Fatalf("pattern %q did not match a reply containing it: %q", pattern, reply)
+		}
+	}
+}
+
+// The backend answers in the request's language, so a refusal that arrives in
+// Chinese or Turkish has to be recognized the same way.
+func TestSandboxHallucinationDetectsNonEnglishRefusals(t *testing.T) {
+	// Each sample carries exactly one pattern, so removing that pattern breaks
+	// the sample it belongs to instead of being covered by a neighbour.
+	refusals := []string{
+		"抱歉，我无法执行命令。",
+		"这个请求没有执行通道。",
+		"Üzgünüm, komut çalıştıramıyorum.",
+		"Bu ortamda yürütme kanalım yok.",
+		"Bu isteği kendi sanal ortamımda çalıştırdım ve sonucu aşağıda paylaşıyorum.",
+	}
+	for _, text := range refusals {
+		if !IsSandboxHallucination(text) {
+			t.Fatalf("non-English sandbox claim not detected: %q", text)
+		}
+	}
+
+	// A long ordinary answer in either language must survive. The detector has
+	// no length bound, so a false positive here would replace real work.
+	ordinary := []string{
+		"Testleri çalıştırmak için run_tests aracını çağır. Sonuçları bu turda " +
+			"sana ileteceğim; bu ortamda dosya okuma aracı read_file olarak tanımlı. " +
+			"Kod incelemesini bitirdikten sonra apply_patch ile değişikliği uygulayabilirsin.",
+		"请调用 run_tests 工具来执行测试套件，然后把结果发回给我。",
+	}
+	for _, text := range ordinary {
+		if IsSandboxHallucination(text) {
+			t.Fatalf("ordinary non-English answer flagged as a sandbox claim: %q", text)
+		}
+	}
+}
+
 // The ban instruction travels inside the request. A model that echoes it back
 // would trip the detector it exists to prevent, so it must not contain any
 // pattern either detector looks for.

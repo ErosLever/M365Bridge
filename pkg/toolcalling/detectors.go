@@ -32,21 +32,71 @@ var toolRefusalPatterns = []string{
 }
 
 // sandboxHallucinationPatterns match a reply that claims the work already ran
-// somewhere other than the caller's tools.
+// somewhere other than the caller's tools, or that the caller's environment is
+// out of reach.
+//
+// Three shapes end the same way, with nothing for the agent loop to execute:
+// a statement of intent to run the work, a claim about an execution environment
+// the backend believes it has, and a refusal that names the caller's platform
+// as unreachable. The backend answers in the request's language, so the
+// Chinese and Turkish forms are matched too.
 var sandboxHallucinationPatterns = []string{
+	// Intent to run the work here.
 	"i'll run that",
 	"i will run that",
 	"i'll execute",
 	"i will execute",
 	"let me run it",
+	"let me run that",
+	"let me execute",
+	"i can run that for you",
 	"running it now",
+
+	// A claimed execution environment.
 	"code interpreter",
 	"python sandbox",
 	"my sandbox",
 	"/mnt/data",
 	"linux container",
+	"linux sandbox",
+	"cloud sandbox",
+	"sandbox environment",
+	"running in sandbox",
+	"executing in sandbox",
 	"execution environment has changed",
 	"in my environment",
+	"only provides linux",
+
+	// The caller's platform declared unreachable.
+	"cannot access the windows path",
+	"cannot execute on windows",
+	"cannot run commands on",
+	"no execution channel",
+	"no windows execution",
+	"none of which can reach",
+	"don't have a windows",
+	"don't have command execution",
+	"i don't have ssh access tools",
+
+	// Chinese forms of the same three shapes.
+	"无法执行命令",
+	"没有执行通道",
+	"没有 windows 执行通道",
+	"执行环境已经切换",
+	"只提供 linux 容器",
+
+	// Turkish forms. These were written without observing M365's own Turkish
+	// refusal text, so they are the least certain entries in this list. They
+	// also match sentence case only: matchesAny lowercases with the Unicode
+	// rule, under which an uppercase I becomes i rather than ı.
+	"komut çalıştıramıyorum",
+	"komut çalıştıramam",
+	"komut yürütemiyorum",
+	"yürütme kanalım yok",
+	"çalıştırma kanalım yok",
+	"kendi sanal ortamımda",
+	"linux kapsayıcısı",
+	"yürütme ortamım değişti",
 }
 
 // contentPolicyPatterns match M365's canned content refusal. It is a different
