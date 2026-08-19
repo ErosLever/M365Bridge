@@ -486,6 +486,33 @@ print(resp.choices[0].message.content)
 | `GET /v1/health`                 | Reachability probe for Codex (no auth required)        |
 | `GET /health`                    | Health check (no auth required)                        |
 
+## Error Responses
+
+Every endpoint reports failures in the OpenAI error shape. `type` is the category a client branches on, `code` is the specific machine-readable reason:
+
+```json
+{"error": {"message": "M365 rate limit reached for this chat request; retry after the interval in the Retry-After header", "type": "rate_limit_error", "code": "rate_limit_exceeded"}}
+```
+
+`type` is one of `invalid_request_error`, `authentication_error`, `rate_limit_error` or `server_error`. For a request the proxy rejects on its own, `code` is the status slug, for example `bad_request` or `method_not_allowed`.
+
+A failed backend request is classified rather than reported as a generic `500`:
+
+| Status | `code`                     | Cause                                                        |
+|--------|----------------------------|--------------------------------------------------------------|
+| `401`  | `upstream_auth_failed`     | The stored credentials are missing or could not be refreshed |
+| `403`  | `insufficient_permissions` | M365 refused the request for the configured account          |
+| `429`  | `rate_limit_exceeded`      | M365 throttled the request; a `Retry-After` header is sent   |
+| `429`  | `upstream_throttled`       | The conversation message quota is exhausted                  |
+| `409`  | `tool_round_limit`         | One turn drove more tool rounds than `M365_MAX_TOOL_ROUNDS`  |
+| `502`  | `upstream_error`           | M365 rejected the request or was unreachable                 |
+| `502`  | `upstream_unavailable`     | The WebSocket handshake failed or the connection dropped     |
+| `502`  | `upstream_content_blocked` | M365 declined the request instead of answering it            |
+| `503`  | `upstream_unavailable`     | M365 reported itself unavailable                             |
+| `504`  | `upstream_timeout`         | M365 did not answer in time                                  |
+
+A failure with no evidence of an upstream cause still reports `500` with `internal_error`, so a bug in the proxy is not presented as a backend outage. Error messages are fixed text: the transport error, including request URLs and credential file paths, stays in the server log.
+
 ## Models
 
 All model selection is via the `tone` field sent to the M365 backend. The `Override` field is empty for all models. GPT-5.x models route to the GPT-5 backend. Claude tone values return Claude responses, but M365 does not expose the underlying model identity in SignalR metadata.
@@ -571,7 +598,7 @@ M365 enforces a per-conversation message ceiling and reports the counters on its
 {"object":"quota","available":true,"exhausted":false,"used":8,"max":600,"headroom":592}
 ```
 
-Counters the proxy does not recognize are returned under `extra` instead of being dropped. When a request produces an empty upstream response and the last counters show the ceiling was reached, the proxy answers `429` with type `upstream_throttled` rather than a generic empty-response error; start a new session to continue.
+Counters the proxy does not recognize are returned under `extra` instead of being dropped. When a request produces an empty upstream response and the last counters show the ceiling was reached, the proxy answers `429` with code `upstream_throttled` rather than a generic empty-response error; start a new session to continue.
 
 ### Token Usage
 
@@ -707,7 +734,7 @@ Response:
 - `tool_choice` is enforced when the response is parsed, not only asked for in the prompt. Under `"none"` no call is forwarded; when a specific function is pinned, a call to any other tool is dropped and re-asked.
 - Every tool call id is a fresh `call_<uuid>`. The backend's own ids repeat across turns, which clients reject as duplicates.
 - A tool result whose `tool_call_id` (OpenAI), `tool_use_id` (Anthropic), or `call_id` (Responses) is missing, or names a call the same request never declared, is rejected with HTTP 400. A request that declares no tool calls at all skips the id check, so a client that trimmed its history is not blocked.
-- When the backend answers a tool request with prose that denies the tools exist or claims to have run the work in its own sandbox, the proxy re-asks once with an explicit instruction. An ordinary text answer passes through untouched.
+- When the backend answers a tool request with prose that denies the tools exist, claims to have run the work in its own sandbox, or states that it cannot reach the caller's machine, the proxy re-asks once with an explicit instruction. The phrasings are recognized in English, Chinese and Turkish. An ordinary text answer passes through untouched.
 - When M365 Copilot runs its own server-side tools (web search, code interpreter) and returns plain text instead of a simulated JSON payload, the response is returned as a normal text completion with `finish_reason: "stop"`.
 - When M365 raises a tool call for one of its own built-ins (`search`, `code_interpreter`, `trigger_plugin`, `invoke_action`), that call is dropped and the turn ends on `stop`. This holds even when the request declares no tools at all: the client never declared those names and cannot execute them, and the answer already carries the search results inline.
 - When the backend answers with an unparseable tool-calling envelope, the envelope is withheld instead of being forwarded as the assistant message; an answer that was nothing but envelope becomes a short notice.
@@ -724,7 +751,7 @@ Agent clients such as Claude Code and Codex drive the tool loop themselves and r
 | `M365_MAX_TOOL_ROUNDS` | `32`    | Tool rounds one user turn may drive before HTTP 409. Capped at `512`.        |
 | `M365_ENABLE_WEB_SEARCH` | `1`   | Declares the M365 `BingWebSearch` built-in on every turn. `0`, `false`, `off` or `no` withholds it. |
 
-- Exceeding the cap returns HTTP 409 with `tool_round_limit` and reports the round count. HTTP 409 is not a status the Anthropic SDK expects, but an explicit refusal is preferable to answering forever while the client asks for one more round.
+- Exceeding the cap returns HTTP 409 with code `tool_round_limit` and reports the round count. HTTP 409 is not a status the Anthropic SDK expects, but an explicit refusal is preferable to answering forever while the client asks for one more round.
 - The completed calls and their results are restated in the prompt as final evidence, so the model answers from a result it already has instead of asking for it again. When the same call has failed the same way more than once, the prompt also asks for a change of approach.
 - A tool call repeating a name and arguments whose result is already in the turn is dropped on the third identical attempt. The first repeat passes, because reading a file back after writing it or re-running the tests after a change are ordinary. A call demanded through `tool_choice` is always forwarded, and a drop never triggers the corrective re-ask, because re-asking would produce the same call again.
 - Each restated result is compacted to a head and a tail around a marker naming the removed size, so a long build log does not grow the prompt on every round of the loop.

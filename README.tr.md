@@ -486,6 +486,33 @@ print(resp.choices[0].message.content)
 | `GET /v1/health`                 | Codex için erişilebilirlik probe'u (kimlik doğrulama gerekmez) |
 | `GET /health`                    | Sağlık kontrolü (kimlik doğrulama gerektirmez)          |
 
+## Hata Yanıtları
+
+Tüm uç noktalar hataları OpenAI hata biçiminde döndürür. `type` istemcinin dallanma yaptığı kategoridir, `code` ise makine tarafından okunabilen özel nedendir:
+
+```json
+{"error": {"message": "M365 rate limit reached for this chat request; retry after the interval in the Retry-After header", "type": "rate_limit_error", "code": "rate_limit_exceeded"}}
+```
+
+`type` değeri `invalid_request_error`, `authentication_error`, `rate_limit_error` veya `server_error` olur. Proxy'nin kendi reddettiği istekler için `code`, durum kodunun slug hâlidir; örneğin `bad_request` veya `method_not_allowed`.
+
+Başarısız bir backend isteği genel bir `500` yerine sınıflandırılır:
+
+| Durum  | `code`                     | Neden                                                          |
+|--------|----------------------------|----------------------------------------------------------------|
+| `401`  | `upstream_auth_failed`     | Saklanan kimlik bilgileri eksik veya yenilenemedi              |
+| `403`  | `insufficient_permissions` | M365 isteği yapılandırılan hesap için reddetti                 |
+| `429`  | `rate_limit_exceeded`      | M365 isteği kısıtladı; `Retry-After` başlığı gönderilir        |
+| `429`  | `upstream_throttled`       | Conversation mesaj kotası tükendi                              |
+| `409`  | `tool_round_limit`         | Bir tur `M365_MAX_TOOL_ROUNDS` sınırından fazla tool round sürdü |
+| `502`  | `upstream_error`           | M365 isteği reddetti veya erişilemedi                          |
+| `502`  | `upstream_unavailable`     | WebSocket handshake başarısız oldu veya bağlantı düştü         |
+| `502`  | `upstream_content_blocked` | M365 isteği yanıtlamak yerine reddetti                         |
+| `503`  | `upstream_unavailable`     | M365 kendisini kullanılamaz olarak bildirdi                    |
+| `504`  | `upstream_timeout`         | M365 zamanında yanıt vermedi                                   |
+
+Upstream kaynaklı olduğuna dair kanıt taşımayan bir hata yine `internal_error` koduyla `500` döndürür; böylece proxy'nin kendi hatası backend arızası gibi sunulmaz. Hata mesajları sabit metindir: istek URL'leri ve kimlik bilgisi dosya yolları dahil transport hatası yalnızca sunucu log'unda kalır.
+
 ## Modeller
 
 Tüm model seçimi, M365 backend'ine gönderilen `tone` alanı ile yapılır. Tüm modeller için `Override` alanı boştur. GPT-5.x modelleri GPT-5 backend'ine yönlendirilir. Claude tone değerleri Claude yanıtları döndürür, ancak M365 gerçek model kimliğini SignalR metadata içinde açıklamaz.
@@ -571,7 +598,7 @@ M365, konuşma başına bir mesaj üst sınırı uygular ve sayaçları update f
 {"object":"quota","available":true,"exhausted":false,"used":8,"max":600,"headroom":592}
 ```
 
-Proxy'nin tanımadığı sayaçlar atılmaz, `extra` altında döndürülür. Bir istek boş upstream yanıtı üretirse ve son sayaçlar üst sınıra ulaşıldığını gösteriyorsa, proxy genel boş yanıt hatası yerine `upstream_throttled` tipiyle `429` döndürür; devam etmek için yeni bir session başlatın.
+Proxy'nin tanımadığı sayaçlar atılmaz, `extra` altında döndürülür. Bir istek boş upstream yanıtı üretirse ve son sayaçlar üst sınıra ulaşıldığını gösteriyorsa, proxy genel boş yanıt hatası yerine `upstream_throttled` koduyla `429` döndürür; devam etmek için yeni bir session başlatın.
 
 ### Token Kullanımı
 
@@ -707,7 +734,7 @@ Yanıt:
 - `tool_choice` yalnızca prompt'ta istenmez, yanıt ayrıştırılırken zorlanır. `"none"` altında hiçbir çağrı iletilmez; belirli bir fonksiyon pinlendiğinde başka bir tool'a yapılan çağrı düşürülür ve yeniden sorulur.
 - Her tool call id'si yeni bir `call_<uuid>` değeridir. Backend'in kendi id'leri turlar arasında tekrar eder ve istemciler bunları çift kayıt olarak reddeder.
 - `tool_call_id` (OpenAI), `tool_use_id` (Anthropic) veya `call_id` (Responses) alanı eksik olan ya da aynı istekte hiç tanımlanmamış bir çağrıyı işaret eden tool sonucu HTTP 400 ile reddedilir. Hiç tool call tanımlamayan bir istek id kontrolünü atlar; böylece geçmişini kısaltmış bir istemci engellenmez.
-- Backend, tool içeren bir isteği tool'ların var olmadığını söyleyen ya da işi kendi sandbox'ında çalıştırdığını iddia eden düz metinle yanıtladığında, proxy açık bir talimatla bir kez yeniden sorar. Sıradan bir metin yanıtı olduğu gibi geçer.
+- Backend, tool içeren bir isteği tool'ların var olmadığını söyleyen, işi kendi sandbox'ında çalıştırdığını iddia eden ya da çağıranın makinesine erişemediğini belirten düz metinle yanıtladığında, proxy açık bir talimatla bir kez yeniden sorar. İfadeler İngilizce, Çince ve Türkçe olarak tanınır. Sıradan bir metin yanıtı olduğu gibi geçer.
 - M365 Copilot kendi sunucu tarafı araçlarını çalıştırdığında (web araması, code interpreter) ve simüle JSON yerine düz metin döndürdüğünde, yanıt normal bir metin tamamlaması olarak `finish_reason: "stop"` ile döndürülür.
 - M365 kendi built-in'lerinden biri için tool call ürettiğinde (`search`, `code_interpreter`, `trigger_plugin`, `invoke_action`), o çağrı düşürülür ve tur `stop` ile biter. Bu, istek hiç tool tanımlamasa da geçerlidir: istemci o adları tanımlamadı ve çalıştıramaz, cevap zaten arama sonuçlarını içinde taşır.
 - Backend ayrıştırılamayan bir tool calling envelope döndürdüğünde, envelope asistan mesajı olarak iletilmek yerine ayıklanır; tamamen envelope'tan ibaret bir yanıt kısa bir uyarı metnine dönüşür.
@@ -724,7 +751,7 @@ Claude Code ve Codex gibi agent istemcileri tool loop'u kendileri sürer ve her 
 | `M365_MAX_TOOL_ROUNDS` | `32`       | Bir kullanıcı turunun sürebileceği tool round sayısı. Üst sınır `512`.        |
 | `M365_ENABLE_WEB_SEARCH` | `1`      | Her turda M365 `BingWebSearch` built-in'ini tanımlar. `0`, `false`, `off` veya `no` bunu gönderilmez yapar. |
 
-- Sınır aşıldığında `tool_round_limit` tipiyle HTTP 409 döner ve round sayısı bildirilir. HTTP 409 Anthropic SDK'sının beklediği bir kod değildir, ama istemci bir tur daha isterken sonsuza kadar yanıt vermektense açık bir ret tercih edilir.
+- Sınır aşıldığında `tool_round_limit` koduyla HTTP 409 döner ve round sayısı bildirilir. HTTP 409 Anthropic SDK'sının beklediği bir kod değildir, ama istemci bir tur daha isterken sonsuza kadar yanıt vermektense açık bir ret tercih edilir.
 - Tamamlanmış çağrılar ve sonuçları prompt'ta kesin kanıt olarak tekrar edilir; böylece model elindeki sonucu yeniden istemek yerine ondan yanıt verir. Aynı çağrı aynı hatayla birden fazla kez başarısız olduysa prompt ayrıca yaklaşım değiştirmeyi ister.
 - Sonucu turda zaten bulunan bir ad ve argüman ikilisini tekrarlayan tool call, üçüncü aynı denemede düşürülür. İlk tekrar geçer; çünkü yazma sonrası dosyayı okumak veya değişiklik sonrası testleri tekrar çalıştırmak olağandır. `tool_choice` ile talep edilen bir çağrı her zaman iletilir ve düşürme düzeltici re-ask'i tetiklemez; çünkü tekrar sorulduğunda model aynı çağrıyı üretir.
 - Tekrar edilen her sonuç, kaldırılan bayt sayısını bildiren bir işaretin etrafında baş ve kuyruk olarak kırpılır; böylece uzun bir build logu döngünün her turunda prompt'u büyütmez.
