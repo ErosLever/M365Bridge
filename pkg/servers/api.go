@@ -1698,6 +1698,8 @@ func (api *APIServer) streamChatCompletions(w http.ResponseWriter, messages []pa
 			} else {
 				fullText = sim.Content
 			}
+		} else {
+			fullText = toolcalling.WithholdTransportEnvelope(fullText)
 		}
 	}
 
@@ -1889,6 +1891,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 			// we discarded backend-injected toolCalls above, reset the
 			// finish reason so we don't report tool_use with no blocks.
 			finishReason = "stop"
+			respText = toolcalling.WithholdTransportEnvelope(respText)
 		}
 	}
 
@@ -2134,6 +2137,8 @@ func (api *APIServer) streamAnthropicMessages(w http.ResponseWriter, messages []
 			} else {
 				fullText = sim.Content
 			}
+		} else {
+			fullText = toolcalling.WithholdTransportEnvelope(fullText)
 		}
 	}
 
@@ -2376,6 +2381,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 			// we discarded backend-injected toolCalls above, reset the
 			// finish reason so we don't report tool_use with no blocks.
 			finishReason = "stop"
+			respText = toolcalling.WithholdTransportEnvelope(respText)
 		}
 	}
 
@@ -2548,6 +2554,8 @@ func (api *APIServer) streamCompletions(w http.ResponseWriter, messages []payloa
 			} else {
 				fullText = sim.Content
 			}
+		} else {
+			fullText = toolcalling.WithholdTransportEnvelope(fullText)
 		}
 	}
 
@@ -2642,6 +2650,7 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 			}
 		} else {
 			finishReason = "stop"
+			respText = toolcalling.WithholdTransportEnvelope(respText)
 		}
 	}
 
@@ -5429,6 +5438,8 @@ func (api *APIServer) nonStreamResponsesCompact(w http.ResponseWriter, messages 
 		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		if sim.HasPayload {
 			respText = sim.Content
+		} else {
+			respText = toolcalling.WithholdTransportEnvelope(respText)
 		}
 	}
 
@@ -5534,6 +5545,8 @@ func (api *APIServer) streamResponsesCompact(w http.ResponseWriter, messages []p
 		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), toolcalling.ContractsFor(tools))
 		if sim.HasPayload {
 			fullText = sim.Content
+		} else {
+			fullText = toolcalling.WithholdTransportEnvelope(fullText)
 		}
 	}
 
