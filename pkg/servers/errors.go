@@ -1,8 +1,16 @@
 package servers
 
 import (
+	"context"
+	"errors"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
+
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/auth"
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/client"
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
 )
 
 // OpenAI's error body carries a category in "type" and a machine-readable
@@ -37,4 +45,99 @@ func openAIErrorCode(status int) string {
 		return "error"
 	}
 	return strings.ToLower(strings.ReplaceAll(text, " ", "_"))
+}
+
+// Every upstream failure used to be reported as 500 with the transport error
+// pasted into the message. That told a client nothing about whether to retry,
+// re-authenticate or stop, and it leaked request URLs and token handling
+// details from the M365 backend into a public response body.
+//
+// The failures are classified instead, and the raw error stays in the server
+// log.
+
+// upstream error codes. Each names one recoverable situation, so a client can
+// branch on it without parsing the message.
+const (
+	upstreamAuthFailedCode     = "upstream_auth_failed"
+	upstreamForbiddenCode      = "insufficient_permissions"
+	upstreamRateLimitCode      = "rate_limit_exceeded"
+	upstreamTimeoutCode        = "upstream_timeout"
+	upstreamUnavailableCode    = "upstream_unavailable"
+	upstreamRejectedCode       = "upstream_error"
+	internalProcessingCode     = "internal_error"
+	rateLimitRetryAfterSeconds = 60
+)
+
+// classifyUpstreamError maps a failed backend request onto the HTTP status and
+// code the client should see.
+//
+// An error that carries no evidence of an upstream failure stays 500: the tool
+// loop and the payload builders fail through this same path, and reporting our
+// own bug as a backend outage would send the client into a pointless retry.
+func classifyUpstreamError(err error) (int, string) {
+	switch {
+	case errors.Is(err, auth.ErrTokenNotFound), errors.Is(err, auth.ErrRefreshFailed):
+		return http.StatusUnauthorized, upstreamAuthFailedCode
+	case errors.Is(err, context.DeadlineExceeded):
+		return http.StatusGatewayTimeout, upstreamTimeoutCode
+	case errors.Is(err, client.ErrHandshakeFailed), errors.Is(err, client.ErrConnectionClosed):
+		return http.StatusBadGateway, upstreamUnavailableCode
+	}
+
+	if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
+		return http.StatusGatewayTimeout, upstreamTimeoutCode
+	}
+
+	if status, ok := client.UpstreamStatus(err); ok {
+		switch {
+		case status == http.StatusUnauthorized:
+			return http.StatusUnauthorized, upstreamAuthFailedCode
+		case status == http.StatusForbidden:
+			return http.StatusForbidden, upstreamForbiddenCode
+		case status == http.StatusPaymentRequired, status == http.StatusTooManyRequests:
+			return http.StatusTooManyRequests, upstreamRateLimitCode
+		case status == http.StatusServiceUnavailable:
+			return http.StatusServiceUnavailable, upstreamUnavailableCode
+		case status == http.StatusGatewayTimeout, status == http.StatusRequestTimeout:
+			return http.StatusGatewayTimeout, upstreamTimeoutCode
+		default:
+			// A dial that never reached a response reports status zero. The
+			// backend was still unreachable, which is a gateway failure.
+			return http.StatusBadGateway, upstreamRejectedCode
+		}
+	}
+
+	return http.StatusInternalServerError, internalProcessingCode
+}
+
+// upstreamErrorMessage states what failed without quoting the transport error.
+func upstreamErrorMessage(op, code string) string {
+	switch code {
+	case upstreamAuthFailedCode:
+		return "M365 authentication failed; the stored credentials could not be used for this " + op + " request"
+	case upstreamForbiddenCode:
+		return "M365 refused this " + op + " request for the configured account"
+	case upstreamRateLimitCode:
+		return "M365 rate limit reached for this " + op + " request; retry after the interval in the Retry-After header"
+	case upstreamTimeoutCode:
+		return "M365 did not answer the " + op + " request in time"
+	case upstreamUnavailableCode:
+		return "M365 is currently unreachable for this " + op + " request"
+	case upstreamRejectedCode:
+		return "M365 rejected the " + op + " request"
+	default:
+		return "the " + op + " request failed before it could be completed"
+	}
+}
+
+// sendUpstreamError reports a failed backend request. The raw error goes to the
+// log; the client receives the classification and a fixed message.
+func (api *APIServer) sendUpstreamError(w http.ResponseWriter, op string, err error) {
+	status, code := classifyUpstreamError(err)
+	logging.Errorf("%s failed: status=%d code=%s err=%v", op, status, code, err)
+
+	if status == http.StatusTooManyRequests {
+		w.Header().Set("Retry-After", strconv.Itoa(rateLimitRetryAfterSeconds))
+	}
+	api.sendErrorCode(w, status, code, upstreamErrorMessage(op, code))
 }

@@ -1238,7 +1238,7 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	if len(localTools) > 0 {
 		result, err := api.runToolLoop(r, toolLoopOpenAI, req.Messages, cfg, convID, req.Tools, localTools)
 		if err != nil {
-			api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Chat failed: %v", err))
+			api.sendUpstreamError(w, "chat", err)
 			return
 		}
 		api.respondBufferedChat(w, result, cfg, sid, req.MaxTokens, req.Stream)
@@ -1484,7 +1484,7 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 	if len(localTools) > 0 {
 		result, err := api.runToolLoop(r, toolLoopAnthropic, chatMessages, cfg, convID, req.Tools, localTools)
 		if err != nil {
-			api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Chat failed: %v", err))
+			api.sendUpstreamError(w, "chat", err)
 			return
 		}
 		api.respondBufferedAnthropic(w, result, chatMessages, req.Model, sid, req.MaxTokens, req.Stream)
@@ -1548,7 +1548,7 @@ func (api *APIServer) handleAnthropicComplete(w http.ResponseWriter, r *http.Req
 func (api *APIServer) nonStreamAnthropicComplete(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, model string, maxTokens int, stopSequences []string, sid, convID string) {
 	respText, _, _, _, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, false)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Completion failed: %v", err))
+		api.sendUpstreamError(w, "completion", err)
 		return
 	}
 
@@ -1998,7 +1998,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 		if sid != "" {
 			api.ctxCache.Delete("session:" + sid)
 		}
-		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Chat failed: %v", err))
+		api.sendUpstreamError(w, "chat", err)
 		return
 	}
 
@@ -2504,7 +2504,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 		if sid != "" {
 			api.ctxCache.Delete("session:" + sid)
 		}
-		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Chat failed: %v", err))
+		api.sendUpstreamError(w, "chat", err)
 		return
 	}
 
@@ -2825,7 +2825,7 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
 	respText, thinking, toolCalls, finishReason, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Completion failed: %v", err))
+		api.sendUpstreamError(w, "completion", err)
 		return
 	}
 
@@ -4738,7 +4738,7 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if len(localTools) > 0 {
 		result, err := api.runToolLoop(r, toolLoopOpenAI, messages, cfg, convID, req.Tools, localTools)
 		if err != nil {
-			api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Response failed: %v", err))
+			api.sendUpstreamError(w, "response", err)
 			return
 		}
 		api.respondBufferedResponses(
@@ -5253,7 +5253,7 @@ func (api *APIServer) nonStreamResponses(
 		if api.responsesRequestCanceled(ctx, sid) {
 			return
 		}
-		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Chat failed: %v", err))
+		api.sendUpstreamError(w, "chat", err)
 		return
 	}
 	respText := result.text
@@ -6264,7 +6264,7 @@ func (api *APIServer) nonStreamResponsesCompact(w http.ResponseWriter, messages 
 		if sid != "" {
 			api.ctxCache.Delete("session:" + sid)
 		}
-		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Compaction failed: %v", err))
+		api.sendUpstreamError(w, "compaction", err)
 		return
 	}
 
@@ -6512,7 +6512,7 @@ func (api *APIServer) handleImageGenerations(w http.ResponseWriter, r *http.Requ
 	// cause M365 to disengage instead of routing the prompt to image generation.
 	respText, _, _, _, _, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, "", api.config.UserOID, api.config.TenantID, false)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Image generation failed: %v", err))
+		api.sendUpstreamError(w, "image generation", err)
 		return
 	}
 
@@ -6674,7 +6674,7 @@ func (api *APIServer) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 
 	respText, _, _, _, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, false)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Image edit failed: %v", err))
+		api.sendUpstreamError(w, "image edit", err)
 		return
 	}
 

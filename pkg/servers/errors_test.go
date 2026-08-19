@@ -1,10 +1,18 @@
 package servers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/auth"
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/client"
 )
 
 func TestOpenAIErrorTypeMapsEveryStatusClass(t *testing.T) {
@@ -107,5 +115,175 @@ func TestContentBlockedErrorCarriesItsCodeInTheCodeField(t *testing.T) {
 	}
 	if code != upstreamContentBlockedCode {
 		t.Fatalf("code = %q, want %q", code, upstreamContentBlockedCode)
+	}
+}
+
+// timeoutError is a net.Error that reports a timeout, which is how a stalled
+// dial reaches the HTTP layer.
+type timeoutError struct{}
+
+func (timeoutError) Error() string { return "i/o timeout" }
+func (timeoutError) Timeout() bool { return true }
+func (timeoutError) Temporary() bool {
+	return true
+}
+
+func TestClassifyUpstreamErrorSeparatesTheRecoverableCases(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "missing refresh token",
+			err:        fmt.Errorf("failed to get token: %w", auth.ErrTokenNotFound),
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   upstreamAuthFailedCode,
+		},
+		{
+			name:       "refresh rejected",
+			err:        fmt.Errorf("chat: %w", auth.ErrRefreshFailed),
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   upstreamAuthFailedCode,
+		},
+		{
+			name:       "dial refused with 401",
+			err:        &client.UpstreamError{Op: "dial", Status: 401, Err: errors.New("bad handshake")},
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   upstreamAuthFailedCode,
+		},
+		{
+			name:       "dial refused with 403",
+			err:        &client.UpstreamError{Op: "dial", Status: 403, Err: errors.New("bad handshake")},
+			wantStatus: http.StatusForbidden,
+			wantCode:   upstreamForbiddenCode,
+		},
+		{
+			name:       "dial throttled",
+			err:        fmt.Errorf("chat failed: %w", &client.UpstreamError{Op: "dial", Status: 429, Err: errors.New("bad handshake")}),
+			wantStatus: http.StatusTooManyRequests,
+			wantCode:   upstreamRateLimitCode,
+		},
+		{
+			name:       "quota exhausted reported as 402",
+			err:        &client.UpstreamError{Op: "dial", Status: 402, Err: errors.New("payment required")},
+			wantStatus: http.StatusTooManyRequests,
+			wantCode:   upstreamRateLimitCode,
+		},
+		{
+			name:       "backend down",
+			err:        &client.UpstreamError{Op: "upload", Status: 503, Err: errors.New("unavailable")},
+			wantStatus: http.StatusServiceUnavailable,
+			wantCode:   upstreamUnavailableCode,
+		},
+		{
+			name:       "backend gateway timeout",
+			err:        &client.UpstreamError{Op: "dial", Status: 504, Err: errors.New("timeout")},
+			wantStatus: http.StatusGatewayTimeout,
+			wantCode:   upstreamTimeoutCode,
+		},
+		{
+			name:       "unreachable before any response",
+			err:        &client.UpstreamError{Op: "dial", Err: errors.New("no route to host")},
+			wantStatus: http.StatusBadGateway,
+			wantCode:   upstreamRejectedCode,
+		},
+		{
+			name:       "backend rejected with 500",
+			err:        &client.UpstreamError{Op: "upload", Status: 500, Err: errors.New("boom")},
+			wantStatus: http.StatusBadGateway,
+			wantCode:   upstreamRejectedCode,
+		},
+		{
+			name:       "handshake failed",
+			err:        fmt.Errorf("%w: %v", client.ErrHandshakeFailed, errors.New("eof")),
+			wantStatus: http.StatusBadGateway,
+			wantCode:   upstreamUnavailableCode,
+		},
+		{
+			name:       "connection closed mid-stream",
+			err:        client.ErrConnectionClosed,
+			wantStatus: http.StatusBadGateway,
+			wantCode:   upstreamUnavailableCode,
+		},
+		{
+			name:       "deadline exceeded",
+			err:        fmt.Errorf("chat: %w", context.DeadlineExceeded),
+			wantStatus: http.StatusGatewayTimeout,
+			wantCode:   upstreamTimeoutCode,
+		},
+		{
+			name:       "network timeout",
+			err:        fmt.Errorf("dial: %w", net.Error(timeoutError{})),
+			wantStatus: http.StatusGatewayTimeout,
+			wantCode:   upstreamTimeoutCode,
+		},
+		{
+			name:       "our own tool loop bug",
+			err:        errors.New("duplicate coding tool call \"read_file\""),
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   internalProcessingCode,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, code := classifyUpstreamError(tc.err)
+			if status != tc.wantStatus || code != tc.wantCode {
+				t.Fatalf("got (%d, %q), want (%d, %q)", status, code, tc.wantStatus, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestSendUpstreamErrorHidesTheTransportDetail(t *testing.T) {
+	// The raw error names the backend host and the failed handshake. A public
+	// error body must not repeat it.
+	api := &APIServer{}
+	rec := httptest.NewRecorder()
+	raw := &client.UpstreamError{
+		Op:     "dial",
+		Status: 403,
+		Err:    errors.New("websocket: bad handshake for wss://substrate.office.com/?access_token=SECRET"),
+	}
+	api.sendUpstreamError(rec, "chat", raw)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	message, errType, code := decodeErrorBody(t, rec.Body.Bytes())
+	for _, leaked := range []string{"substrate.office.com", "access_token", "SECRET", "bad handshake"} {
+		if strings.Contains(message, leaked) {
+			t.Fatalf("message leaked %q: %s", leaked, message)
+		}
+	}
+	if errType != "authentication_error" {
+		t.Fatalf("type = %q", errType)
+	}
+	if code != upstreamForbiddenCode {
+		t.Fatalf("code = %q, want %q", code, upstreamForbiddenCode)
+	}
+	if !strings.Contains(message, "chat") {
+		t.Fatalf("message %q does not name the failed operation", message)
+	}
+}
+
+func TestSendUpstreamErrorSetsRetryAfterOnlyWhenThrottled(t *testing.T) {
+	api := &APIServer{}
+
+	rec := httptest.NewRecorder()
+	api.sendUpstreamError(rec, "chat", &client.UpstreamError{Op: "dial", Status: 429, Err: errors.New("throttled")})
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "60" {
+		t.Fatalf("Retry-After = %q, want 60", got)
+	}
+
+	rec = httptest.NewRecorder()
+	api.sendUpstreamError(rec, "chat", client.ErrConnectionClosed)
+	if got := rec.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("a non-throttled failure set Retry-After to %q", got)
 	}
 }
