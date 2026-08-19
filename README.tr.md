@@ -483,6 +483,7 @@ print(resp.choices[0].message.content)
 | `GET /v1/models`                 | Model listesi                                           |
 | `GET /v1/quota`                  | Son gözlenen M365 konuşma mesaj kotası                  |
 | `POST /mcp`                      | Model Context Protocol sunucusu (JSON-RPC 2.0)          |
+| `GET /v1/health`                 | Codex için erişilebilirlik probe'u (kimlik doğrulama gerekmez) |
 | `GET /health`                    | Sağlık kontrolü (kimlik doğrulama gerektirmez)          |
 
 ## Modeller
@@ -706,10 +707,11 @@ Yanıt:
 - `tool_call_id` (OpenAI), `tool_use_id` (Anthropic) veya `call_id` (Responses) alanı eksik olan ya da aynı istekte hiç tanımlanmamış bir çağrıyı işaret eden tool sonucu HTTP 400 ile reddedilir. Hiç tool call tanımlamayan bir istek id kontrolünü atlar; böylece geçmişini kısaltmış bir istemci engellenmez.
 - Backend, tool içeren bir isteği tool'ların var olmadığını söyleyen ya da işi kendi sandbox'ında çalıştırdığını iddia eden düz metinle yanıtladığında, proxy açık bir talimatla bir kez yeniden sorar. Sıradan bir metin yanıtı olduğu gibi geçer.
 - M365 Copilot kendi sunucu tarafı araçlarını çalıştırdığında (web araması, code interpreter) ve simüle JSON yerine düz metin döndürdüğünde, yanıt normal bir metin tamamlaması olarak `finish_reason: "stop"` ile döndürülür.
+- M365 kendi built-in'lerinden biri için tool call ürettiğinde (`search`, `code_interpreter`, `trigger_plugin`, `invoke_action`), o çağrı düşürülür ve tur `stop` ile biter. Bu, istek hiç tool tanımlamasa da geçerlidir: istemci o adları tanımlamadı ve çalıştıramaz, cevap zaten arama sonuçlarını içinde taşır.
 - Backend ayrıştırılamayan bir tool calling envelope döndürdüğünde, envelope asistan mesajı olarak iletilmek yerine ayıklanır; tamamen envelope'tan ibaret bir yanıt kısa bir uyarı metnine dönüşür.
 - M365 isteğin kendisini yanıtlamak yerine reddettiğinde, akışsız uç noktalar `upstream_content_blocked` ile HTTP 502 döndürür; böylece ret bir yanıt sanılmaz. Akışlı bir tur yanıtını çoktan açmış olduğu için yalnızca loglanır.
 - Konuşma geçmişindeki `tool_result` mesajları (OpenAI) ve `tool_use`/`tool_result` içerik blokları (Anthropic), M365 backend'i tool rollerini anlamadığı için M365'ye gönderilmeden önce düz metne dönüştürülür.
-- Streaming endpoint'leri, tool call'ları ayrıştırmadan önce tam yanıtı tampona alır (tool call JSON'u birden çok chunk'a yayılabilir).
+- Streaming endpoint'leri, tool call'ları ayrıştırmadan önce tam yanıtı tampona alır (tool call JSON'u birden çok chunk'a yayılabilir). Tampon dolarken akış, bağlantı istemciye ölü görünmesin diye her on saniyelik sessizlikte bir keepalive çerçevesi yazar.
 
 ### İstemci Sürücülü Tool Loop'lar
 
@@ -858,6 +860,15 @@ Streaming uç noktası tipli SSE olayları yayınlar:
 | `response.function_call_arguments.done`  | Tool call argümanları tamamlandı                                  |
 | `response.completed`                     | Tam response nesnesi (status: completed)                          |
 | `response.failed`                        | Hata oluştu (status: failed)                                      |
+
+### Codex Uyumluluğu
+
+Codex CLI, herhangi bir sohbet isteği göndermeden önce sağlayıcıyı iki probe ile açar.
+
+- `GET /v1/health`, API key olmadan ve upstream'e hiç dokunmadan `{"status": "ok"}` döner. Burada 404 almak Codex'in tüm sağlayıcıyı erişilemez işaretlemesine yol açar.
+- Girdisinde metin, görsel, tool call veya tool result taşımayan bir `POST /v1/responses` isteği, akışlı veya değil, yerel olarak boş ama geçerli bir Response ile yanıtlanır. Bu boş turu upstream'e göndermek yaklaşık on iki saniye ve conversation quota'sından bir mesaj harcıyordu. `instructions` taşıyan istek gerçek bir turdur ve M365'e ulaşmaya devam eder.
+
+Her akışlı uç nokta ayrıca on saniyelik sessizlikten sonra bir keepalive çerçevesi yazar, çünkü tool tanımlı bir tur metnini tool call parse'ı bitene kadar tamponlar. OpenAI biçimli yollar hiçbir istemcinin veri olarak ayrıştırmadığı bir SSE yorumu gönderir; `/v1/messages` ve `/v1/complete` Anthropic `ping` olayını gönderir.
 
 ## Responses Compact API
 

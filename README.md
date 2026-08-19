@@ -483,6 +483,7 @@ print(resp.choices[0].message.content)
 | `GET /v1/models`                 | Model list                                             |
 | `GET /v1/quota`                  | Last observed M365 conversation message quota          |
 | `POST /mcp`                      | Model Context Protocol server (JSON-RPC 2.0)           |
+| `GET /v1/health`                 | Reachability probe for Codex (no auth required)        |
 | `GET /health`                    | Health check (no auth required)                        |
 
 ## Models
@@ -706,10 +707,11 @@ Response:
 - A tool result whose `tool_call_id` (OpenAI), `tool_use_id` (Anthropic), or `call_id` (Responses) is missing, or names a call the same request never declared, is rejected with HTTP 400. A request that declares no tool calls at all skips the id check, so a client that trimmed its history is not blocked.
 - When the backend answers a tool request with prose that denies the tools exist or claims to have run the work in its own sandbox, the proxy re-asks once with an explicit instruction. An ordinary text answer passes through untouched.
 - When M365 Copilot runs its own server-side tools (web search, code interpreter) and returns plain text instead of a simulated JSON payload, the response is returned as a normal text completion with `finish_reason: "stop"`.
+- When M365 raises a tool call for one of its own built-ins (`search`, `code_interpreter`, `trigger_plugin`, `invoke_action`), that call is dropped and the turn ends on `stop`. This holds even when the request declares no tools at all: the client never declared those names and cannot execute them, and the answer already carries the search results inline.
 - When the backend answers with an unparseable tool-calling envelope, the envelope is withheld instead of being forwarded as the assistant message; an answer that was nothing but envelope becomes a short notice.
 - When M365 refuses the request itself rather than answering it, non-streaming endpoints return HTTP 502 with `upstream_content_blocked`, so the refusal is not mistaken for an answer. A streaming turn has already opened its response, so it is logged instead.
 - `tool_result` messages (OpenAI) and `tool_use`/`tool_result` content blocks (Anthropic) in conversation history are converted to plain text before being sent to M365, since the M365 backend does not understand tool roles.
-- Streaming endpoints buffer the full response before parsing tool calls (tool call JSON may span multiple chunks).
+- Streaming endpoints buffer the full response before parsing tool calls (tool call JSON may span multiple chunks). While that buffer fills, the stream writes a keepalive frame every ten idle seconds so the connection does not look dead to the client.
 
 ### Client-Driven Tool Loops
 
@@ -858,6 +860,15 @@ The streaming endpoint emits typed SSE events:
 | `response.function_call_arguments.done`  | Tool call arguments complete                                 |
 | `response.completed`                     | Full response object (status: completed)                     |
 | `response.failed`                        | Error occurred (status: failed)                              |
+
+### Codex Compatibility
+
+Codex CLI opens a provider with two probes before it sends any chat request.
+
+- `GET /v1/health` answers `{"status": "ok"}` without an API key and without touching the upstream. A 404 there makes Codex mark the whole provider unreachable.
+- A `POST /v1/responses` whose input carries no text, image, tool call or tool result is answered locally with an empty but well-formed Response, streaming or not. Sending that empty turn upstream cost about twelve seconds and one message of the conversation quota. A request that carries `instructions` is a real turn and still reaches M365.
+
+Every streaming endpoint also writes a keepalive frame after ten idle seconds, because a tool-enabled turn buffers its text until the tool-call parse completes. The OpenAI-shaped routes send an SSE comment, which no client parses as data; `/v1/messages` and `/v1/complete` send the Anthropic `ping` event.
 
 ## Responses Compact API
 
