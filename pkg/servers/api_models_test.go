@@ -19,7 +19,7 @@ type modelListResponse struct {
 		MaxOutputTokens int    `json:"max_output_tokens"`
 		SupportsTools   bool   `json:"supports_tools"`
 	} `json:"data"`
-	ReasoningEffortPresets []string `json:"reasoning_effort_presets"`
+	ReasoningEffortPresets []models.ReasoningEffortPreset `json:"reasoning_effort_presets"`
 }
 
 func fetchModels(t *testing.T, cfg *models.Config) modelListResponse {
@@ -82,6 +82,11 @@ func TestModelsListReportsOwnerAndCapabilities(t *testing.T) {
 
 	if len(got.ReasoningEffortPresets) != len(models.ReasoningEffortPresets) {
 		t.Fatalf("reasoning effort presets = %v, want %v", got.ReasoningEffortPresets, models.ReasoningEffortPresets)
+	}
+	for _, preset := range got.ReasoningEffortPresets {
+		if preset.Description == "" {
+			t.Fatalf("preset %q carries no description", preset.Effort)
+		}
 	}
 }
 

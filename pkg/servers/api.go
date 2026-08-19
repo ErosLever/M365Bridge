@@ -2843,6 +2843,7 @@ var reasoningEffortRank = map[string]int{
 	"medium":  3,
 	"high":    4,
 	"xhigh":   5,
+	"max":     6,
 }
 
 // reasoningEffortRequestsDeliberation validates the effort value and reports
@@ -2860,7 +2861,7 @@ func reasoningEffortRequestsDeliberation(reasoning *responsesReasoning) (bool, e
 		return false, fmt.Errorf(
 			"unsupported reasoning effort %q; use %s",
 			reasoning.Effort,
-			strings.Join(models.ReasoningEffortPresets, ", "),
+			strings.Join(models.ReasoningEffortNames(), ", "),
 		)
 	}
 	return rank >= reasoningEffortRank["medium"], nil
