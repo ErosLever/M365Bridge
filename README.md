@@ -403,6 +403,10 @@ Each session maps to a unique M365 conversation. Session ID is resolved in prior
 
 The hash fallback allows standard OpenAI clients (like Claude Code) that cannot send custom headers to have separate conversations automatically, as long as their first user message differs.
 
+`GET /v1/sessions` lists the mappings, newest first. Entries written before the mapping carried its session ID cannot be listed, because the cache file name is a hash of the key; they are reported as a `legacy_entries` count and appear in the list after their next turn rewrites them.
+
+`DELETE /v1/sessions/{id}` deletes the upstream M365 conversation and then clears the mapping, so the next turn on that session ID starts a fresh conversation. The mapping is kept when the upstream delete fails, so the request can be retried. Deleting the conversation needs the M365 web cookies in `data/tokens/m365_cookies.json`; add `?local_only=true` to clear only the mapping and leave the conversation in place, which is what a deployment without those cookies needs.
+
 ### Python Client (OpenAI SDK)
 
 ```python
@@ -482,6 +486,9 @@ print(resp.choices[0].message.content)
 | `DELETE /v1/conversations/{id}`  | Permanently delete a conversation                      |
 | `GET /v1/models`                 | Model list                                             |
 | `GET /v1/quota`                  | Last observed M365 conversation message quota          |
+| `GET /v1/sessions`               | List the session to conversation mappings              |
+| `GET /v1/sessions/{id}`          | Read one session's conversation ID                     |
+| `DELETE /v1/sessions/{id}`       | Delete the conversation and clear the mapping          |
 | `POST /mcp`                      | Model Context Protocol server (JSON-RPC 2.0)           |
 | `GET /v1/health`                 | Reachability probe for Codex (no auth required)        |
 | `GET /health`                    | Health check (no auth required)                        |

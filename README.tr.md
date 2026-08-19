@@ -403,6 +403,10 @@ Her oturum benzersiz bir M365 sohbetine eşlenir. Oturum ID'si öncelik sırası
 
 Hash yedeği, özel başlık gönderemeyen standart OpenAI istemcilerinin (Claude Code gibi) ilk kullanıcı mesajları farklı olduğu sürece otomatik olarak ayrı sohbetlere sahip olmasını sağlar.
 
+`GET /v1/sessions` eşlemeleri en yeniden eskiye listeler. Eşlemenin kendi oturum ID'sini taşımasından önce yazılmış kayıtlar listelenemez, çünkü cache dosya adı anahtarın hash'idir; bunlar `legacy_entries` sayısı olarak bildirilir ve bir sonraki tur onları yeniden yazdığında listede görünür.
+
+`DELETE /v1/sessions/{id}` önce upstream M365 sohbetini siler, sonra eşlemeyi temizler; böylece o oturum ID'si ile atılan bir sonraki tur yeni bir sohbet başlatır. Upstream silme başarısız olursa eşleme korunur, istek tekrarlanabilir. Sohbeti silmek `data/tokens/m365_cookies.json` içindeki M365 web cookie'lerini gerektirir; yalnızca eşlemeyi temizleyip sohbeti yerinde bırakmak için `?local_only=true` ekleyin. Bu cookie'leri olmayan bir kurulumun ihtiyaç duyduğu yol budur.
+
 ### Python İstemcisi (OpenAI SDK)
 
 ```python
@@ -482,6 +486,9 @@ print(resp.choices[0].message.content)
 | `DELETE /v1/conversations/{id}`  | Konuşmayı kalıcı olarak siler                           |
 | `GET /v1/models`                 | Model listesi                                           |
 | `GET /v1/quota`                  | Son gözlenen M365 konuşma mesaj kotası                  |
+| `GET /v1/sessions`               | Oturum-sohbet eşlemelerini listeler                     |
+| `GET /v1/sessions/{id}`          | Bir oturumun sohbet ID'sini okur                        |
+| `DELETE /v1/sessions/{id}`       | Sohbeti siler ve eşlemeyi temizler                      |
 | `POST /mcp`                      | Model Context Protocol sunucusu (JSON-RPC 2.0)          |
 | `GET /v1/health`                 | Codex için erişilebilirlik probe'u (kimlik doğrulama gerekmez) |
 | `GET /health`                    | Sağlık kontrolü (kimlik doğrulama gerektirmez)          |
