@@ -249,3 +249,26 @@ func TestWebSearchOnlyRequestStillSuppressesBackendCalls(t *testing.T) {
 		t.Fatal("the declaration list is what gates the backend-call discard")
 	}
 }
+
+func TestParseResponsesSimulationClaimsAGrammarBodyInsideAValidEnvelope(t *testing.T) {
+	// The backend often wraps the bridge object in a well-formed envelope, so
+	// the body ends up as the extracted content rather than as the whole reply.
+	policy, err := newResponsesToolPolicy([]toolcalling.ToolDef{{Type: "custom", Name: "exec"}}, "auto")
+	if err != nil {
+		t.Fatalf("newResponsesToolPolicy: %v", err)
+	}
+
+	body := `{\"input\":\"shell({cmd:\\\"cat README.md\\\"});\"}`
+	text := "```json\n" + `{"choices":[{"message":{"role":"assistant","content":"` + body + `"},"finish_reason":"stop"}]}` + "\n```"
+
+	result, err := parseResponsesSimulation(text, policy)
+	if err != nil {
+		t.Fatalf("parseResponsesSimulation: %v", err)
+	}
+	if len(result.toolCalls) != 1 {
+		t.Fatalf("tool calls = %d, want the wrapped grammar body claimed; content was %q", len(result.toolCalls), result.content)
+	}
+	if !strings.Contains(result.toolCalls[0].Function.Arguments, "cat README.md") {
+		t.Fatalf("arguments = %q, want the program body", result.toolCalls[0].Function.Arguments)
+	}
+}

@@ -3859,11 +3859,16 @@ func parseResponsesSimulation(text string, policy responsesToolPolicy) (response
 	}
 	simulated := toolcalling.ParseSimulatedResponseResponses(text, policy.allowedToolNames, toolcalling.ContractsFor(policy.tools))
 	// A grammar tool's body arrives unfenced, either as the lone bridge
-	// envelope or as bare source, so the envelope scan finds nothing. Without
-	// this the body would reach the client as escaped source in an assistant
-	// message instead of a call.
-	if !simulated.HasPayload && len(simulated.ToolCalls) == 0 {
-		if call, ok := toolcalling.GrammarBodyCall(text, policy.tools, policy.allows); ok {
+	// envelope or as bare source. It may be the whole reply, or it may end up
+	// as the extracted content of an otherwise valid envelope; either way it
+	// would reach the client as escaped source in an assistant message instead
+	// of a call. The candidate is whatever text is about to be forwarded.
+	if len(simulated.ToolCalls) == 0 {
+		candidate := text
+		if simulated.HasPayload {
+			candidate = simulated.Content
+		}
+		if call, ok := toolcalling.GrammarBodyCall(candidate, policy.tools, policy.allows); ok {
 			logging.Infof("parseResponsesSimulation: claimed an unfenced grammar body as a %q call", call.Name)
 			simulated.HasPayload = true
 			simulated.FinishReason = "tool_calls"
