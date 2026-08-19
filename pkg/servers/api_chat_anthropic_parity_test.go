@@ -33,6 +33,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					false,
 					nil,
 					"",
+					true,
 				)
 			},
 		},

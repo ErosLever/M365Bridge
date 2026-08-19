@@ -1172,6 +1172,7 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		User           string                `json:"user"`
 		Tools          []toolcalling.ToolDef `json:"tools"`
 		ToolChoice     any                   `json:"tool_choice"`
+		StreamOptions  *streamOptions        `json:"stream_options"`
 	}
 
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -1255,7 +1256,7 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if req.Stream {
-		api.streamChatCompletions(r.Context(), w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
+		api.streamChatCompletions(r.Context(), w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice), includeStreamUsage(req.StreamOptions))
 	} else {
 		api.nonStreamChatCompletions(w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
 	}
@@ -1280,13 +1281,14 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 	r.Body.Close()
 
 	var req struct {
-		Model      string                `json:"model"`
-		Prompt     string                `json:"prompt"`
-		Suffix     string                `json:"suffix"`
-		Stream     bool                  `json:"stream"`
-		MaxTokens  int                   `json:"max_tokens"`
-		Tools      []toolcalling.ToolDef `json:"tools"`
-		ToolChoice any                   `json:"tool_choice"`
+		Model         string                `json:"model"`
+		Prompt        string                `json:"prompt"`
+		Suffix        string                `json:"suffix"`
+		Stream        bool                  `json:"stream"`
+		MaxTokens     int                   `json:"max_tokens"`
+		Tools         []toolcalling.ToolDef `json:"tools"`
+		ToolChoice    any                   `json:"tool_choice"`
+		StreamOptions *streamOptions        `json:"stream_options"`
 	}
 
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -1324,7 +1326,7 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 	hasTools := len(toolcalling.RouteableTools(req.Tools)) > 0
 
 	if req.Stream {
-		api.streamCompletions(r.Context(), w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
+		api.streamCompletions(r.Context(), w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice), includeStreamUsage(req.StreamOptions))
 	} else {
 		api.nonStreamCompletions(w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
 	}
@@ -1622,7 +1624,6 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 	ch := api.m365Client.ChatConversationStreamGenContext(ctx, messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, false)
 
 	var fullTextBuilder strings.Builder
-	var thinkingBuilder strings.Builder
 	truncated := false
 
 	var finalConvID string
@@ -1651,9 +1652,9 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 			break
 		}
 
-		// Accumulate thinking (not sent as content for Complete API)
+		// The Complete wire format carries neither a thinking block nor a
+		// usage object, so reasoning has no field to travel in here.
 		if chunk.Thinking != "" {
-			thinkingBuilder.WriteString(chunk.Thinking)
 			continue
 		}
 
@@ -1716,7 +1717,7 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 }
 
 // streamChatCompletions streams chat completion responses in OpenAI format.
-func (api *APIServer) streamChatCompletions(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
+func (api *APIServer) streamChatCompletions(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, includeUsage bool) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -1935,15 +1936,18 @@ func (api *APIServer) streamChatCompletions(ctx context.Context, w http.Response
 	if len(toolCalls) > 0 {
 		finishReason = "tool_calls"
 	}
-	promptTok := countPromptTokens(messages, tools, toolChoice)
-	completionTok := countTokens(fullText) + outputProtocolTokens
-	reasoningTok := countTokens(thinkingText.String())
-	usage := map[string]any{
-		"prompt_tokens":     promptTok,
-		"completion_tokens": completionTok,
-		"reasoning_tokens":  reasoningTok,
-		"total_tokens":      promptTok + completionTok + reasoningTok,
-		"usage_source":      usageSource(),
+	var usage map[string]any
+	if includeUsage {
+		promptTok := countPromptTokens(messages, tools, toolChoice)
+		completionTok := countTokens(fullText) + outputProtocolTokens
+		reasoningTok := countTokens(thinkingText.String())
+		usage = map[string]any{
+			"prompt_tokens":     promptTok,
+			"completion_tokens": completionTok,
+			"reasoning_tokens":  reasoningTok,
+			"total_tokens":      promptTok + completionTok + reasoningTok,
+			"usage_source":      usageSource(),
+		}
 	}
 
 	api.sendSSEDone(w, chunkID, openaiModel, finishReason, usage)
@@ -2625,7 +2629,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 }
 
 // streamCompletions streams text completion responses in OpenAI text_completion format.
-func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
+func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, includeUsage bool) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -2800,6 +2804,20 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 				"logprobs":      nil,
 			},
 		},
+	}
+	// This route reported no usage at all, unlike every other streaming
+	// endpoint, so the reasoning it accumulated reached no client.
+	if includeUsage {
+		promptTok := countPromptTokens(messages, tools, toolChoice)
+		completionTok := countTokens(fullText) + outputProtocolTokens
+		reasoningTok := countTokens(thinkingBuilder.String())
+		doneChunk["usage"] = map[string]any{
+			"prompt_tokens":     promptTok,
+			"completion_tokens": completionTok,
+			"reasoning_tokens":  reasoningTok,
+			"total_tokens":      promptTok + completionTok + reasoningTok,
+			"usage_source":      usageSource(),
+		}
 	}
 	jsonData, _ := json.Marshal(doneChunk)
 	fmt.Fprintf(w, "data: %s\n\n", jsonData)
@@ -3210,6 +3228,21 @@ func (api *APIServer) injectJSONMode(messages *[]payload.Message) {
 // chunk arrives; measured at over nine seconds on a live turn. Clients drop a
 // stream that delivers no bytes for around thirty seconds.
 const sseKeepaliveInterval = 10 * time.Second
+
+// streamOptions carries the OpenAI stream_options object.
+type streamOptions struct {
+	IncludeUsage *bool `json:"include_usage"`
+}
+
+// includeStreamUsage reports whether a streaming turn should carry a usage
+// object.
+//
+// OpenAI defaults include_usage to false. This proxy has always sent usage on
+// every streaming chat turn, and clients here read it, so an absent
+// stream_options keeps that behaviour. Only an explicit false withholds it.
+func includeStreamUsage(opts *streamOptions) bool {
+	return opts == nil || opts.IncludeUsage == nil || *opts.IncludeUsage
+}
 
 // sseWriteTimeout bounds how long one SSE write may block. Without it a client
 // that stopped reading but never closed its socket holds the handler goroutine
