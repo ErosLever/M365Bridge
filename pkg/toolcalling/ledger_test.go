@@ -253,7 +253,7 @@ func TestCompactResultKeepsTheHeadAndTheTail(t *testing.T) {
 
 func TestBuildLedgerCompactsTheResultButKeepsTheFailureVerdict(t *testing.T) {
 	// The failing line sits in the middle, which is the part compaction drops.
-	body := strings.Repeat("a", maxEvidenceResult) + "\nexit code 1\n" + strings.Repeat("b", maxEvidenceResult)
+	body := strings.Repeat("a", maxEvidenceResult) + "\nexit status 1\n" + strings.Repeat("b", maxEvidenceResult)
 	ledger := BuildLedger(
 		[]LedgerCall{{ID: "call_1", Name: "run_tests", Arguments: `{}`}},
 		[]LedgerResult{{ID: "call_1", Content: body}},
@@ -270,5 +270,17 @@ func TestBuildLedgerCompactsTheResultButKeepsTheFailureVerdict(t *testing.T) {
 	}
 	if len(ledger.Completed[0].Result) > maxEvidenceResult+200 {
 		t.Fatalf("compacted result is %d bytes, want near %d", len(ledger.Completed[0].Result), maxEvidenceResult)
+	}
+}
+
+func TestFailureSignalRecognizesEveryExitForm(t *testing.T) {
+	failing := []string{"exit status 1", "exit code: 2", "exit code 1", "exit=127"}
+	for _, text := range failing {
+		if !failureSignal.MatchString(text) {
+			t.Fatalf("%q was not recognized as a failure", text)
+		}
+	}
+	if failureSignal.MatchString("exit code 0") {
+		t.Fatal("a zero exit code was reported as a failure")
 	}
 }

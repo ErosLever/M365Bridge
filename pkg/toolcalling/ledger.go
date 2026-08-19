@@ -26,7 +26,7 @@ const minEvidenceTail = 80
 // did not do what it was asked. The ledger uses it to tell an answered call
 // apart from an answered-but-failed one, which is what makes a repeat worth
 // reporting to the model.
-var failureSignal = regexp.MustCompile(`(?i)\b(exit\s*code\s*[1-9]|error|failed|failure|exception|traceback|timed?\s*out|timeout|permission denied|not found|refused)\b`)
+var failureSignal = regexp.MustCompile(`(?i)\b(exit\s*(code|status)?\s*[:=]?\s*[1-9]\d*|error|failed|failure|exception|traceback|timed?\s*out|timeout|permission denied|not found|refused)\b`)
 
 // digitRun collapses the numbers inside a failure message so that two runs of
 // the same failure compare equal even when line numbers, durations or process
