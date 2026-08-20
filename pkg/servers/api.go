@@ -4288,6 +4288,66 @@ func mergeLoadedResponsesTools(input any, tools []toolcalling.ToolDef) []toolcal
 	return tools
 }
 
+// responsesCustomToolItemID derives the output item id of a custom tool call
+// from its call id. The streaming path announces the item twice, in_progress
+// then completed, and streams its input in between; all three must name the
+// same id, so every one of them goes through this helper.
+func responsesCustomToolItemID(callID string) string {
+	return "ctc_" + strings.TrimPrefix(callID, "call_")
+}
+
+// responsesStreamEvent is one SSE event of the Responses stream, named
+// separately from its payload so the events of a tool call can be built and
+// tested without a stream to write them to.
+type responsesStreamEvent struct {
+	name string
+	data map[string]any
+}
+
+// responsesToolInputEvents returns the events that stream one tool call's input.
+//
+// Each item type carries its input over its own pair of events. A tool_search
+// call carries its query inside the item and streams nothing. A custom tool
+// call takes free-form input rather than JSON arguments, so a client reading
+// response.function_call_arguments would never see it, and its events name the
+// item by the id the surrounding output_item events announced rather than by
+// the call id.
+func responsesToolInputEvents(callID string, call client.ToolCall, toolTypes map[string]string, outputIndex int) []responsesStreamEvent {
+	toolKey := responsesToolKey(call.Function.Namespace, call.Function.Name)
+	switch toolTypes[toolKey] {
+	case "tool_search":
+		return nil
+	case "custom":
+		itemID := responsesCustomToolItemID(callID)
+		return []responsesStreamEvent{
+			{"response.custom_tool_call_input.delta", map[string]any{
+				"item_id":      itemID,
+				"output_index": outputIndex,
+				"delta":        call.Function.Arguments,
+			}},
+			{"response.custom_tool_call_input.done", map[string]any{
+				"item_id":      itemID,
+				"output_index": outputIndex,
+				"input":        call.Function.Arguments,
+			}},
+		}
+	default:
+		return []responsesStreamEvent{
+			{"response.function_call_arguments.delta", map[string]any{
+				"item_id":      callID,
+				"output_index": outputIndex,
+				"delta":        call.Function.Arguments,
+			}},
+			{"response.function_call_arguments.done", map[string]any{
+				"item_id":      callID,
+				"output_index": outputIndex,
+				"name":         call.Function.Name,
+				"arguments":    call.Function.Arguments,
+			}},
+		}
+	}
+}
+
 func buildResponsesToolCallItem(callID string, call client.ToolCall, toolTypes map[string]string, status string) map[string]any {
 	toolKey := responsesToolKey(call.Function.Namespace, call.Function.Name)
 	if toolTypes[toolKey] == "tool_search" {
@@ -4306,12 +4366,9 @@ func buildResponsesToolCallItem(callID string, call client.ToolCall, toolTypes m
 	}
 	if toolTypes[toolKey] == "custom" {
 		// A custom tool takes free-form input rather than JSON arguments, so it
-		// travels as its own item type. The item id is derived from the call id
-		// instead of minted fresh, because the streaming path builds the item
-		// twice (in_progress then completed) and a client correlates the two by
-		// that id.
+		// travels as its own item type.
 		item := map[string]any{
-			"id":      "ctc_" + strings.TrimPrefix(callID, "call_"),
+			"id":      responsesCustomToolItemID(callID),
 			"type":    "custom_tool_call",
 			"status":  status,
 			"call_id": callID,
@@ -6412,27 +6469,12 @@ func (api *APIServer) streamResponses(
 			if callID == "" {
 				callID = "call_" + uuid.NewString()
 			}
-			toolKey := responsesToolKey(
-				tc.Function.Namespace,
-				tc.Function.Name,
-			)
-			isToolSearch := toolTypes[toolKey] == "tool_search"
 			sendEvent("response.output_item.added", map[string]any{
 				"output_index": outputIdx,
 				"item":         buildResponsesToolCallItem(callID, tc, toolTypes, "in_progress"),
 			})
-			if !isToolSearch {
-				sendEvent("response.function_call_arguments.delta", map[string]any{
-					"item_id":      callID,
-					"output_index": outputIdx,
-					"delta":        tc.Function.Arguments,
-				})
-				sendEvent("response.function_call_arguments.done", map[string]any{
-					"item_id":      callID,
-					"output_index": outputIdx,
-					"name":         tc.Function.Name,
-					"arguments":    tc.Function.Arguments,
-				})
+			for _, event := range responsesToolInputEvents(callID, tc, toolTypes, outputIdx) {
+				sendEvent(event.name, event.data)
 			}
 			sendEvent("response.output_item.done", map[string]any{
 				"output_index": outputIdx,

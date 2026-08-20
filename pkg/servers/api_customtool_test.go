@@ -63,6 +63,70 @@ func TestResponsesCustomToolItemIDIsStableAcrossEvents(t *testing.T) {
 	}
 }
 
+// The item shape alone is not enough: the stream announces the item, then
+// streams its input, then announces it again. A custom tool that streams its
+// input as function-call arguments, or under an id no announced item carries,
+// reaches a client that can never assemble the call.
+func TestResponsesCustomToolStreamsItsInputUnderTheAnnouncedItemID(t *testing.T) {
+	types := customAndFunctionToolTypes()
+	call := toolCall("run_script", "echo hi")
+	added := buildResponsesToolCallItem("call_abc", call, types, "in_progress")
+
+	events := responsesToolInputEvents("call_abc", call, types, 3)
+
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want a delta and a done", events)
+	}
+	if events[0].name != "response.custom_tool_call_input.delta" ||
+		events[1].name != "response.custom_tool_call_input.done" {
+		t.Fatalf("custom tool input streamed as %q then %q", events[0].name, events[1].name)
+	}
+	for _, event := range events {
+		if event.data["item_id"] != added["id"] {
+			t.Fatalf("%s named item %v, but the announced item is %v", event.name, event.data["item_id"], added["id"])
+		}
+		if event.data["output_index"] != 3 {
+			t.Fatalf("%s output_index = %v, want 3", event.name, event.data["output_index"])
+		}
+	}
+	if events[0].data["delta"] != "echo hi" {
+		t.Fatalf("delta = %v, want the raw input", events[0].data["delta"])
+	}
+	if events[1].data["input"] != "echo hi" {
+		t.Fatalf("input = %v, want the raw input", events[1].data["input"])
+	}
+}
+
+func TestResponsesFunctionToolStreamsArguments(t *testing.T) {
+	types := customAndFunctionToolTypes()
+	call := toolCall("get_weather", `{"city":"Istanbul"}`)
+
+	events := responsesToolInputEvents("call_abc", call, types, 0)
+
+	if len(events) != 2 ||
+		events[0].name != "response.function_call_arguments.delta" ||
+		events[1].name != "response.function_call_arguments.done" {
+		t.Fatalf("function tool input streamed as %#v", events)
+	}
+	if events[1].data["arguments"] != `{"city":"Istanbul"}` || events[1].data["name"] != "get_weather" {
+		t.Fatalf("done event lost detail: %#v", events[1].data)
+	}
+	// A function call item is announced under the call id itself.
+	if events[0].data["item_id"] != "call_abc" {
+		t.Fatalf("item_id = %v, want the call id", events[0].data["item_id"])
+	}
+}
+
+// A tool_search call carries its query inside the item, so streaming an input
+// event for it would announce input the item never had.
+func TestResponsesToolSearchStreamsNoInput(t *testing.T) {
+	types := responsesToolTypes([]toolcalling.ToolDef{{Type: "tool_search", Name: "search"}})
+
+	if events := responsesToolInputEvents("call_abc", toolCall("search", `{"query":"go"}`), types, 0); len(events) != 0 {
+		t.Fatalf("tool_search streamed %#v, want nothing", events)
+	}
+}
+
 func TestResponsesFunctionToolKeepsFunctionCallShape(t *testing.T) {
 	item := buildResponsesToolCallItem("call_abc", toolCall("get_weather", `{"city":"Istanbul"}`), customAndFunctionToolTypes(), "completed")
 
