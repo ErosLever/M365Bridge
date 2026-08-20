@@ -28,7 +28,9 @@ var (
 )
 
 const (
-	// tokenURLTemplate is the OAuth2 token endpoint URL template.
+	// tokenURLTemplate is the OAuth2 token endpoint URL template. It is a public
+	// Microsoft endpoint and carries no secret.
+	// #nosec G101
 	tokenURLTemplate = "https://login.microsoftonline.com/%s/oauth2/v2.0/token"
 	// cacheExpiryBuffer is the time buffer before token expiry to trigger refresh.
 	cacheExpiryBuffer = 60 * time.Second
@@ -320,7 +322,12 @@ func (tm *TokenManager) loadFromCache() (string, error) {
 }
 
 // writeCache writes the access token cache to file.
+//
+// The cache holds the access token by design; caching it is the whole point of
+// the file. It lives under the gitignored data/ tree, its directory is 0700 and
+// the file itself is 0600.
 func (tm *TokenManager) writeCache(cache TokenCache) error {
+	// #nosec G117
 	data, err := json.Marshal(cache)
 	if err != nil {
 		return err

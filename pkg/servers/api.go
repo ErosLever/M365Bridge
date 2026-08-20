@@ -5,7 +5,9 @@ package servers
 import (
 	"cmp"
 	"context"
-	"crypto/md5"
+	// md5 is used only to derive cache file names and session ids, never as a
+	// security primitive.
+	"crypto/md5" // #nosec G501
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -87,7 +89,11 @@ func NewContextCache(cacheDir string) *ContextCache {
 }
 
 // path returns the file path for a cache key.
+//
+// The digest turns a session key into a file name; it protects nothing and is
+// never compared against an attacker-supplied value.
 func (cc *ContextCache) path(key string) string {
+	// #nosec G401
 	hash := md5.Sum([]byte(key))
 	safe := hex.EncodeToString(hash[:])
 	return filepath.Join(cc.cacheDir, safe+".json")
@@ -1147,6 +1153,9 @@ func (api *APIServer) hashSessionID(r *http.Request, reqBody map[string]any) str
 		return ""
 	}
 	apiKey := api.extractAPIKey(r)
+	// The digest derives a stable session id from the caller's first message;
+	// it protects nothing and is never compared against a supplied value.
+	// #nosec G401
 	h := md5.Sum([]byte(apiKey + "\x00" + firstMsg))
 	return "h:" + hex.EncodeToString(h[:])
 }
@@ -1203,6 +1212,9 @@ func (api *APIServer) hashSessionIDFromMessages(r *http.Request, messages []payl
 		return ""
 	}
 	apiKey := api.extractAPIKey(r)
+	// The digest derives a stable session id from the caller's first message;
+	// it protects nothing and is never compared against a supplied value.
+	// #nosec G401
 	h := md5.Sum([]byte(apiKey + "\x00" + firstMsg))
 	return "h:" + hex.EncodeToString(h[:])
 }
@@ -7271,6 +7283,9 @@ func (api *APIServer) downloadAndBase64(imageURL string) (string, error) {
 		return "", fmt.Errorf("failed to acquire designer token: %w", err)
 	}
 
+	// cleanURL comes from the URL validateImageDownloadURL already cleared at
+	// the top of this function, minus its fileToken parameter.
+	// #nosec G704
 	req, err := http.NewRequest("GET", cleanURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create image request: %w", err)
@@ -7287,6 +7302,10 @@ func (api *APIServer) downloadAndBase64(imageURL string) (string, error) {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
 
 	client := &http.Client{Timeout: 30 * time.Second}
+	// validateImageDownloadURL ran at the top of this function: it requires
+	// https, an allowlisted host, a name that resolves, and no resolved address
+	// outside public space. The taint analysis cannot follow that validator.
+	// #nosec G704
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("download failed: %w", err)

@@ -477,6 +477,10 @@ func (c *M365Client) ChatConversationStreamGenContext(
 	logging.Infof("ChatConversationStreamGen: tone=%s override=%s convID=%s hasTools=%v msgs=%d", tone, gptOverride, conversationID, hasTools, len(messages))
 	ch := make(chan StreamChunk)
 
+	// The goroutine runs on the request context this function was given; the
+	// nil branch below is only a guard for a caller that passes none, and every
+	// caller in this repository passes one.
+	// #nosec G118
 	go func() {
 		defer close(ch)
 		if ctx == nil {

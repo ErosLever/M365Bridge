@@ -45,7 +45,9 @@ func loadOrCreateKey() ([]byte, error) {
 		return nil, err
 	}
 
-	// Try to load existing key
+	// Try to load existing key. The path is this process's own key file under
+	// the gitignored data/ tree, never a caller-supplied value.
+	// #nosec G304
 	if keyData, err := os.ReadFile(keyPath); err == nil {
 		logging.Debug("crypto: loaded existing encryption key")
 		return keyData, nil

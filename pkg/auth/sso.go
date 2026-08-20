@@ -524,7 +524,9 @@ func (tm *TokenManager) exchangeAuthCode(authCode, verifier string) (string, err
 	return result.AccessToken, nil
 }
 
-// designerTokenCacheFile stores the designerapp access token cache.
+// designerTokenCacheFile stores the designerapp access token cache. The value
+// is where a credential is stored, not a credential.
+// #nosec G101
 const designerTokenCacheFile = "data/tokens/designer_token_cache.json"
 
 // designerBrokerRefreshFile stores the broker-compatible refresh token.
@@ -611,6 +613,10 @@ func (tm *TokenManager) GetDesignerToken() (string, error) {
 		AccessToken: token,
 		ExpiresAt:   time.Now().Add(time.Duration(expiresIn) * time.Second).Unix(),
 	}
+	// The cache holds the designer access token by design; caching it is the
+	// whole point of the file. It lives under the gitignored data/ tree and is
+	// written 0600.
+	// #nosec G117
 	cacheData, _ := json.Marshal(cache)
 	if err := atomicWriteFile(designerTokenCacheFile, cacheData, 0600); err != nil {
 		logging.Errorf("GetDesignerToken: failed to write cache: %v", err)

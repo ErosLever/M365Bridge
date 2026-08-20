@@ -270,6 +270,9 @@ func (m *Manager) readFile(a map[string]any) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	// m.resolve rejected an absolute path, a traversal, a symlink leaving the
+	// workspace and every protected credential path before this point.
+	// #nosec G304
 	file, err := os.Open(path)
 	if err != nil {
 		return "", false, err
@@ -360,6 +363,9 @@ func (m *Manager) searchFiles(a map[string]any) (string, bool, error) {
 // still inside the workspace. Without that, a symlink planted between the
 // listing and the read would let a search report a file from anywhere on disk.
 func (m *Manager) readWalkedFile(path string) ([]byte, error) {
+	// The opened file is checked below for being regular and still inside the
+	// workspace, which is what makes the walk path safe to open.
+	// #nosec G304
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -431,6 +437,10 @@ func (m *Manager) command(ctx context.Context, tool string, command any, stdin [
 			result.Error = "command is required"
 			return result
 		}
+		// Running a command is what this package is for, and it is off unless
+		// M365_ENABLE_CODE_TOOLS turns it on. Every []string form here is built
+		// from literals in Execute, never from caller text.
+		// #nosec G204
 		cmd = exec.CommandContext(timed, value[0], value[1:]...)
 	default:
 		result.Error = "invalid command"

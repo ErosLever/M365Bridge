@@ -17,7 +17,9 @@ import (
 )
 
 const (
-	// defaultRefreshTokenFile is the default path for the refresh token.
+	// defaultRefreshTokenFile is the default path for the refresh token. The
+	// value is where a credential is stored, not a credential.
+	// #nosec G101
 	defaultRefreshTokenFile = "data/tokens/rt_90day.txt"
 	// defaultCacheFile is the default path for the token cache.
 	defaultCacheFile = "data/tokens/token_cache.json"
@@ -233,6 +235,8 @@ func splitCookiesByDomain(cookies []auth.SSOCookie) ([]auth.SSOCookie, []auth.SS
 // getConfigFromFile reads setup JSON from a file.
 // Returns tenant, oid, refresh token, SSO cookies, and error.
 func getConfigFromFile(path string) (string, string, string, []auth.SSOCookie, error) {
+	// The path is the -file argument the operator typed at the setup wizard.
+	// #nosec G304
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", "", "", nil, fmt.Errorf("failed to read file %s: %w", path, err)

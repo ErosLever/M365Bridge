@@ -19,7 +19,9 @@ import (
 )
 
 const (
-	// defaultRefreshTokenFile is the default path for the refresh token.
+	// defaultRefreshTokenFile is the default path for the refresh token. The
+	// value is where a credential is stored, not a credential.
+	// #nosec G101
 	defaultRefreshTokenFile = "data/tokens/rt_90day.txt"
 	// defaultCacheFile is the default path for the token cache.
 	defaultCacheFile = "data/tokens/token_cache.json"
