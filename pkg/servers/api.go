@@ -41,6 +41,13 @@ const (
 	contextCacheDir = "data/cache"
 	// contextCacheMaxSize is the maximum number of in-memory cache entries.
 	contextCacheMaxSize = 256
+	// serverReadHeaderTimeout bounds how long a client may take to send its
+	// request headers.
+	serverReadHeaderTimeout = 20 * time.Second
+	// serverIdleTimeout bounds how long a kept-alive connection may sit unused.
+	// It is long enough that an agent client reusing one connection between
+	// turns does not have to redial.
+	serverIdleTimeout = 120 * time.Second
 )
 
 // sessionKeyPrefix namespaces the conversation mapping inside the cache. It is
@@ -350,6 +357,12 @@ func (api *APIServer) Start(port int) error {
 	api.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
+		// A client that dribbles out its headers holds a connection open for
+		// as long as it likes without these. There is deliberately no
+		// WriteTimeout: it bounds the whole response, and every streaming
+		// route here writes for as long as the upstream turn lasts.
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		IdleTimeout:       serverIdleTimeout,
 	}
 	api.mu.Unlock()
 

@@ -302,10 +302,10 @@ func (m *Manager) writeFile(a map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err = os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return "", err
 	}
-	if err = os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err = os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("wrote %d bytes", len(content)), nil
@@ -335,7 +335,7 @@ func (m *Manager) searchFiles(a map[string]any) (string, bool, error) {
 		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
-		data, readErr := os.ReadFile(path)
+		data, readErr := m.readWalkedFile(path)
 		if readErr != nil || int64(len(data)) > m.config.MaxReadBytes {
 			return nil
 		}
@@ -350,6 +350,37 @@ func (m *Manager) searchFiles(a map[string]any) (string, bool, error) {
 		return "", false, err
 	}
 	return bound(strings.Join(matches, "\n"), m.config.MaxOutput)
+}
+
+// readWalkedFile reads a file a directory walk found.
+//
+// The walk's DirEntry reports what the directory listing said, and that answer
+// is already stale by the time the file is opened. So the open is checked
+// against the file it actually reached: a regular file whose resolved path is
+// still inside the workspace. Without that, a symlink planted between the
+// listing and the read would let a search report a file from anywhere on disk.
+func (m *Manager) readWalkedFile(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("not a regular file")
+	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	if !contained(m.workspace, canonical) {
+		return nil, errors.New("path escapes workspace through a symlink")
+	}
+	return io.ReadAll(io.LimitReader(file, m.config.MaxReadBytes+1))
 }
 
 func (m *Manager) applyPatch(ctx context.Context, a map[string]any) (string, bool, error) {

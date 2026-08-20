@@ -52,12 +52,14 @@ func Init(lvl LogLevel) error {
 	// Ensure data directory exists
 	dir := filepath.Dir(defaultLogFile)
 	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return fmt.Errorf("failed to create log directory: %w", err)
 		}
 	}
 
-	f, err := os.OpenFile(defaultLogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	// The log carries request paths and error detail, so it stays readable by
+	// its owner alone.
+	f, err := os.OpenFile(defaultLogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to open log file %s: %w", defaultLogFile, err)
 	}
