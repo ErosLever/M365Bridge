@@ -63,6 +63,11 @@ func Init(lvl LogLevel) error {
 	if err != nil {
 		return fmt.Errorf("failed to open log file %s: %w", defaultLogFile, err)
 	}
+	// O_CREATE applies the mode only when it creates the file, so a log written
+	// by an earlier build keeps whatever permissions it was made with.
+	if err := f.Chmod(0o600); err != nil {
+		return fmt.Errorf("failed to restrict log file %s: %w", defaultLogFile, err)
+	}
 	fileW = f
 	stdW = os.Stdout
 	combined = io.MultiWriter(stdW, fileW)
