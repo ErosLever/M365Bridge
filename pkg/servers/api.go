@@ -343,6 +343,10 @@ func (api *APIServer) Start(port int) error {
 	mux.HandleFunc("/v1/quota", api.withAuth(api.handleQuota))
 	mux.HandleFunc("/health", api.handleHealth)
 
+	// Registered last on purpose: "/" is the pattern the mux falls back to,
+	// so every route above still wins its own path.
+	mux.HandleFunc("/", api.handleWebUI)
+
 	api.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
