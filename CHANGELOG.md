@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.4.3] - 2026-08-20
+
+### Changed
+- Print every environment variable the binary reads in `--help`, grouped by what it affects, instead of naming four and deferring the rest to the README
+- Read the documented defaults from the same constants `LoadConfig` applies, so a changed default cannot leave a stale value in the usage text
+- Document `M365_TENANT_ID`, `M365_USER_OID`, `M365_CLIENT_ID`, `M365_API_KEYS`, `M365_API_KEY` and `TZ` as environment variables in both READMEs; the two the process exits without were absent
+- State in `--help` and in both READMEs that every flag is optional, and which defaults `serve` and `setup-wizard` apply when none is given
+- List `--help` itself in the usage text
+
 ## [1.4.2] - 2026-08-20
 
 ### Fixed
