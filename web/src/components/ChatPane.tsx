@@ -46,7 +46,6 @@ export function ChatPane({
     <main className="chat">
       <header className="chat-head">
         <h1 className="chat-title">{title || 'Yeni konuşma'}</h1>
-        <ModelPicker models={models} value={model} onChange={onModel} />
       </header>
 
       {transcriptsOff && (
@@ -80,15 +79,18 @@ export function ChatPane({
             }
           }}
         />
-        {sending ? (
-          <button className="danger" onClick={onStop}>
-            Durdur
-          </button>
-        ) : (
-          <button className="primary" onClick={submit} disabled={!draft.trim()}>
-            Gönder
-          </button>
-        )}
+        <div className="composer-controls">
+          <ModelPicker models={models} value={model} onChange={onModel} />
+          {sending ? (
+            <button className="danger" onClick={onStop}>
+              Durdur
+            </button>
+          ) : (
+            <button className="primary" onClick={submit} disabled={!draft.trim()}>
+              Gönder
+            </button>
+          )}
+        </div>
       </div>
     </main>
   )

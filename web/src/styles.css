@@ -154,13 +154,18 @@ body {
   height: 100%;
 }
 
+/* The header stays put too, so the conversation title is always readable. */
 .chat-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
+  background: var(--bg);
 }
 
 .chat-title {
@@ -259,22 +264,37 @@ body {
   }
 }
 
+/* The composer stays put while the message list scrolls behind it, so the
+   input is reachable without scrolling to the bottom first. */
 .composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   display: flex;
-  gap: 10px;
-  padding: 14px 18px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 18px 14px;
   border-top: 1px solid var(--border);
+  background: var(--bg);
 }
 
 .composer textarea {
-  flex: 1;
-  resize: vertical;
+  resize: none;
+  min-height: 76px;
+  max-height: 40vh;
   padding: 10px 12px;
   font: inherit;
   color: inherit;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.composer-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 /* Controls */
