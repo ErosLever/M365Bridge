@@ -521,6 +521,8 @@ Başarısız bir backend isteği genel bir `500` yerine sınıflandırılır:
 
 Upstream kaynaklı olduğuna dair kanıt taşımayan bir hata yine `internal_error` koduyla `500` döndürür; böylece proxy'nin kendi hatası backend arızası gibi sunulmaz. Hata mesajları sabit metindir: istek URL'leri ve kimlik bilgisi dosya yolları dahil transport hatası yalnızca sunucu log'unda kalır.
 
+Stream açıldıktan sonra HTTP durumu zaten gönderilmiştir, bu yüzden aynı sınıflandırma gövdede taşınır. OpenAI biçimli route'lar data satırına bir `error` nesnesi koyar ve ardından `[DONE]` gönderir; `/v1/messages` ve `/v1/complete` bir `error` event'i gönderir; `/v1/responses` `response.failed` gönderir. Hiçbir route hatayı assistant içeriği olarak yazmaz, aksi hâlde istemci onu cevap olarak saklardı.
+
 ## Modeller
 
 Tüm model seçimi, M365 backend'ine gönderilen `tone` alanı ile yapılır. Tüm modeller için `Override` alanı boştur. GPT-5.x modelleri GPT-5 backend'ine yönlendirilir. Claude tone değerleri Claude yanıtları döndürür, ancak M365 gerçek model kimliğini SignalR metadata içinde açıklamaz.

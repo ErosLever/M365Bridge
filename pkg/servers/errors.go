@@ -91,8 +91,13 @@ func classifyUpstreamError(err error) (int, string) {
 
 	// Checked before the status lookup below: a failed turn reached the backend
 	// and carries no HTTP status, so it would otherwise fall through to the
-	// generic internal error and read as a bug on this side.
+	// generic internal error and read as a bug on this side. A turn that ended
+	// with neither an answer nor a verdict gets the same treatment, because the
+	// client can act on it the same way.
 	if _, ok := client.TurnFailure(err); ok {
+		return http.StatusBadGateway, upstreamTurnFailedCode
+	}
+	if errors.Is(err, client.ErrEmptyTurn) {
 		return http.StatusBadGateway, upstreamTurnFailedCode
 	}
 
@@ -140,11 +145,36 @@ func upstreamErrorMessage(op, code string) string {
 	}
 }
 
+// streamErrorFields classifies a failure that reached a stream already in
+// progress, and returns the code and message the client may see.
+//
+// The HTTP status is gone by then, because the response header went out with
+// the first frame. The body still has to carry the classification, and it still
+// has to withhold the transport error, which names request URLs and credential
+// file paths. The raw error goes to the log here, so every caller gets that for
+// free.
+// The status is returned too, because the OpenAI error object carries a
+// category derived from it even when no header can be sent.
+func streamErrorFields(op string, err error) (status int, code, message string) {
+	status, code = classifyUpstreamError(err)
+	logging.Errorf("%s stream failed: status=%d code=%s err=%v", op, status, code, err)
+	return status, code, upstreamErrorMessage(op, code)
+}
+
 // sendUpstreamError reports a failed backend request. The raw error goes to the
 // log; the client receives the classification and a fixed message.
 func (api *APIServer) sendUpstreamError(w http.ResponseWriter, op string, err error) {
 	status, code := classifyUpstreamError(err)
 	logging.Errorf("%s failed: status=%d code=%s err=%v", op, status, code, err)
+
+	// An exhausted conversation quota is the one empty-turn cause the client
+	// can act on, so it keeps its own 429 instead of the generic gateway
+	// failure. The Responses path already reported it that way before an empty
+	// turn became an error here.
+	if errors.Is(err, client.ErrEmptyTurn) && api.quotaExhausted() {
+		api.sendThrottledError(w)
+		return
+	}
 
 	if status == http.StatusTooManyRequests {
 		w.Header().Set("Retry-After", strconv.Itoa(rateLimitRetryAfterSeconds))

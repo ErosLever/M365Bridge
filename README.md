@@ -521,6 +521,8 @@ A failed backend request is classified rather than reported as a generic `500`:
 
 A failure with no evidence of an upstream cause still reports `500` with `internal_error`, so a bug in the proxy is not presented as a backend outage. Error messages are fixed text: the transport error, including request URLs and credential file paths, stays in the server log.
 
+Once a stream has opened the status is already sent, so the same classification travels in the body. OpenAI-shaped routes put an `error` object on the data line and then `[DONE]`; `/v1/messages` and `/v1/complete` send an `error` event; `/v1/responses` sends `response.failed`. No route writes the failure as assistant content, which a client would otherwise store as the answer.
+
 ## Models
 
 All model selection is via the `tone` field sent to the M365 backend. The `Override` field is empty for all models. GPT-5.x models route to the GPT-5 backend. Claude tone values return Claude responses, but M365 does not expose the underlying model identity in SignalR metadata.

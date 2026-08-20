@@ -540,8 +540,11 @@ func (c *M365Client) ChatConversationStreamGenContext(
 
 		toolCalls := []ToolCall{}
 		seenImages := map[string]bool{}
-		accText := ""
-		accThinking := ""
+		// accText is a Builder because a turn arrives as hundreds of appends,
+		// but a snapshot replaces the whole accumulation rather than extending
+		// it, which is why Reset appears alongside WriteString.
+		var accText strings.Builder
+		var accThinking strings.Builder
 		var finalConvID string
 		var throttling *ThrottlingInfo
 
@@ -639,7 +642,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 													if messageType == progressMessageType {
 														if co, _ := msgMap["contentOrigin"].(string); co == "ChainOfThoughtSummary" {
 															if t, _ := msgMap["text"].(string); t != "" {
-																accThinking += t
+																accThinking.WriteString(t)
 																if !emit(StreamChunk{Thinking: t, IsFinal: false}) {
 																	return
 																}
@@ -648,7 +651,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 														// Extract generated image URLs from contentGenerationProgressList
 														if co, _ := msgMap["contentOrigin"].(string); co == "ImageGeneration" {
 															if imgMD := extractImageGenerationMarkdown(msgMap, seenImages); imgMD != "" {
-																accText += imgMD
+																accText.WriteString(imgMD)
 																if !emit(StreamChunk{Text: imgMD, IsFinal: false}) {
 																	return
 																}
@@ -674,8 +677,9 @@ func (c *M365Client) ChatConversationStreamGenContext(
 											if lastMsg, ok := msgs[len(msgs)-1].(map[string]any); ok {
 												if carriesAnswerText(lastMsg) {
 													if newText, ok := lastMsg["text"].(string); ok && newText != "" {
-														if chunk, advanced := snapshotDelta(accText, newText); advanced {
-															accText = newText
+														if chunk, advanced := snapshotDelta(accText.String(), newText); advanced {
+															accText.Reset()
+															accText.WriteString(newText)
 															if chunk != "" {
 																if !emit(StreamChunk{Text: chunk, IsFinal: false}) {
 																	return
@@ -688,7 +692,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 										}
 									}
 									if writeAtCursor, ok := argMap["writeAtCursor"].(string); ok {
-										accText += writeAtCursor
+										accText.WriteString(writeAtCursor)
 										if !emit(StreamChunk{Text: writeAtCursor, IsFinal: false}) {
 											return
 										}
@@ -708,8 +712,8 @@ func (c *M365Client) ChatConversationStreamGenContext(
 							// Text already on the wire cannot be retracted, so a
 							// partial answer is delivered rather than replaced by
 							// an error.
-							if accText != "" {
-								logging.Warnf("ChatConversationStreamGen: %v, keeping the %d bytes already emitted", failure, len(accText))
+							if accText.Len() > 0 {
+								logging.Warnf("ChatConversationStreamGen: %v, keeping the %d bytes already emitted", failure, accText.Len())
 							} else {
 								logging.Errorf("ChatConversationStreamGen: %v", failure)
 								emit(StreamChunk{Error: failure})
@@ -718,6 +722,11 @@ func (c *M365Client) ChatConversationStreamGenContext(
 						}
 					}
 				} else if msgType, ok := data["type"].(float64); ok && int(msgType) == 3 {
+					if emptyTurn(accText.String(), toolCalls) {
+						logging.Errorf("ChatConversationStreamGen: %v (thinking=%d bytes)", ErrEmptyTurn, accThinking.Len())
+						emit(StreamChunk{Error: ErrEmptyTurn})
+						return
+					}
 					finishReason := "stop"
 					if len(toolCalls) > 0 {
 						finishReason = "tool_calls"
@@ -800,10 +809,21 @@ func (c *M365Client) sendRecv(conn *websocket.Conn, payload string) (string, err
 					}
 				}
 			} else if msgType, ok := data["type"].(float64); ok && int(msgType) == 3 {
+				if fullText == "" {
+					logging.Errorf("sendRecv: %v", ErrEmptyTurn)
+					return "", ErrEmptyTurn
+				}
 				return fullText, nil
 			}
 		}
 	}
+}
+
+// emptyTurn reports whether a finished turn produced nothing the caller can
+// use. Generated images and web-search queries both reach accText, so text is
+// the only content channel that has to be checked alongside the tool calls.
+func emptyTurn(accText string, toolCalls []ToolCall) bool {
+	return accText == "" && len(toolCalls) == 0
 }
 
 // parseTurnResult reports the backend's verdict on a finished turn, or nil when

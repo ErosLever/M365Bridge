@@ -1846,9 +1846,12 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 			break
 		}
 		if chunk.Error != nil {
+			// The classification rather than the transport error, which names
+			// request URLs and credential file paths.
+			_, code, message := streamErrorFields("complete", chunk.Error)
 			errData := map[string]any{
 				"type":  "error",
-				"error": map[string]any{"type": "server_error", "message": chunk.Error.Error()},
+				"error": map[string]any{"type": code, "message": message},
 			}
 			errJSON, _ := json.Marshal(errData)
 			fmt.Fprintf(w, "event: error\ndata: %s\n\n", errJSON)
@@ -1982,7 +1985,7 @@ func (api *APIServer) streamChatCompletions(ctx context.Context, w http.Response
 			if sid != "" {
 				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
-			api.sendSSEError(w, chunkID, openaiModel, chunk.Error)
+			api.sendSSEError(w, "chat", chunkID, openaiModel, chunk.Error)
 			return
 		}
 
@@ -2410,11 +2413,12 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 			if sid != "" {
 				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
+			_, code, message := streamErrorFields("message", chunk.Error)
 			errEvent := map[string]any{
 				"type": "error",
 				"error": map[string]any{
-					"type":    "server_error",
-					"message": chunk.Error.Error(),
+					"type":    code,
+					"message": message,
 				},
 			}
 			api.sendAnthropicSSE(w, "error", errEvent)
@@ -2892,18 +2896,18 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 			break
 		}
 		if chunk.Error != nil {
+			// An error object rather than completion text, for the same reason
+			// the chat stream carries one: text would be stored as the answer.
+			status, code, message := streamErrorFields("completion", chunk.Error)
 			errChunk := map[string]any{
 				"id":      compID,
 				"object":  "text_completion",
 				"created": time.Now().Unix(),
 				"model":   openaiModel,
-				"choices": []map[string]any{
-					{
-						"index":         0,
-						"text":          fmt.Sprintf("Error: %v", chunk.Error),
-						"finish_reason": "stop",
-						"logprobs":      nil,
-					},
+				"error": map[string]any{
+					"message": message,
+					"type":    openAIErrorType(status),
+					"code":    code,
 				},
 			}
 			jsonData, _ := json.Marshal(errChunk)
@@ -3242,22 +3246,28 @@ func (api *APIServer) sendSSEDone(w http.ResponseWriter, chunkID, model, finishR
 }
 
 // sendSSEError sends an error via SSE.
-func (api *APIServer) sendSSEError(w http.ResponseWriter, chunkID, model string, err error) {
-	chunk := map[string]any{
+// sendSSEError reports a failed turn on an OpenAI-shaped stream.
+//
+// The failure used to be written as assistant content with finish_reason
+// "stop", so a client stored the error text as the model's answer and had no
+// way to tell a failure from a reply. OpenAI puts an error object on the data
+// line instead, which is what a client checks for. [DONE] still follows, so a
+// reader waiting for the terminator does not hang.
+func (api *APIServer) sendSSEError(w http.ResponseWriter, op, chunkID, model string, err error) {
+	status, code, message := streamErrorFields(op, err)
+	body := map[string]any{
 		"id":      chunkID,
 		"object":  "chat.completion.chunk",
 		"created": time.Now().Unix(),
 		"model":   model,
-		"choices": []map[string]any{
-			{
-				"index":         0,
-				"delta":         map[string]any{"content": fmt.Sprintf("Error: %v", err)},
-				"finish_reason": "stop",
-			},
+		"error": map[string]any{
+			"message": message,
+			"type":    openAIErrorType(status),
+			"code":    code,
 		},
 	}
 
-	jsonData, _ := json.Marshal(chunk)
+	jsonData, _ := json.Marshal(body)
 	fmt.Fprintf(w, "data: %s\n\n", jsonData)
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 }
@@ -5878,7 +5888,8 @@ func (api *APIServer) streamResponses(
 			if sid != "" {
 				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
-			sendFailed("upstream_error", chunk.Error.Error())
+			_, code, message := streamErrorFields("responses", chunk.Error)
+			sendFailed(code, message)
 			return
 		}
 

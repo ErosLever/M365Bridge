@@ -85,3 +85,14 @@ func (e *TurnFailedError) Error() string {
 func TurnFailure(err error) (*TurnFailedError, bool) {
 	return errors.AsType[*TurnFailedError](err)
 }
+
+// ErrEmptyTurn reports a turn that ended without an answer and without a
+// verdict to explain it.
+//
+// A tone the backend refuses outright fails this way: it sends no answer
+// message and no completion frame at all, and closes the invocation with a
+// bare terminator. TurnFailedError cannot cover it, because the frame that
+// carries result.value never arrives. Without this the turn reached the client
+// as an empty HTTP 200, which is indistinguishable from a real answer that
+// happened to be blank.
+var ErrEmptyTurn = errors.New("m365 ended the turn without an answer")

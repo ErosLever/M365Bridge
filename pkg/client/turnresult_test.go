@@ -90,3 +90,18 @@ func TestTurnFailureRejectsAnUnrelatedError(t *testing.T) {
 		t.Fatal("TurnFailure claimed an unrelated error")
 	}
 }
+
+// An empty turn is the second way a tone fails: no answer, no tool call and no
+// verdict frame. The check must not fire on a turn that produced either one,
+// because that would turn a working answer into an error.
+func TestEmptyTurnDetectsATurnWithNothingToReturn(t *testing.T) {
+	if !emptyTurn("", nil) {
+		t.Error("a turn with no text and no tool call was reported as usable")
+	}
+	if emptyTurn("an answer", nil) {
+		t.Error("a turn that produced text was reported as empty")
+	}
+	if emptyTurn("", []ToolCall{{Function: ToolCallFunction{Name: "search"}}}) {
+		t.Error("a turn that produced a tool call was reported as empty")
+	}
+}

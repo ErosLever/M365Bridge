@@ -324,3 +324,15 @@ func TestUpstreamErrorMessageExplainsAFailedTurn(t *testing.T) {
 		t.Errorf("message does not say the turn produced nothing: %q", msg)
 	}
 }
+
+// A refused tone ends the turn with no answer and no verdict frame, so the
+// sentinel has to classify the same way the verdict does.
+func TestClassifyUpstreamErrorReportsAnEmptyTurn(t *testing.T) {
+	status, code := classifyUpstreamError(fmt.Errorf("chat: %w", client.ErrEmptyTurn))
+	if status != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", status)
+	}
+	if code != upstreamTurnFailedCode {
+		t.Errorf("code = %q, want %q", code, upstreamTurnFailedCode)
+	}
+}
