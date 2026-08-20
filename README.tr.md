@@ -356,6 +356,23 @@ Tarayıcı tabanlı kurulum sihirbazını çalıştırır. `oid`, `tenant` ve `r
 |----------|--------|-------------------|------------------------------|
 | `--file` | string | `data/setup.json` | Kurulum JSON dosyasının yolu |
 
+Her bayrak isteğe bağlıdır. Hiçbiri verilmezse `serve` 8000 portunu dinler, `setup-wizard` ise `data/setup.json` dosyasını okur.
+
+### Temel Ortam Değişkenleri
+
+Yapılandırma `data/.env` dosyasından okunur; process ortam değişkeni dosyadaki değerin önüne geçer. İlk ikisini kurulum sihirbazı yazar.
+
+| Değişken         | Varsayılan                             | Açıklama                                                                                                       |
+|------------------|----------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| `M365_TENANT_ID` | zorunlu                                | Directory (tenant) ID. CLI de sunucu da bu değer olmadan çıkar.                                                |
+| `M365_USER_OID`  | zorunlu                                | Oturum açan kullanıcının object ID değeri. CLI de sunucu da bu değer olmadan çıkar.                            |
+| `M365_CLIENT_ID` | `4765445b-32c6-49b0-83e6-1d93765276ca` | Access token'ların düzenlendiği OAuth client. Yalnızca varsayılanı engelleyen bir tenant için değiştirin.       |
+| `M365_API_KEYS`  | tanımsız                               | İstemcinin sunması gereken anahtarlar, virgülle ayrılır. Tanımsızken tüm `/v1/*` rotaları ve `/mcp` açıktır.    |
+| `M365_API_KEY`   | tanımsız                               | Tek anahtar; yalnızca `M365_API_KEYS` tanımsızken okunur.                                                       |
+| `TZ`             | sistem saat dilimi                     | Her turla gönderilen saat dilimi. Yoksa `/etc/localtime` üzerinden, o da yoksa UTC olarak belirlenir.           |
+
+Kalan değişkenleri aşağıdaki bölümler, değiştirdikleri davranışın yanında belgeliyor. `m365-bridge --help` komutu hepsini güncel varsayılanlarıyla tek listede yazdırır.
+
 ### Örnekler
 
 ```bash

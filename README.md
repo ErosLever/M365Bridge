@@ -356,6 +356,23 @@ Runs the browser-based setup wizard. Reads JSON from file containing `oid`, `ten
 |----------|--------|-------------------|-------------------------|
 | `--file` | string | `data/setup.json` | Path to setup JSON file |
 
+Every flag is optional. With none, `serve` listens on port 8000 and `setup-wizard` reads `data/setup.json`.
+
+### Core Environment Variables
+
+Configuration is read from `data/.env`; a process environment variable takes precedence over the file. The setup wizard writes the first two.
+
+| Variable         | Default                                | Description                                                                                          |
+|------------------|----------------------------------------|------------------------------------------------------------------------------------------------------|
+| `M365_TENANT_ID` | required                               | Directory (tenant) ID. The CLI and the server both exit without it.                                  |
+| `M365_USER_OID`  | required                               | Object ID of the signed-in user. The CLI and the server both exit without it.                        |
+| `M365_CLIENT_ID` | `4765445b-32c6-49b0-83e6-1d93765276ca` | OAuth client the access tokens are issued to. Change it only for a tenant that blocks the default.   |
+| `M365_API_KEYS`  | unset                                  | Comma-separated keys a client must present. Unset leaves every `/v1/*` route and `/mcp` open.        |
+| `M365_API_KEY`   | unset                                  | A single key, read only when `M365_API_KEYS` is unset.                                               |
+| `TZ`             | system zone                            | Timezone sent with each turn. Without it the zone comes from `/etc/localtime`, then UTC.             |
+
+The feature sections below document the remaining variables next to the behaviour they change. `m365-bridge --help` prints all of them in one list with their current defaults.
+
 ### Examples
 
 ```bash
