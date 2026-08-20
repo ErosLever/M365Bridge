@@ -6,6 +6,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.4.0] - 2026-08-20
+
+### Added
+- Expose Copilot through a JSON-RPC 2.0 Model Context Protocol server on `/mcp`
+- Publish the OpenAI and the Anthropic model schema from a single `/v1/models` route
+- Advertise the Codex catalog fields, owner, input budget and tool support in the model list
+- Publish three measured tones and state thinking support per model entry
+- Accept `max` reasoning effort and describe every preset
+- Expose the session to conversation mapping over `/v1/sessions` and `/v1/sessions/{id}`
+- Store the session id and a timestamp in the context cache
+- Add the `/v1/health` reachability probe
+- Surface the M365 conversation quota and report throttling
+- Add context window configuration and defaults
+- Report usage on the Anthropic Complete endpoint and on the streaming completions route
+- Commit stream headers before the upstream turn and keep every SSE stream alive during upstream silence
+- Carry the upstream HTTP status out of failed requests
+- Report an M365 content refusal as a distinct error
+- Add the evidence ledger for client-driven tool loops, and cap the tool rounds one turn may drive
+- Put settled tool results into the simulation prompt and stop forwarding a tool call whose result is already settled
+- Replace a completion report that no tool result backs
+- Accept a progress note for a running client tool
+- Validate tool call arguments against their JSON schema and enforce `tool_choice` when parsing the model response
+- Reject tool results that answer no declared tool call
+- Re-ask when the backend answers a tool request with prose, and claim an unfenced grammar tool body as a call
+- Widen the sandbox refusal detector to more phrasings
+- Stop routing a declared `web_search` to the client
+- Keep tool call structure after text flattening
+- Accept the Responses reasoning block and emit custom tools as `custom_tool_call` in Responses output
+- Fetch caller-supplied remote image URLs
+- Log file and audio content blocks instead of dropping them silently
+
+### Changed
+- Answer an empty Responses probe without an upstream turn
+- Accumulate streamed text with `strings.Builder`
+- Drop values no caller reads
+- Restrict generated-image downloads to allowed hosts
+- Document the error contract, the tool contract, the session routes, usage reporting, SSE resilience and the setup that does not use Docker
+
+### Fixed
+- Never forward M365's own tool calls, and keep the backend's own tool messages out of the answer
+- Stop a re-encoded snapshot from repeating the answer
+- Report a turn the backend ended without an answer, and a turn that ends with no answer and no verdict
+- Reject a model this service does not serve instead of folding it into the auto entry
+- Serve the reasoning model from a tone that reasons
+- Print the CLI model list in a stable order
+- Classify upstream failures instead of reporting them all as 500
+- Put the error category in `type` and the machine-readable string in `code`
+- Drop a streaming turn when its client disconnects, and bound SSE writes to a gone client
+- Count tokens with `o200k_base` and report the source
+- Count Anthropic prompt tokens like every other endpoint
+- Report usage from the buffered coding-tool responders
+- Bill tool choice framing only when tools were declared
+- Reject a repeated tool call id and make tool call IDs unique
+- Bound the tool result text the ledger carries
+- Recognize every exit-code wording as a failure
+- Keep backend calls suppressed for a `web_search`-only request
+- Claim a grammar body wrapped in a valid envelope, and withhold an unparseable transport envelope from the answer
+- Replace the unverified claim on the buffered streams too
+- Match the backend's observed Turkish refusal wording
+- Identify the proxy when fetching a remote image
+- Accept the API key from `x-api-key` as well as `Authorization`
+- Include the `signature` field on Anthropic thinking blocks
+- Serialize refresh token redemption
+- Preserve tool schemas and namespaces
+
+
 ## [1.3.7] - 2026-07-14
 
 ### Added
