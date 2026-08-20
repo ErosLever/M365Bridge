@@ -270,7 +270,10 @@ func (api *APIServer) mcpChat(messages []payload.Message, modelKey string) (stri
 	}
 
 	resolvedKey, _ := parseModelSessionID(modelKey)
-	cfg := models.LookupModel(resolvedKey)
+	cfg, ok := models.FindModel(resolvedKey)
+	if !ok {
+		return "", fmt.Errorf("unknown model %q; GET /v1/models lists the available ids", resolvedKey)
+	}
 
 	text, _, _, _, _, err := m365Client.ChatConversation(
 		messages,

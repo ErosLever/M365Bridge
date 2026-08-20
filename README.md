@@ -512,6 +512,7 @@ A failed backend request is classified rather than reported as a generic `500`:
 | `429`  | `rate_limit_exceeded`      | M365 throttled the request; a `Retry-After` header is sent   |
 | `429`  | `upstream_throttled`       | The conversation message quota is exhausted                  |
 | `409`  | `tool_round_limit`         | One turn drove more tool rounds than `M365_MAX_TOOL_ROUNDS`  |
+| `404`  | `model_not_found`          | The requested model is not in `GET /v1/models`                |
 | `502`  | `upstream_error`           | M365 rejected the request or was unreachable                 |
 | `502`  | `upstream_unavailable`     | The WebSocket handshake failed or the connection dropped     |
 | `502`  | `upstream_turn_failed`     | M365 ended the turn without producing an answer              |

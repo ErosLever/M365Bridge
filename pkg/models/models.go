@@ -309,19 +309,24 @@ func loadDotEnv() {
 	}
 }
 
-// LookupModel finds a model configuration by key or OpenAI ID.
-// Returns the "auto" model configuration if not found.
-func LookupModel(key string) ModelConfig {
+// FindModel finds a model configuration by registry key or by advertised
+// OpenAI ID, and reports whether the name is one this service serves.
+//
+// It replaced a lookup that answered an unknown name with the "auto" entry.
+// That silently served the Magic tone to a caller who had asked for something
+// else, so a model removed from the registry kept answering and a typo looked
+// like a working model. Both OpenAI and Anthropic answer an unknown model with
+// 404 instead, which is what a client checks for.
+func FindModel(key string) (ModelConfig, bool) {
 	if cfg, ok := ModelRegistry[key]; ok {
-		return cfg
+		return cfg, true
 	}
-	// Try to find by OpenAI ID
 	for _, cfg := range ModelRegistry {
 		if cfg.OpenAIID == key {
-			return cfg
+			return cfg, true
 		}
 	}
-	return ModelRegistry["auto"]
+	return ModelConfig{}, false
 }
 
 // getEnvWithDefault returns an environment variable value or a default fallback.

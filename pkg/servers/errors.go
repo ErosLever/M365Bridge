@@ -11,6 +11,7 @@ import (
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/auth"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/client"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/models"
 )
 
 // OpenAI's error body carries a category in "type" and a machine-readable
@@ -65,6 +66,7 @@ const (
 	upstreamUnavailableCode    = "upstream_unavailable"
 	upstreamRejectedCode       = "upstream_error"
 	upstreamTurnFailedCode     = "upstream_turn_failed"
+	modelNotFoundCode          = "model_not_found"
 	internalProcessingCode     = "internal_error"
 	rateLimitRetryAfterSeconds = 60
 )
@@ -143,6 +145,24 @@ func upstreamErrorMessage(op, code string) string {
 	default:
 		return "the " + op + " request failed before it could be completed"
 	}
+}
+
+// resolveModel looks up the requested model and reports 404 when this service
+// does not serve it.
+//
+// An unknown name used to fall back to the default entry, so the caller was
+// answered by a tone it never asked for and a model removed from the registry
+// kept working. The callers that guarded on an empty OpenAIID were dead code
+// for the same reason: the fallback always carried one.
+func (api *APIServer) resolveModel(w http.ResponseWriter, modelKey string) (models.ModelConfig, bool) {
+	cfg, ok := models.FindModel(modelKey)
+	if !ok {
+		logging.Errorf("unknown model requested: %s", modelKey)
+		api.sendErrorCode(w, http.StatusNotFound, modelNotFoundCode,
+			"the model '"+modelKey+"' does not exist or is not served by this gateway; GET /v1/models lists the available ids")
+		return models.ModelConfig{}, false
+	}
+	return cfg, true
 }
 
 // streamErrorFields classifies a failure that reached a stream already in

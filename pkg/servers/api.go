@@ -948,7 +948,10 @@ func (api *APIServer) createConversation(w http.ResponseWriter, r *http.Request)
 	if req.Model == "" {
 		req.Model = "gpt5.5-reasoning"
 	}
-	cfg := models.LookupModel(req.Model)
+	cfg, ok := api.resolveModel(w, req.Model)
+	if !ok {
+		return
+	}
 	messages := []payload.Message{{Role: "user", Content: req.Message}}
 	_, _, _, _, conversationID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, "", api.config.UserOID, api.config.TenantID, false)
 	if err != nil {
@@ -1388,10 +1391,8 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 
 	// Parse optional session ID encoded in model name: "gpt5.5:my-session"
 	modelKey, modelSessionID := parseModelSessionID(req.Model)
-	cfg := models.LookupModel(modelKey)
-	if cfg.OpenAIID == "" {
-		logging.Errorf("handleChatCompletions: unknown model: %s", modelKey)
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Unknown model: %s", modelKey))
+	cfg, ok := api.resolveModel(w, modelKey)
+	if !ok {
 		return
 	}
 	logging.Infof("handleChatCompletions: model=%s stream=%v tools=%d sid=%s", modelKey, req.Stream, len(req.Tools), modelSessionID)
@@ -1503,9 +1504,8 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 
 	// Parse optional session ID encoded in model name: "gpt5.5:my-session"
 	modelKey, modelSessionID := parseModelSessionID(req.Model)
-	cfg := models.LookupModel(modelKey)
-	if cfg.OpenAIID == "" {
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Unknown model: %s", modelKey))
+	cfg, ok := api.resolveModel(w, modelKey)
+	if !ok {
 		return
 	}
 
@@ -1645,7 +1645,10 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 	// Parse optional session ID encoded in model name: "gpt5.5:my-session"
 	modelKey, modelSessionID := parseModelSessionID(req.Model)
 	// Map Anthropic model to internal model
-	cfg := models.LookupModel(modelKey)
+	cfg, ok := api.resolveModel(w, modelKey)
+	if !ok {
+		return
+	}
 	logging.Infof("handleAnthropicMessages: model=%s stream=%v tools=%d sid=%s", modelKey, req.Stream, len(req.Tools), modelSessionID)
 
 	if err := validateToolResultMessages(req.Messages); err != nil {
@@ -1739,7 +1742,10 @@ func (api *APIServer) handleAnthropicComplete(w http.ResponseWriter, r *http.Req
 
 	// Parse optional session ID encoded in model name: "gpt5.5:my-session"
 	modelKey, modelSessionID := parseModelSessionID(req.Model)
-	cfg := models.LookupModel(modelKey)
+	cfg, ok := api.resolveModel(w, modelKey)
+	if !ok {
+		return
+	}
 
 	messages := api.fimToChat(req.Prompt, "")
 
@@ -3676,9 +3682,9 @@ func applyReasoningEffort(modelKey string, cfg models.ModelConfig, deliberate bo
 	if !deliberate || strings.HasSuffix(modelKey, "-reasoning") {
 		return cfg
 	}
-	// The registry is consulted directly: LookupModel falls back to the default
-	// model for an unknown key, which would reroute every model to that default
-	// instead of leaving models without a variant alone.
+	// The registry is consulted directly rather than through FindModel, because
+	// a model without a reasoning variant must be left alone rather than
+	// reported as an unknown model.
 	variantKey := modelKey + "-reasoning"
 	variant, ok := models.ModelRegistry[variantKey]
 	if !ok {
@@ -4920,9 +4926,8 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 
 	// Parse model (may contain session ID suffix: "gpt5.5:my-session")
 	modelKey, modelSessionID := parseModelSessionID(req.Model)
-	cfg := models.LookupModel(modelKey)
-	if cfg.OpenAIID == "" {
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Unknown model: %s", modelKey))
+	cfg, ok := api.resolveModel(w, modelKey)
+	if !ok {
 		return
 	}
 
@@ -6431,9 +6436,8 @@ func (api *APIServer) handleResponsesCompact(w http.ResponseWriter, r *http.Requ
 
 	// Parse model (may contain session ID suffix)
 	modelKey, modelSessionID := parseModelSessionID(req.Model)
-	cfg := models.LookupModel(modelKey)
-	if cfg.OpenAIID == "" {
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Unknown model: %s", modelKey))
+	cfg, ok := api.resolveModel(w, modelKey)
+	if !ok {
 		return
 	}
 
@@ -6779,9 +6783,8 @@ func (api *APIServer) handleImageGenerations(w http.ResponseWriter, r *http.Requ
 		modelKey = "gpt5.5-reasoning"
 	}
 	modelKey, _ = parseModelSessionID(modelKey)
-	cfg := models.LookupModel(modelKey)
-	if cfg.OpenAIID == "" {
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Unknown model: %s", modelKey))
+	cfg, ok := api.resolveModel(w, modelKey)
+	if !ok {
 		return
 	}
 
@@ -6839,9 +6842,8 @@ func (api *APIServer) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 		modelKey = "gpt5.5-reasoning"
 	}
 	modelKey, modelSessionID := parseModelSessionID(modelKey)
-	cfg := models.LookupModel(modelKey)
-	if cfg.OpenAIID == "" {
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Unknown model: %s", modelKey))
+	cfg, ok := api.resolveModel(w, modelKey)
+	if !ok {
 		return
 	}
 	logging.Infof("handleImageEdits: model=%s prompt_len=%d images=%d responseFormat=%s", modelKey, len(prompt), len(r.MultipartForm.File["image"]), r.FormValue("response_format"))

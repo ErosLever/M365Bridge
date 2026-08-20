@@ -512,6 +512,7 @@ Başarısız bir backend isteği genel bir `500` yerine sınıflandırılır:
 | `429`  | `rate_limit_exceeded`      | M365 isteği kısıtladı; `Retry-After` başlığı gönderilir        |
 | `429`  | `upstream_throttled`       | Conversation mesaj kotası tükendi                              |
 | `409`  | `tool_round_limit`         | Bir tur `M365_MAX_TOOL_ROUNDS` sınırından fazla tool round sürdü |
+| `404`  | `model_not_found`          | İstenen model `GET /v1/models` listesinde yok                  |
 | `502`  | `upstream_error`           | M365 isteği reddetti veya erişilemedi                          |
 | `502`  | `upstream_unavailable`     | WebSocket handshake başarısız oldu veya bağlantı düştü         |
 | `502`  | `upstream_turn_failed`     | M365 turu cevap üretmeden sonlandırdı                          |

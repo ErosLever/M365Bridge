@@ -336,3 +336,49 @@ func TestClassifyUpstreamErrorReportsAnEmptyTurn(t *testing.T) {
 		t.Errorf("code = %q, want %q", code, upstreamTurnFailedCode)
 	}
 }
+
+// An unknown model used to be folded into the default entry, so the caller was
+// answered by a tone it never asked for. It must be a 404 instead.
+func TestResolveModelRejectsAnUnknownName(t *testing.T) {
+	api := &APIServer{}
+	rec := httptest.NewRecorder()
+
+	if _, ok := api.resolveModel(rec, "gpt-9-imaginary"); ok {
+		t.Fatal("an unknown model was accepted")
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error.Code != modelNotFoundCode {
+		t.Errorf("code = %q, want %q", body.Error.Code, modelNotFoundCode)
+	}
+	if !strings.Contains(body.Error.Message, "gpt-9-imaginary") {
+		t.Errorf("message does not name the model: %q", body.Error.Message)
+	}
+}
+
+// Both the registry key and the advertised OpenAI id must resolve, because
+// clients send one or the other.
+func TestResolveModelAcceptsAKeyAndAnAdvertisedID(t *testing.T) {
+	api := &APIServer{}
+	for _, name := range []string{"gpt5.5-reasoning", "gpt-5.5-reasoning"} {
+		rec := httptest.NewRecorder()
+		cfg, ok := api.resolveModel(rec, name)
+		if !ok {
+			t.Fatalf("%s was rejected", name)
+		}
+		if cfg.Tone == "" {
+			t.Errorf("%s resolved to an entry with no tone", name)
+		}
+	}
+}

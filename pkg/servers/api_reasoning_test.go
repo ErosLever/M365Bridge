@@ -61,7 +61,7 @@ func TestReasoningEffortThreshold(t *testing.T) {
 }
 
 func TestApplyReasoningEffortRoutesToTheVariant(t *testing.T) {
-	base := models.LookupModel("gpt5.5")
+	base := models.ModelRegistry["gpt5.5"]
 	got := applyReasoningEffort("gpt5.5", base, true)
 	if got.Tone != models.ModelRegistry["gpt5.5-reasoning"].Tone {
 		t.Fatalf("tone = %q, want the reasoning variant", got.Tone)
@@ -71,19 +71,19 @@ func TestApplyReasoningEffortRoutesToTheVariant(t *testing.T) {
 func TestApplyReasoningEffortLeavesModelsWithoutAVariant(t *testing.T) {
 	// The tone is the only lever, so a model with no reasoning variant must be
 	// left alone rather than silently swapped for an unrelated one.
-	base := models.LookupModel("claude-opus")
+	base := models.ModelRegistry["claude-opus"]
 	if got := applyReasoningEffort("claude-opus", base, true); got.Tone != base.Tone {
 		t.Fatalf("model without a variant was rerouted to %q", got.Tone)
 	}
 
 	// A key that already names a reasoning variant must not grow a second suffix.
-	variant := models.LookupModel("gpt5.5-reasoning")
+	variant := models.ModelRegistry["gpt5.5-reasoning"]
 	if got := applyReasoningEffort("gpt5.5-reasoning", variant, true); got.Tone != variant.Tone {
 		t.Fatalf("reasoning variant was rerouted to %q", got.Tone)
 	}
 
 	// Low effort leaves the tone alone even when a variant exists.
-	base = models.LookupModel("gpt5.5")
+	base = models.ModelRegistry["gpt5.5"]
 	if got := applyReasoningEffort("gpt5.5", base, false); got.Tone != base.Tone {
 		t.Fatalf("low effort rerouted the model to %q", got.Tone)
 	}

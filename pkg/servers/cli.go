@@ -75,8 +75,23 @@ func (cli *CLIServer) listModels() error {
 	return nil
 }
 
+// resolveCLIModel reports the requested model, or an error naming where the
+// available keys are listed. An unknown name used to fall back to the default
+// entry, so the session answered from a tone the caller never asked for.
+func resolveCLIModel(key string) (models.ModelConfig, error) {
+	cfg, ok := models.FindModel(key)
+	if !ok {
+		return models.ModelConfig{}, fmt.Errorf("unknown model %q; run --list-models for the available keys", key)
+	}
+	return cfg, nil
+}
+
 // runInteractive starts the interactive mode.
 func (cli *CLIServer) runInteractive(options *CLIOptions) error {
+	cfg, err := resolveCLIModel(options.Model)
+	if err != nil {
+		return err
+	}
 	fmt.Printf("M365 Copilot v%s (Interactive Mode)\n", models.Version)
 	fmt.Printf("Model: %s\n", options.Model)
 	fmt.Println("Exit: Ctrl+C")
@@ -95,10 +110,9 @@ func (cli *CLIServer) runInteractive(options *CLIOptions) error {
 			continue
 		}
 
-		cfg := models.LookupModel(options.Model)
 		tone := cfg.Tone
 		if options.Reasoning {
-			tone = "Reasoning"
+			tone = models.ModelRegistry["reasoning"].Tone
 		}
 
 		if options.NoStream {
@@ -126,14 +140,16 @@ func (cli *CLIServer) runSingleQuery(options *CLIOptions) error {
 		return fmt.Errorf("prompt is required for single query mode")
 	}
 
-	cfg := models.LookupModel(options.Model)
+	cfg, err := resolveCLIModel(options.Model)
+	if err != nil {
+		return err
+	}
 	tone := cfg.Tone
 	if options.Reasoning {
-		tone = "Reasoning"
+		tone = models.ModelRegistry["reasoning"].Tone
 	}
 
 	var result string
-	var err error
 
 	if options.NoStream {
 		result, err = cli.m365Client.Chat(options.Prompt, tone, cfg.Override, "", cli.config.UserOID, cli.config.TenantID, false)
