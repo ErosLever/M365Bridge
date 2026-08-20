@@ -2,6 +2,11 @@
 bin/
 m365-bridge
 
+# Web interface sources. The build output is committed at pkg/webui/dist,
+# because go:embed reads it at compile time; web/dist is only the staging copy.
+web/node_modules/
+web/dist/
+
 # Data files (includes .env, tokens, cache, setup.json)
 data/
 test_logs/*
