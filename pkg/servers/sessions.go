@@ -48,9 +48,17 @@ func (api *APIServer) handleSession(w http.ResponseWriter, r *http.Request) {
 		api.handleCORS(w, r)
 		return
 	}
-	sessionID := strings.TrimPrefix(r.URL.Path, "/v1/sessions/")
-	if sessionID == "" || strings.Contains(sessionID, "/") {
+	sessionID, sub, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/sessions/"), "/")
+	if sessionID == "" {
 		api.sendError(w, http.StatusNotFound, "Session not found")
+		return
+	}
+	if sub != "" {
+		if sub != "messages" {
+			api.sendError(w, http.StatusNotFound, "Session not found")
+			return
+		}
+		api.handleSessionMessages(w, r, sessionID)
 		return
 	}
 
@@ -69,6 +77,47 @@ func (api *APIServer) handleSession(w http.ResponseWriter, r *http.Request) {
 	default:
 		api.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}
+}
+
+// handleSessionMessages returns the turns recorded for a session.
+//
+// The backend never replays a conversation, so this record is the only source
+// a client has for redrawing one. It is empty for a conversation that was
+// started somewhere other than this gateway, and an empty list says exactly
+// that rather than pretending the conversation has no history.
+func (api *APIServer) handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if r.Method != http.MethodGet {
+		api.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if api.transcripts == nil {
+		api.sendErrorCode(w, http.StatusNotFound, "transcripts_disabled",
+			"transcripts are not recorded; set M365_ENABLE_WEB_UI=true to keep them")
+		return
+	}
+
+	entries := api.transcripts.Load(sessionID)
+	data := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		item := map[string]any{
+			"object":     "session.message",
+			"role":       entry.Role,
+			"content":    entry.Content,
+			"created_at": entry.CreatedAt,
+		}
+		if entry.Model != "" {
+			item["model"] = entry.Model
+		}
+		if entry.Thinking != "" {
+			item["thinking"] = entry.Thinking
+		}
+		data = append(data, item)
+	}
+	api.sendJSON(w, http.StatusOK, map[string]any{
+		"object":     "list",
+		"session_id": sessionID,
+		"data":       data,
+	})
 }
 
 // maxConversationIDLength bounds the value a caller may bind. Real ids are far
@@ -138,6 +187,7 @@ func (api *APIServer) deleteSession(w http.ResponseWriter, r *http.Request, sess
 	}
 
 	api.ctxCache.Delete(sessionKeyPrefix + sessionID)
+	api.dropTranscript(sessionID)
 	api.sendJSON(w, http.StatusOK, map[string]any{
 		"object":                "session.deleted",
 		"id":                    sessionID,

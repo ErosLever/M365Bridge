@@ -239,9 +239,13 @@ type APIServer struct {
 	m365Client   *client.M365Client
 	codeTools    *codingtools.Manager
 	ctxCache     *ContextCache
-	server       *http.Server
-	stopCh       chan struct{}
-	mu           sync.RWMutex
+	// transcripts records the turns of a session so the browser interface can
+	// redraw a conversation. It is nil when the interface is disabled, which
+	// is what keeps message content off disk in a plain gateway deployment.
+	transcripts *TranscriptStore
+	server      *http.Server
+	stopCh      chan struct{}
+	mu          sync.RWMutex
 
 	// throttlingMu guards lastThrottling, which holds the most recent quota
 	// counters M365 reported. Handlers read it to turn an exhausted quota into
@@ -272,11 +276,15 @@ func (api *APIServer) currentThrottling() *client.ThrottlingInfo {
 
 // NewAPIServer creates a new API server instance.
 func NewAPIServer(config *models.Config, tokenManager *auth.TokenManager) *APIServer {
-	return &APIServer{
+	api := &APIServer{
 		config:       config,
 		tokenManager: tokenManager,
 		ctxCache:     NewContextCache(contextCacheDir),
 	}
+	if config.EnableWebUI {
+		api.transcripts = NewTranscriptStore(transcriptDir)
+	}
+	return api
 }
 
 // tokenRefreshInterval is the interval for periodic access token refresh.
@@ -1452,6 +1460,10 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	// Determine if client-defined tools are present (for optionsSets stripping)
 	hasTools := len(toolcalling.RouteableTools(req.Tools)) > 0
 
+	// Recorded before the turn runs, so a turn that fails still shows the
+	// message the caller sent rather than losing it.
+	api.recordUserTurn(sid, req.Messages)
+
 	if len(localTools) > 0 {
 		result, err := api.runToolLoop(r, toolLoopOpenAI, req.Messages, cfg, convID, req.Tools, localTools)
 		if err != nil {
@@ -2177,10 +2189,10 @@ func (api *APIServer) streamChatCompletions(ctx context.Context, w http.Response
 	api.sendSSEDone(w, chunkID, openaiModel, finishReason, usage)
 	flusher.Flush()
 
-	api.updateChatStreamSession(sid, finalConvID, fullText, thinkingText.String(), toolCalls)
+	api.updateChatStreamSession(sid, cfg.OpenAIID, finalConvID, fullText, thinkingText.String(), toolCalls)
 }
 
-func (api *APIServer) updateChatStreamSession(sid, finalConvID, fullText, thinkingText string, toolCalls []client.ToolCall) {
+func (api *APIServer) updateChatStreamSession(sid, model, finalConvID, fullText, thinkingText string, toolCalls []client.ToolCall) {
 	if sid == "" {
 		return
 	}
@@ -2189,12 +2201,16 @@ func (api *APIServer) updateChatStreamSession(sid, finalConvID, fullText, thinki
 		strings.TrimSpace(thinkingText) == "" &&
 		len(toolCalls) == 0 {
 		api.ctxCache.Delete(sessionKeyPrefix + sid)
+		// The session now starts a new conversation, so the stored turns
+		// belong to a conversation this id no longer points at.
+		api.dropTranscript(sid)
 		return
 	}
 
 	if finalConvID != "" {
 		api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 	}
+	api.recordAssistantTurn(sid, model, fullText, thinkingText)
 }
 
 func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, cfg models.ModelConfig, sid string, maxTokens int, stream bool, tools []toolcalling.ToolDef, toolChoice string) {
@@ -2206,6 +2222,7 @@ func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoop
 	if sid != "" && result.conversationID != "" {
 		api.ctxCache.Set(sessionKeyPrefix+sid, result.conversationID)
 	}
+	api.recordAssistantTurn(sid, cfg.OpenAIID, result.text, result.thinking)
 	usage := openAIUsage(messages, tools, toolChoice, result.text, result.thinking)
 	if stream {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -2352,6 +2369,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 		if finalConvID != "" {
 			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 		}
+		api.recordAssistantTurn(sid, cfg.OpenAIID, respText, thinking)
 	}
 }
 

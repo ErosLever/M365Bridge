@@ -242,6 +242,12 @@ type Config struct {
 	// Downloads send an access token, so an unlisted host must never be
 	// contacted. A leading dot matches that domain and its subdomains.
 	ImageHostAllowlist []string
+	// EnableWebUI serves the browser interface and records a transcript for
+	// every session turn. The backend keeps no message history of its own, so
+	// the interface cannot redraw a conversation without that record. Turning
+	// the interface off also stops the recording, because a gateway that only
+	// proxies should not write message content to disk.
+	EnableWebUI bool
 }
 
 const (
@@ -283,6 +289,7 @@ func LoadConfig() *Config {
 		MaxOutputTokens:       getEnvInt("M365_MAX_OUTPUT_TOKENS", 1_000_000),
 		MaxToolRounds:         min(getEnvInt("M365_MAX_TOOL_ROUNDS", DefaultMaxToolRounds), MaxToolRoundsCeiling),
 		EnableWebSearch:       getEnvBool("M365_ENABLE_WEB_SEARCH", true),
+		EnableWebUI:           getEnvBool("M365_ENABLE_WEB_UI", true),
 	}
 
 	logging.Infof("LoadConfig: tenantID=%s userOID=%s clientID=%s apiKeys=%d", cfg.TenantID, cfg.UserOID, cfg.ClientID[:min(8, len(cfg.ClientID))]+"...", len(cfg.APIKeys))

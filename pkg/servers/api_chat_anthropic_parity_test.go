@@ -141,6 +141,7 @@ func TestUpdateChatStreamSessionDropsOnlyEmptyFinalTurn(t *testing.T) {
 
 			api.updateChatStreamSession(
 				sid,
+				"gpt-5.5",
 				"conv-new",
 				tt.fullText,
 				tt.thinking,
