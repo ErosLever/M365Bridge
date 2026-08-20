@@ -5,6 +5,7 @@ package servers
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"slices"
@@ -63,16 +64,25 @@ type CLIOptions struct {
 // print the same list in a different order on every run, which reads as if the
 // registry itself had changed.
 func (cli *CLIServer) listModels() error {
-	fmt.Println("Available models:")
+	PrintModels(os.Stdout)
+	return nil
+}
+
+// PrintModels writes the model registry compiled into this binary.
+//
+// It takes no credentials and no server, because listing what this build can
+// address is not an upstream question and must work before setup.
+func PrintModels(w io.Writer) {
+	fmt.Fprintln(w, "Available models:")
 	for _, key := range slices.Sorted(maps.Keys(models.ModelRegistry)) {
 		cfg := models.ModelRegistry[key]
 		desc := cfg.Tone
 		if cfg.Override != "" {
 			desc += fmt.Sprintf(" (%s)", cfg.Override)
 		}
-		fmt.Printf("  %-24s - %s\n", key, desc)
+		fmt.Fprintf(w, "  %-26s %-22s api id: %s\n", key, desc, cfg.OpenAIID)
 	}
-	return nil
+	fmt.Fprintln(w, "\nThe left column is the -model name. The api id is what /v1/models advertises.")
 }
 
 // resolveCLIModel reports the requested model, or an error naming where the
