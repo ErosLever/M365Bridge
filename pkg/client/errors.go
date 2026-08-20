@@ -48,3 +48,40 @@ func UpstreamStatus(err error) (int, bool) {
 	}
 	return 0, false
 }
+
+// TurnFailedError reports a turn the backend itself marked as failed.
+//
+// The completion frame carries the verdict in `result.value` and `turnState`,
+// and a failed turn sends no answer message at all. Ignoring the verdict turned
+// such a turn into an empty HTTP 200, so a client saw a blank answer instead of
+// a failure and could not tell the two apart. A dead `tone` fails this way on
+// every request.
+//
+// Unlike UpstreamError the message carries no transport detail, only the
+// backend's own wording, so it is safe to show a client.
+type TurnFailedError struct {
+	// Value is `result.value`, for example "InternalError".
+	Value string
+	// TurnState is `item.turnState`, for example "Failed".
+	TurnState string
+	// Message is `result.message`, the backend's own explanation.
+	Message string
+}
+
+// Error implements the error interface.
+func (e *TurnFailedError) Error() string {
+	msg := fmt.Sprintf("m365 turn failed: %s", e.Value)
+	if e.TurnState != "" {
+		msg += fmt.Sprintf(" (turnState %s)", e.TurnState)
+	}
+	if e.Message != "" {
+		msg += ": " + e.Message
+	}
+	return msg
+}
+
+// TurnFailure reports the backend's verdict when a TurnFailedError appears
+// anywhere in the error chain.
+func TurnFailure(err error) (*TurnFailedError, bool) {
+	return errors.AsType[*TurnFailedError](err)
+}

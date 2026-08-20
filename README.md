@@ -514,6 +514,7 @@ A failed backend request is classified rather than reported as a generic `500`:
 | `409`  | `tool_round_limit`         | One turn drove more tool rounds than `M365_MAX_TOOL_ROUNDS`  |
 | `502`  | `upstream_error`           | M365 rejected the request or was unreachable                 |
 | `502`  | `upstream_unavailable`     | The WebSocket handshake failed or the connection dropped     |
+| `502`  | `upstream_turn_failed`     | M365 ended the turn without producing an answer              |
 | `502`  | `upstream_content_blocked` | M365 declined the request instead of answering it            |
 | `503`  | `upstream_unavailable`     | M365 reported itself unavailable                             |
 | `504`  | `upstream_timeout`         | M365 did not answer in time                                  |

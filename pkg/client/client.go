@@ -699,9 +699,22 @@ func (c *M365Client) ChatConversationStreamGenContext(
 					}
 				} else if msgType, ok := data["type"].(float64); ok && int(msgType) == 2 {
 					// type: 2 is invocation completion; contains item.conversationId
+					// and the backend's verdict on the turn.
 					if item, ok := data["item"].(map[string]any); ok {
 						if convID, ok := item["conversationId"].(string); ok && convID != "" {
 							finalConvID = convID
+						}
+						if failure := parseTurnResult(item); failure != nil {
+							// Text already on the wire cannot be retracted, so a
+							// partial answer is delivered rather than replaced by
+							// an error.
+							if accText != "" {
+								logging.Warnf("ChatConversationStreamGen: %v, keeping the %d bytes already emitted", failure, len(accText))
+							} else {
+								logging.Errorf("ChatConversationStreamGen: %v", failure)
+								emit(StreamChunk{Error: failure})
+								return
+							}
 						}
 					}
 				} else if msgType, ok := data["type"].(float64); ok && int(msgType) == 3 {
@@ -776,11 +789,42 @@ func (c *M365Client) sendRecv(conn *websocket.Conn, payload string) (string, err
 						}
 					}
 				}
+			} else if msgType, ok := data["type"].(float64); ok && int(msgType) == 2 {
+				// The backend reports whether the turn produced anything. A
+				// failed turn sends no answer message, so without this the
+				// caller receives empty text and no error.
+				if item, ok := data["item"].(map[string]any); ok {
+					if failure := parseTurnResult(item); failure != nil && fullText == "" {
+						logging.Errorf("sendRecv: %v", failure)
+						return "", failure
+					}
+				}
 			} else if msgType, ok := data["type"].(float64); ok && int(msgType) == 3 {
 				return fullText, nil
 			}
 		}
 	}
+}
+
+// parseTurnResult reports the backend's verdict on a finished turn, or nil when
+// the turn succeeded or carried no verdict.
+//
+// The completion frame's `result.value` is "Success" on a turn that answered.
+// Anything else is the backend saying it produced nothing, which it does for a
+// `tone` it accepts but no longer serves. A frame without `result` returns nil,
+// because an unfamiliar frame shape must not turn a working turn into an error.
+func parseTurnResult(item map[string]any) *TurnFailedError {
+	result, ok := item["result"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	value, ok := result["value"].(string)
+	if !ok || value == "" || value == "Success" {
+		return nil
+	}
+	message, _ := result["message"].(string)
+	turnState, _ := item["turnState"].(string)
+	return &TurnFailedError{Value: value, TurnState: turnState, Message: message}
 }
 
 // snapshotDelta reports the text a message snapshot adds to what was already

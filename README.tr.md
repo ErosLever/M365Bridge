@@ -514,6 +514,7 @@ Başarısız bir backend isteği genel bir `500` yerine sınıflandırılır:
 | `409`  | `tool_round_limit`         | Bir tur `M365_MAX_TOOL_ROUNDS` sınırından fazla tool round sürdü |
 | `502`  | `upstream_error`           | M365 isteği reddetti veya erişilemedi                          |
 | `502`  | `upstream_unavailable`     | WebSocket handshake başarısız oldu veya bağlantı düştü         |
+| `502`  | `upstream_turn_failed`     | M365 turu cevap üretmeden sonlandırdı                          |
 | `502`  | `upstream_content_blocked` | M365 isteği yanıtlamak yerine reddetti                         |
 | `503`  | `upstream_unavailable`     | M365 kendisini kullanılamaz olarak bildirdi                    |
 | `504`  | `upstream_timeout`         | M365 zamanında yanıt vermedi                                   |

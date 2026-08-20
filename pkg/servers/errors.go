@@ -64,6 +64,7 @@ const (
 	upstreamTimeoutCode        = "upstream_timeout"
 	upstreamUnavailableCode    = "upstream_unavailable"
 	upstreamRejectedCode       = "upstream_error"
+	upstreamTurnFailedCode     = "upstream_turn_failed"
 	internalProcessingCode     = "internal_error"
 	rateLimitRetryAfterSeconds = 60
 )
@@ -86,6 +87,13 @@ func classifyUpstreamError(err error) (int, string) {
 
 	if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 		return http.StatusGatewayTimeout, upstreamTimeoutCode
+	}
+
+	// Checked before the status lookup below: a failed turn reached the backend
+	// and carries no HTTP status, so it would otherwise fall through to the
+	// generic internal error and read as a bug on this side.
+	if _, ok := client.TurnFailure(err); ok {
+		return http.StatusBadGateway, upstreamTurnFailedCode
 	}
 
 	if status, ok := client.UpstreamStatus(err); ok {
@@ -125,6 +133,8 @@ func upstreamErrorMessage(op, code string) string {
 		return "M365 is currently unreachable for this " + op + " request"
 	case upstreamRejectedCode:
 		return "M365 rejected the " + op + " request"
+	case upstreamTurnFailedCode:
+		return "M365 accepted the " + op + " request but ended the turn without producing an answer; a model whose backend tone is no longer served fails this way on every request"
 	default:
 		return "the " + op + " request failed before it could be completed"
 	}

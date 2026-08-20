@@ -287,3 +287,40 @@ func TestSendUpstreamErrorSetsRetryAfterOnlyWhenThrottled(t *testing.T) {
 		t.Fatalf("a non-throttled failure set Retry-After to %q", got)
 	}
 }
+
+// A turn the backend itself marked as failed reached M365 and carries no HTTP
+// status, so it must not fall through to the generic internal error.
+func TestClassifyUpstreamErrorReportsAFailedTurn(t *testing.T) {
+	err := fmt.Errorf("chat: %w", &client.TurnFailedError{
+		Value: "InternalError", TurnState: "Failed", Message: "Sorry, I wasn't able to respond to that."})
+
+	status, code := classifyUpstreamError(err)
+	if status != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", status)
+	}
+	if code != upstreamTurnFailedCode {
+		t.Errorf("code = %q, want %q", code, upstreamTurnFailedCode)
+	}
+}
+
+// The turn-failure branch has to be reached before the UpstreamStatus lookup,
+// which would otherwise classify a wrapped pair by the HTTP status alone.
+func TestClassifyUpstreamErrorPrefersTheTurnVerdictOverAStatus(t *testing.T) {
+	err := &client.UpstreamError{
+		Op:     "dial",
+		Status: http.StatusServiceUnavailable,
+		Err:    &client.TurnFailedError{Value: "InternalError"},
+	}
+
+	_, code := classifyUpstreamError(err)
+	if code != upstreamTurnFailedCode {
+		t.Errorf("code = %q, want %q; the turn verdict is the more specific signal", code, upstreamTurnFailedCode)
+	}
+}
+
+func TestUpstreamErrorMessageExplainsAFailedTurn(t *testing.T) {
+	msg := upstreamErrorMessage("chat", upstreamTurnFailedCode)
+	if !strings.Contains(msg, "without producing an answer") {
+		t.Errorf("message does not say the turn produced nothing: %q", msg)
+	}
+}
