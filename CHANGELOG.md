@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.4.1] - 2026-08-20
+
+### Added
+- Serve a browser interface at `/` from files embedded in the binary, gated on `M365_ENABLE_WEB_UI`
+- Add the chat interface with a conversation sidebar, streaming answers and model selection
+- Keep the composer in place while the conversation scrolls and move the model picker into it
+- Record the turns of a session under `data/transcripts` and read them back over `GET /v1/sessions/{id}/messages`
+- Bind a session to a conversation that already exists with `PUT /v1/sessions/{id}`
+- Read a conversation this gateway never carried from the M365 conversation page
+- Import an upstream conversation into a session over `GET /v1/conversations/{id}/messages`
+- Offer to load the history of a conversation started in the M365 web or mobile client
+- Document the whole command surface in `--help`, including both subcommands and the environment variables
+
+### Changed
+- Set `ReadHeaderTimeout` and `IdleTimeout` on the HTTP server, and tighten the log file, the written coding-tool file and their directories to owner-only
+- State on every remaining static-analysis finding why the code is safe, so a real one cannot hide in the noise
+- Cover the coding-tool workspace escape and the written file mode with tests
+- Describe the web interface and reading a conversation held upstream in both READMEs
+- Ignore the Go build cache directory
+
+### Fixed
+- Strip the backend's raw citation markers from answer text on every channel
+- Check the error every discarded call returns, and report a failed cache directory instead of proceeding without one
+- Restrict a log file an earlier build left readable
+
 ## [1.4.0] - 2026-08-20
 
 ### Added
