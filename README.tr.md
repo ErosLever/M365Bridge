@@ -15,7 +15,7 @@ Uygulamanız -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Bac
 
 ## Ön Koşullar
 
-- **Go 1.22+** kurulu ([indir](https://go.dev/dl/))
+- **Go 1.26+** kurulu ([indir](https://go.dev/dl/)). 1.21 ve sonrası daha eski bir Go da çalışır: ilk derlemede 1.26 toolchain'ini indirir, `GOTOOLCHAIN` değeri `local` değilse.
 - Bu repoyu klonlamak için **git**
 - **Microsoft 365 Copilot lisansı** (iş veya kurumsal hesap, Copilot erişimi olan) test edilmiş copilot chat (temel) hesabı
 - [https://m365.cloud.microsoft](https://m365.cloud.microsoft) adresine giriş yapmış bir tarayıcı (kurulum sihirbazı token çıkarımı için)
@@ -38,12 +38,63 @@ Uygulamanız -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Bac
 
 ## Kurulum
 
+Servisi çalıştırmanın üç yolu var: kaynaktan derlemek, hazır binary indirmek veya Docker image'ini çalıştırmak. Üçü de aynı tek seferlik tarayıcı token kurulumunu gerektirir.
+
+### Docker Olmadan
+
+Docker zorunlu değildir. Binary'yi doğrudan çalıştırmak için, Windows, macOS veya Linux'ta:
+
+#### Adım 1: Binary'yi derleyin
+
 ```bash
 git clone https://github.com/KilimcininKorOglu/M365Bridge
 cd M365Bridge
-go mod download
 go build -o bin/m365-bridge ./cmd/cli
 ```
+
+Windows'ta çıktı adını `bin/m365-bridge.exe` yapın.
+
+#### Adım 2: data dizinini oluşturun
+
+```bash
+mkdir data
+```
+
+Bütün runtime yolları çalışma dizinine görelidir, bu yüzden **aşağıdaki her komutu repo kökünden çalıştırın**. Binary'yi başka bir dizinden başlatmak `data/` dizinini orada aratır ve eksik token hatası verir.
+
+#### Adım 3: Kimlik doğrulama token'ınızı alın
+
+Tarayıcı snippet'ini çalıştırmak için yukarıdaki Docker bölümünün **Adım 3**'ünü izleyin. Token'ı 24 saatten sonra da yenileyen SSO cookie'lerini istiyorsanız **Adım 4**'ü de uygulayın.
+
+#### Adım 4: setup.json oluşturun ve sihirbazı çalıştırın
+
+Tarayıcı çıktısını Docker bölümünün **Adım 5**'inde gösterilen biçimde `data/setup.json` dosyasına kaydedin, sonra:
+
+```bash
+./bin/m365-bridge setup-wizard
+```
+
+Windows PowerShell:
+
+```powershell
+.\bin\m365-bridge.exe setup-wizard
+```
+
+Sihirbaz `data/.env` dosyasını ve `data/tokens/` altındaki şifreli kimlik bilgilerini yazar.
+
+#### Adım 5: Sunucuyu başlatın
+
+```bash
+./bin/m365-bridge serve --port 8000
+```
+
+Windows PowerShell:
+
+```powershell
+.\bin\m365-bridge.exe serve --port 8000
+```
+
+API `http://localhost:8000` adresinde çalışır. Docker kurulumu container'ı host portu 8230'a eşler; doğrudan çalıştırmada eşleme yoktur, verdiğiniz port kullandığınız porttur.
 
 ### Hazır Binary'ler
 

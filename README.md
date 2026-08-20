@@ -15,7 +15,7 @@ Your App -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Backend
 
 ## Prerequisites
 
-- **Go 1.22+** installed ([download](https://go.dev/dl/))
+- **Go 1.26+** installed ([download](https://go.dev/dl/)). An older Go from 1.21 on also works: it downloads the 1.26 toolchain on the first build, unless `GOTOOLCHAIN` is set to `local`.
 - **git** for cloning this repository
 - A **Microsoft 365 Copilot license** (business or enterprise account with Copilot access) tested a copilot chat (basic) account
 - A browser logged into [https://m365.cloud.microsoft](https://m365.cloud.microsoft) (for setup wizard token extraction)
@@ -38,12 +38,63 @@ Your App -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Backend
 
 ## Installation
 
+Three ways to run the service: build it from source, download a pre-built binary, or run the Docker image. All three need the same one-time token setup from the browser.
+
+### Without Docker
+
+Docker is optional. To run the binary directly, on Windows, macOS or Linux:
+
+#### Step 1: Build the binary
+
 ```bash
 git clone https://github.com/KilimcininKorOglu/M365Bridge
 cd M365Bridge
-go mod download
 go build -o bin/m365-bridge ./cmd/cli
 ```
+
+On Windows, name the output `bin/m365-bridge.exe` instead.
+
+#### Step 2: Create the data directory
+
+```bash
+mkdir data
+```
+
+Every runtime path is relative to the working directory, so **run every command below from the repository root**. Starting the binary from another directory makes it look for `data/` there and report a missing token.
+
+#### Step 3: Get your authentication token
+
+Follow **Step 3** of the Docker section above to run the browser snippet, and **Step 4** if you want the SSO cookies that keep the token renewing past 24 hours.
+
+#### Step 4: Create setup.json and run the wizard
+
+Save the browser output to `data/setup.json` in the format shown in **Step 5** of the Docker section, then:
+
+```bash
+./bin/m365-bridge setup-wizard
+```
+
+Windows PowerShell:
+
+```powershell
+.\bin\m365-bridge.exe setup-wizard
+```
+
+The wizard writes `data/.env` and the encrypted credentials under `data/tokens/`.
+
+#### Step 5: Start the server
+
+```bash
+./bin/m365-bridge serve --port 8000
+```
+
+Windows PowerShell:
+
+```powershell
+.\bin\m365-bridge.exe serve --port 8000
+```
+
+The API is available at `http://localhost:8000`. The Docker setup maps the container to host port 8230; running directly there is no mapping, so the port you pass is the port you use.
 
 ### Pre-built Binaries
 
