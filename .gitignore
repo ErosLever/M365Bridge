@@ -16,3 +16,4 @@ __pycache__/*
 docker-data/
 webui_analysis.md
 encryption.key
+.gocache/
