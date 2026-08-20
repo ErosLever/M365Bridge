@@ -157,14 +157,16 @@ func TestModelsCapabilityNamespacesDoNotCollide(t *testing.T) {
 // to; thinking is true where the tone emits ChainOfThoughtSummary.
 var wantEffort = map[string]bool{
 	"gpt-4-auto": false, "gpt-4-quick": false, "gpt-4-reasoning": false,
+	"gpt-5.2-reasoning": true, "gpt-5.4-reasoning": true,
 	"gpt-5.5": true, "gpt-5.5-reasoning": true, "gpt-5.6-reasoning": true,
-	"claude-sonnet-4.6": false, "claude-opus-4.6": false, "claude-fable-5": false,
+	"claude-sonnet-4.6": false, "claude-opus-4.6": false,
 }
 
 var wantThinking = map[string]bool{
-	"gpt-4-auto": false, "gpt-4-quick": false, "gpt-4-reasoning": false,
+	"gpt-4-auto": false, "gpt-4-quick": false, "gpt-4-reasoning": true,
+	"gpt-5.2-reasoning": true, "gpt-5.4-reasoning": true,
 	"gpt-5.5": false, "gpt-5.5-reasoning": true, "gpt-5.6-reasoning": true,
-	"claude-sonnet-4.6": false, "claude-opus-4.6": false, "claude-fable-5": false,
+	"claude-sonnet-4.6": false, "claude-opus-4.6": false,
 }
 
 // A new registry entry must be added to both tables, otherwise the capability

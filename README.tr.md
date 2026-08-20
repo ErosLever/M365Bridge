@@ -305,7 +305,7 @@ Sonra yukarıdaki Adım 3-6'yı izleyin.
 | Bayrak          | Tip    | Varsayılan | Açıklama                                                                                                                                                                                 |
 |-----------------|--------|------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `-i`            | bool   | false      | Etkileşimli mod (çok turlu sohbet)                                                                                                                                                       |
-| `--model`       | string | `auto`     | Kullanılacak model: `auto`, `quick`, `reasoning`, `gpt5.5`, `gpt5.5-reasoning`, `gpt5.6-reasoning`, `claude`, `claude-sonnet`, `claude-opus`, `claude-fable`, `claude-sonnet-4-20250514` |
+| `--model`       | string | `auto`     | Kullanılacak model: `auto`, `quick`, `reasoning`, `gpt5.2-reasoning`, `gpt5.4-reasoning`, `gpt5.5`, `gpt5.5-reasoning`, `gpt5.6-reasoning`, `claude`, `claude-sonnet`, `claude-opus`, `claude-sonnet-4-20250514` |
 | `--reasoning`   | bool   | false      | Akıl yürütme modunu kullan                                                                                                                                                               |
 | `--no-stream`   | bool   | false      | Akışı devre dışı bırak, tam yanıtı tek seferde yazdır                                                                                                                                    |
 | `--list-models` | bool   | false      | Tüm kullanılabilir modelleri listele ve çık                                                                                                                                              |
@@ -529,14 +529,15 @@ Tüm model seçimi, M365 backend'ine gönderilen `tone` alanı ile yapılır. T�
 |----------------------------|-------------------|-------------------|----------|---------|
 | `auto`                     | Magic             | gpt-4-auto        | Hayır    | GPT-5   |
 | `quick`                    | Chat              | gpt-4-quick       | Hayır    | GPT-5   |
-| `reasoning`                | Magic             | gpt-4-reasoning   | Hayır    | GPT-5   |
+| `reasoning`                | Gpt_5_2_Reasoning | gpt-4-reasoning   | Evet     | GPT-5   |
+| `gpt5.2-reasoning`         | Gpt_5_2_Reasoning | gpt-5.2-reasoning | Evet     | GPT-5   |
+| `gpt5.4-reasoning`         | Gpt_5_4_Reasoning | gpt-5.4-reasoning | Evet     | GPT-5   |
 | `gpt5.5`                   | Gpt_5_5_Chat      | gpt-5.5           | Hayır    | GPT-5   |
 | `gpt5.5-reasoning`         | Gpt_5_5_Reasoning | gpt-5.5-reasoning | Evet     | GPT-5   |
 | `gpt5.6-reasoning`         | Gpt_5_6_Reasoning | gpt-5.6-reasoning | Evet     | GPT-5   |
 | `claude`                   | Claude_Sonnet     | claude-sonnet-4.6 | Hayır    | Claude  |
 | `claude-sonnet`            | Claude_Sonnet     | claude-sonnet-4.6 | Hayır    | Claude  |
 | `claude-opus`              | Claude_Opus       | claude-opus-4.6   | Hayır    | Claude  |
-| `claude-fable`             | Claude_Fable      | claude-fable-5    | Hayır    | Claude  |
 | `claude-sonnet-4-20250514` | Claude_Sonnet     | claude-sonnet-4.6 | Hayır    | Claude  |
 
 ### Hangi modeli kullanmalıyım?
@@ -546,14 +547,15 @@ Tüm model seçimi, M365 backend'ine gönderilen `tone` alanı ile yapılır. T�
 | Genel amaçlı, backend karar versin           | `auto`             |
 | Hızlı yanıtlar, basit sorular                | `quick`            |
 | Karmaşık akıl yürütme, çok adımlı problemler | `reasoning`        |
+| GPT-5.2 derin düşünme                        | `gpt5.2-reasoning` |
+| GPT-5.4 derin düşünme                        | `gpt5.4-reasoning` |
 | GPT-5.5 sohbet                               | `gpt5.5`           |
 | GPT-5.5 derin düşünme                        | `gpt5.5-reasoning` |
 | GPT-5.6 derin düşünme (en yeni)              | `gpt5.6-reasoning` |
 | Claude Sonnet 4.6 (Anthropic)                | `claude-sonnet`    |
 | Claude Opus 4.6 (Anthropic, en yetenekli)    | `claude-opus`      |
-| Claude Fable tone                            | `claude-fable`     |
 
-`gpt5.5-reasoning`, modelin düşünme sürecini içeren `reasoning_content` çıktısı üretir. OpenAI endpoint'leri bunu `reasoning_content` olarak; Anthropic endpoint'leri `text` bloğundan önce bir `thinking` içerik bloğu olarak gösterir. Claude modelleri düşünme içeriği üretmez.
+Bir reasoning modeli, modelin düşünme sürecini içeren `reasoning_content` çıktısı üretir. OpenAI endpoint'leri bunu `reasoning_content` olarak; Anthropic endpoint'leri `text` bloğundan önce bir `thinking` içerik bloğu olarak gösterir. Claude modelleri düşünme içeriği üretmez. `gpt5.6-reasoning` bu yeteneği ilan eder ancak düşünme içeriği ürettiği gözlenmemiştir.
 
 ### Model Adında Session ID
 

@@ -104,11 +104,26 @@ var ModelRegistry = map[string]ModelConfig{
 		OpenAIID:    "gpt-4-quick",
 		DisplayName: "GPT Quick",
 	},
+	// The Magic tone answers without reasoning, so this entry used to be
+	// indistinguishable from "auto". It routes to the reasoning tone measured
+	// to emit chain-of-thought summaries on every turn instead.
 	"reasoning": {
-		Tone:        "Magic",
+		Tone:        "Gpt_5_2_Reasoning",
 		Override:    "",
 		OpenAIID:    "gpt-4-reasoning",
 		DisplayName: "GPT Reasoning",
+	},
+	"gpt5.2-reasoning": {
+		Tone:        "Gpt_5_2_Reasoning",
+		Override:    "",
+		OpenAIID:    "gpt-5.2-reasoning",
+		DisplayName: "GPT-5.2 Reasoning",
+	},
+	"gpt5.4-reasoning": {
+		Tone:        "Gpt_5_4_Reasoning",
+		Override:    "",
+		OpenAIID:    "gpt-5.4-reasoning",
+		DisplayName: "GPT-5.4 Reasoning",
 	},
 	"gpt5.5": {
 		Tone:        "Gpt_5_5_Chat",
@@ -148,13 +163,6 @@ var ModelRegistry = map[string]ModelConfig{
 		Override:    "",
 		OpenAIID:    "claude-opus-4.6",
 		DisplayName: "Claude Opus 4.6",
-		Owner:       OwnerAnthropic,
-	},
-	"claude-fable": {
-		Tone:        "Claude_Fable",
-		Override:    "",
-		OpenAIID:    "claude-fable-5",
-		DisplayName: "Claude Fable 5",
 		Owner:       OwnerAnthropic,
 	},
 	"claude-sonnet-4-20250514": {
