@@ -984,15 +984,24 @@ func (api *APIServer) createConversation(w http.ResponseWriter, r *http.Request)
 	api.sendJSON(w, http.StatusCreated, map[string]any{"id": conversationID, "name": req.Name})
 }
 
-// handleConversation renames or permanently deletes one M365 conversation.
+// handleConversation reads, renames or permanently deletes one M365
+// conversation.
 func (api *APIServer) handleConversation(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		api.handleCORS(w, r)
 		return
 	}
-	conversationID := strings.TrimPrefix(r.URL.Path, "/v1/conversations/")
-	if conversationID == "" || strings.Contains(conversationID, "/") {
+	conversationID, subresource, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/conversations/"), "/")
+	if conversationID == "" {
 		api.sendError(w, http.StatusNotFound, "Conversation not found")
+		return
+	}
+	if subresource != "" {
+		if subresource != "messages" || r.Method != http.MethodGet {
+			api.sendError(w, http.StatusNotFound, "Conversation not found")
+			return
+		}
+		api.readConversationHistory(w, r, conversationID)
 		return
 	}
 	conversationClient := client.NewConversationClient(api.tokenManager)
@@ -1023,6 +1032,56 @@ func (api *APIServer) handleConversation(w http.ResponseWriter, r *http.Request)
 	default:
 		api.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}
+}
+
+// readConversationHistory imports the turns of a conversation this gateway
+// never carried.
+//
+// The transcript store only knows the turns that went through this process, so
+// a conversation started in the M365 web or mobile client opens empty. Reading
+// it costs a page download and a walk of a serialization this project does not
+// control, which is why it runs on request instead of on every open.
+//
+// A session_id parameter also stores the result under that session, so the
+// interface can continue the conversation with its history in place and does
+// not pay the download again on the next open.
+func (api *APIServer) readConversationHistory(w http.ResponseWriter, r *http.Request, conversationID string) {
+	conversationClient := client.NewConversationClient(api.tokenManager)
+	history, err := conversationClient.FetchHistory(r.Context(), conversationID)
+	if err != nil {
+		if errors.Is(err, client.ErrHistoryUnavailable) {
+			logging.Errorf("Conversation history could not be read: %v", err)
+			api.sendError(w, http.StatusBadGateway, "M365 did not return a readable conversation history")
+			return
+		}
+		api.sendConversationError(w, err)
+		return
+	}
+
+	// The entries carry the stored-transcript shape, so the interface renders an
+	// imported conversation with the code it already has.
+	now := time.Now().Unix()
+	entries := make([]TranscriptEntry, 0, len(history))
+	for _, msg := range history {
+		created := now
+		if parsed, err := time.Parse(time.RFC3339, msg.CreatedAt); err == nil {
+			created = parsed.Unix()
+		}
+		entries = append(entries, TranscriptEntry{Role: msg.Role, Content: msg.Text, CreatedAt: created})
+	}
+
+	imported := false
+	if sid := strings.TrimSpace(r.URL.Query().Get("session_id")); sid != "" && api.transcripts != nil {
+		api.transcripts.Replace(sid, entries)
+		api.ctxCache.Set(sessionKeyPrefix+sid, conversationID)
+		imported = true
+	}
+
+	api.sendJSON(w, http.StatusOK, map[string]any{
+		"conversation_id": conversationID,
+		"messages":        entries,
+		"imported":        imported,
+	})
 }
 
 func (api *APIServer) sendConversationError(w http.ResponseWriter, err error) {

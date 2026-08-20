@@ -127,6 +127,47 @@ func (ts *TranscriptStore) Append(sessionID string, entry TranscriptEntry) {
 	ts.evict()
 }
 
+// Replace overwrites a session's stored turns.
+//
+// Append cannot do this job: importing a conversation held elsewhere produces
+// the whole history at once, and adding it to whatever the session already
+// holds would show the imported turns twice.
+func (ts *TranscriptStore) Replace(sessionID string, entries []TranscriptEntry) {
+	if sessionID == "" {
+		return
+	}
+	now := time.Now().Unix()
+	cleaned := make([]TranscriptEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Content == "" {
+			continue
+		}
+		if entry.CreatedAt == 0 {
+			entry.CreatedAt = now
+		}
+		entry.Content = truncateRunes(entry.Content, transcriptMaxContent)
+		entry.Thinking = truncateRunes(entry.Thinking, transcriptMaxContent)
+		cleaned = append(cleaned, entry)
+	}
+	if len(cleaned) > transcriptMaxEntries {
+		cleaned = cleaned[len(cleaned)-transcriptMaxEntries:]
+	}
+
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	data, err := json.Marshal(cleaned)
+	if err != nil {
+		logging.Errorf("transcripts: cannot encode the record for a session: %v", err)
+		return
+	}
+	if err := ts.writeFile(ts.path(sessionID), data, 0600); err != nil {
+		logging.Errorf("transcripts: cannot write the record for a session: %v", err)
+		return
+	}
+	ts.evict()
+}
+
 // Delete removes a session's transcript. A missing file is not an error,
 // because a session may never have recorded a turn.
 func (ts *TranscriptStore) Delete(sessionID string) {
