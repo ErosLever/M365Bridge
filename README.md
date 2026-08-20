@@ -157,7 +157,7 @@ The server needs a refresh token from your Microsoft 365 Copilot session. Extrac
 
 ```javascript
 (async () => {
-// 1. Get oid/tenant
+// 1. Get oid/tenant from the signed-in account
 let oid, tenant;
 for (const key of Object.keys(localStorage)) {
   if (!key.includes('active-account-filters')) continue;
@@ -170,42 +170,35 @@ if (!oid) {
   const mk = Object.keys(localStorage).find(k => k.startsWith('msal.') && k.includes('|'));
   if (mk) { const p = mk.split('|')[1]; if (p?.includes('.')) [oid, tenant] = p.split('.'); }
 }
-if (!oid || !tenant) return 'ERROR: No MSAL account found. Make sure you are logged in.';
+if (!oid || !tenant) return 'ERROR: No signed-in account found. Log in to m365.cloud.microsoft and run this again.';
 
-// 2. Install fetch interceptor to capture token response for the target client ID
+// 2. Watch every token exchange for the one this gateway uses
 const targetClientID = '4765445b-32c6-49b0-83e6-1d93765276ca';
 const origFetch = window.fetch;
-let captured = false;
+let done;
+const captured = new Promise(resolve => { done = resolve; });
 window.fetch = async function(...args) {
   const resp = await origFetch.apply(this, args);
   const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-  if (url.includes('oauth2/v2.0/token') && !captured) {
+  if (url.includes('oauth2/v2.0/token')) {
     try {
-      // Verify this request is for our target client ID
       let bodyStr = '';
       const init = args[1];
-      if (typeof init?.body === 'string') {
-        bodyStr = init.body;
-      } else if (init?.body instanceof URLSearchParams) {
-        bodyStr = init.body.toString();
-      } else if (init?.body instanceof ArrayBuffer || ArrayBuffer.isView(init?.body)) {
-        bodyStr = new TextDecoder().decode(init.body);
-      } else if (args[0] instanceof Request) {
-        bodyStr = await args[0].clone().text();
-      }
-      // The sign-in exchange sends the target as brk_client_id and puts a
-      // broker client_id in its place, so both are accepted.
+      if (typeof init?.body === 'string') bodyStr = init.body;
+      else if (init?.body instanceof URLSearchParams) bodyStr = init.body.toString();
+      else if (init?.body instanceof ArrayBuffer || ArrayBuffer.isView(init?.body)) bodyStr = new TextDecoder().decode(init.body);
+      else if (args[0] instanceof Request) bodyStr = await args[0].clone().text();
+      // The sign-in exchange puts a broker id in client_id and carries the real
+      // target in brk_client_id, so both are accepted.
       const params = new URLSearchParams(bodyStr);
       const isTarget = params.get('client_id') === targetClientID
                     || params.get('brk_client_id') === targetClientID;
       if (isTarget) {
-        const clone = resp.clone();
-        const data = await clone.json();
+        const data = await resp.clone().json();
         if (data.refresh_token) {
-          captured = true;
-          const result = {oid, tenant, refresh_token: data.refresh_token};
           console.log('===== COPY THE COMPLETE JSON BELOW =====');
-          console.log(JSON.stringify(result, null, 2));
+          console.log(JSON.stringify({oid, tenant, refresh_token: data.refresh_token}, null, 2));
+          done(true);
         }
       }
     } catch(e) {}
@@ -213,46 +206,33 @@ window.fetch = async function(...args) {
   return resp;
 };
 
-// 3. Find MSAL instance and force token refresh
-let msal = null;
-const checked = new WeakSet();
-function findMsal(obj, depth) {
-  if (!obj || depth > 3 || typeof obj !== 'object' || checked.has(obj)) return null;
-  checked.add(obj);
-  try {
-    if (typeof obj.acquireTokenSilent === 'function' && typeof obj.getAllAccounts === 'function') return obj;
-    if (depth < 3) for (const k of Object.keys(obj)) {
-      try { const r = findMsal(obj[k], depth + 1); if (r) return r; } catch(e) {}
-    }
-  } catch(e) {}
-  return null;
-}
-for (const k of Object.getOwnPropertyNames(window)) {
-  try { msal = findMsal(window[k], 0); if (msal) break; } catch(e) {}
+// 3. Make the app ask for a token
+// The page keeps its MSAL instance out of reach of the console, so the refresh
+// cannot be requested directly. Moving to another route makes the app request
+// one; the original page is restored afterwards.
+const startPath = location.pathname;
+let moved = false;
+for (const href of ['/search', '/library', '/teach', '/chat/all', '/chat']) {
+  if (href === startPath) continue;
+  const link = document.querySelector('a[href="' + href + '"]');
+  if (link) { link.click(); moved = true; break; }
 }
 
-if (msal) {
-  const accounts = msal.getAllAccounts();
-  if (accounts.length > 0) {
-    try {
-      await msal.acquireTokenSilent({
-        account: accounts[0],
-        scopes: ['https://substrate.office.com/.default'],
-        forceRefresh: true
-      });
-    } catch(e) {}
-  }
-  return 'Token refresh triggered. If no JSON appeared, click a link in the left navigation.';
-}
-return 'Interceptor installed. Click a link in the left navigation (for example Search) to trigger a token refresh, then copy the JSON output.';
+// 4. Wait for the exchange, then put everything back
+const ok = await Promise.race([captured, new Promise(r => setTimeout(() => r(false), 20000))]);
+if (moved) history.back();
+window.fetch = origFetch;
+
+return ok
+  ? 'Done. Copy the JSON printed above.'
+  : 'No token exchange seen; the app is still using a token it refreshed a moment ago. Reload the page and run this again.';
 })()
 ```
 
 </details>
 
-4. **Click a link in the left navigation** (for example **Search**). The snippet only listens for a token refresh; it can no longer force one, because the page no longer exposes its MSAL instance to the console. Navigating inside the page triggers the refresh.
-5. The console will then output: `===== COPY THE COMPLETE JSON BELOW =====`
-6. Copy the JSON output. It will look like this:
+4. Wait a few seconds. The snippet moves to another page and back on its own to make the app request a token, then prints: `===== COPY THE COMPLETE JSON BELOW =====`
+5. Copy the JSON output. It will look like this:
 
 ```json
 {
