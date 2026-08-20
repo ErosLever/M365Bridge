@@ -511,7 +511,7 @@ Cookie yoksa ilk çağrı başarısız olur, sidebar yalnızca yerel eşlemelere
 
 Backend geçmişi conversation ID ile takip eder ve asla geri göndermez, bu yüzden gateway taşıdığı turların kendi kaydını tutar: oturum başına bir dosya, `data/transcripts` altında. Mesaj içeriğinin diske ulaştığı tek yer burasıdır. Oturum başına kayıt, mesaj başına bayt ve depodaki dosya sayısı sınırlıdır.
 
-Bu gateway dışında başlamış bir konuşmanın kaydı yoktur; açtığınızda geçmişi boş görünür ve arayüz bunu söyler, uydurmaz. Bir oturumu silmek transcript'ini de siler; hiçbir şey üretmeyen bir tur da siler, çünkü ikisi de o ID altında yeni bir konuşma başlatır.
+Bu gateway dışında başlamış bir konuşmanın kaydı yoktur; açtığınızda geçmişi boş görünür. Arayüz bunu söyler ve geçmişi getirmeyi önerir; bu `GET /v1/conversations/{id}/messages` çağrısıdır (aşağıya bakın). Bir oturumu silmek transcript'ini de siler; hiçbir şey üretmeyen bir tur da siler, çünkü ikisi de o ID altında yeni bir konuşma başlatır.
 
 ### Yapılandırma
 
@@ -547,6 +547,7 @@ make up      # imajı yeniden kurar ve container'ı yeniden başlatır
 | `POST /v1/conversations`         | İlk mesajla yeni bir konuşma oluşturur                  |
 | `PATCH /v1/conversations/{id}`   | Konuşmayı `{ "name": "..." }` ile yeniden adlandırır    |
 | `DELETE /v1/conversations/{id}`  | Konuşmayı kalıcı olarak siler                           |
+| `GET /v1/conversations/{id}/messages` | Upstream'de duran bir konuşmanın turlarını okur    |
 | `GET /v1/models`                 | Model listesi                                           |
 | `GET /v1/quota`                  | Son gözlenen M365 konuşma mesaj kotası                  |
 | `GET /v1/sessions`               | Oturum-sohbet eşlemelerini listeler                     |
@@ -562,6 +563,8 @@ make up      # imajı yeniden kurar ve container'ı yeniden başlatır
 `PUT /v1/sessions/{id}` gövdesinde `{"conversation_id": "..."}` alır ve oturumu var olan bir sohbete yöneltir. Sohbet yolu yalnızca oturumdan sohbete çözümleme yapar, bu yüzden bu olmadan M365 web veya mobil istemcisinde başlamış bir sohbet gateway üzerinden devam ettirilemez. Var olan bir oturumu yeniden bağlamak serbesttir.
 
 `GET /v1/sessions/{id}/messages` gateway'in o oturum için kaydettiklerini döndürür. `M365_ENABLE_WEB_UI` kapalıyken `404 transcripts_disabled` döner, başka bir yerde başlamış bir sohbet için boş liste döner.
+
+`GET /v1/conversations/{id}/messages` bu gateway'in hiç taşımadığı bir konuşmanın turlarını okur. Backend geçmişi conversation ID altında tutar ve onu döndüren bir action sunmaz; bu yüzden okuma, M365 web istemcisinin ürettiği konuşma sayfasından yapılır ve M365 web cookie'leri gerektirir. Bir sayfa indirmesine ve bu projenin kontrol etmediği bir serialization'ı gezmeye mal olur, bu yüzden hiçbir yer bunu kendiliğinden çağırmaz. `?session_id=...` eklerseniz sonuç o oturumun altına yazılır ve oturum konuşmaya bağlanır; arayüzün "geçmişi yükle" düğmesi bunu yapar. Parametre olmadan yanıt döner ve hiçbir şey yazılmaz. Okunabilir tur taşımayan bir sayfa boş konuşma yerine `502` döndürür, çünkü çağıran taraf boş konuşmayı başarısız okumadan ayırt edemez.
 
 ## Hata Yanıtları
 

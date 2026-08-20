@@ -511,7 +511,7 @@ Without cookies the first call fails, the sidebar falls back to the local mappin
 
 The backend tracks history by conversation ID and never replays it, so the gateway keeps its own record of the turns it carried, one file per session under `data/transcripts`. This is the only place message content reaches disk. Entries per session, bytes per message and files in the store are all bounded.
 
-A conversation started outside this gateway has no record, so its history is empty when you open it and the interface says so rather than inventing one. Deleting a session deletes its transcript, and so does a turn that produced nothing, since both start a new conversation under that id.
+A conversation started outside this gateway has no record, so its history is empty when you open it. The interface says so and offers to fetch it, which is `GET /v1/conversations/{id}/messages` (see below). Deleting a session deletes its transcript, and so does a turn that produced nothing, since both start a new conversation under that id.
 
 ### Configuration
 
@@ -547,6 +547,7 @@ make up      # rebuilds the image and restarts the container
 | `POST /v1/conversations`         | Create a conversation with an initial message          |
 | `PATCH /v1/conversations/{id}`   | Rename a conversation with `{ "name": "..." }`         |
 | `DELETE /v1/conversations/{id}`  | Permanently delete a conversation                      |
+| `GET /v1/conversations/{id}/messages` | Read the turns of a conversation held upstream    |
 | `GET /v1/models`                 | Model list                                             |
 | `GET /v1/quota`                  | Last observed M365 conversation message quota          |
 | `GET /v1/sessions`               | List the session to conversation mappings              |
@@ -562,6 +563,8 @@ make up      # rebuilds the image and restarts the container
 `PUT /v1/sessions/{id}` takes `{"conversation_id": "..."}` and points a session at a conversation that already exists. The chat path only ever resolves a session to a conversation, so without this a conversation started in the M365 web or mobile client could not be continued through the gateway. Rebinding an existing session is allowed.
 
 `GET /v1/sessions/{id}/messages` returns what the gateway recorded for that session. It answers `404 transcripts_disabled` when `M365_ENABLE_WEB_UI` is off, and an empty list for a conversation that was started elsewhere.
+
+`GET /v1/conversations/{id}/messages` reads the turns of a conversation this gateway never carried. The backend keeps history under the conversation ID and offers no action that returns it, so this recovers it from the conversation page the M365 web client renders, which needs M365 web cookies. It costs a page download and a walk of a serialization this project does not control, so nothing calls it automatically. Add `?session_id=...` to store the result under that session and bind the session to the conversation, which is what the interface does behind its "load history" button; without it the response is returned and nothing is written. A page that carries no readable turn answers `502` rather than an empty conversation, because a caller cannot tell an empty conversation from a failed read.
 
 ## Error Responses
 
