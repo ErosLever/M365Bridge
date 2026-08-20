@@ -94,6 +94,27 @@ export async function deleteSession(sessionId: string, localOnly: boolean): Prom
   if (!res.ok) throw await toError(res)
 }
 
+/**
+ * Reads the turns of a conversation this gateway never carried.
+ *
+ * The backend keeps history under the conversation id and never sends it back,
+ * so a conversation started in the M365 web or mobile client opens empty here.
+ * The gateway recovers it from the conversation page, which costs a download
+ * and a walk of a serialization nobody here controls. That is why it runs on
+ * request rather than on every open. Passing a session id also stores the
+ * result, so the next open is free.
+ */
+export async function importHistory(
+  conversationId: string,
+  sessionId: string,
+): Promise<StoredMessage[]> {
+  const body = await getJSON<{ messages?: StoredMessage[] }>(
+    `/v1/conversations/${encodeURIComponent(conversationId)}/messages` +
+      `?session_id=${encodeURIComponent(sessionId)}`,
+  )
+  return body.messages ?? []
+}
+
 export async function deleteConversation(conversationId: string): Promise<void> {
   const res = await fetch(`/v1/conversations/${encodeURIComponent(conversationId)}`, {
     method: 'DELETE',

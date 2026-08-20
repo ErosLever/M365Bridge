@@ -37,6 +37,11 @@ export function App() {
   const [transcriptsOff, setTranscriptsOff] = useState(false)
   const [notice, setNotice] = useState('')
   const [sending, setSending] = useState(false)
+  // Set when the open conversation exists upstream but has no transcript here.
+  // Reading it costs a page download and a walk of a serialization this project
+  // does not control, so it waits for the user to ask.
+  const [importable, setImportable] = useState<{ sessionId: string; conversationId: string } | null>(null)
+  const [importing, setImporting] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
 
@@ -156,6 +161,7 @@ export function App() {
   const openRow = useCallback(
     async (row: ConversationRow) => {
       setNotice('')
+      setImportable(null)
       let sessionId = row.sessionId
       if (!sessionId) {
         // The conversation exists upstream but nothing here points at it, so it
@@ -188,9 +194,10 @@ export function App() {
             createdAt: entry.created_at,
           })),
         )
-        if (stored.length === 0 && row.remoteOnly) {
+        if (stored.length === 0 && row.conversationId) {
+          setImportable({ sessionId, conversationId: row.conversationId })
           setNotice(
-            'Bu konuşma bu gateway dışında başlamış, geçmişi burada saklanmıyor. Buradan devam edebilirsin.',
+            'Bu konuşma bu gateway dışında başlamış. Buradan devam edebilirsin, ya da geçmişini M365 sayfasından yükleyebilirsin.',
           )
         }
       } catch (err) {
@@ -205,6 +212,31 @@ export function App() {
     [report],
   )
 
+  /** Pulls the history of the open conversation from M365 and stores it here. */
+  const importHistory = useCallback(async () => {
+    if (!importable || importing) return
+    setImporting(true)
+    setNotice('')
+    try {
+      const stored = await api.importHistory(importable.conversationId, importable.sessionId)
+      setMessages(
+        stored.map((entry) => ({
+          role: entry.role,
+          content: entry.content,
+          thinking: entry.thinking,
+          model: entry.model,
+          createdAt: entry.created_at,
+        })),
+      )
+      setImportable(null)
+      void refreshRows()
+    } catch (err) {
+      report(err)
+    } finally {
+      setImporting(false)
+    }
+  }, [importable, importing, refreshRows, report])
+
   const startNew = useCallback(() => {
     const sessionId = newSessionId()
     setRows((previous) => [
@@ -214,6 +246,7 @@ export function App() {
     setActiveId(sessionId)
     setMessages([])
     setNotice('')
+    setImportable(null)
   }, [])
 
   const removeRow = useCallback(
@@ -375,6 +408,9 @@ export function App() {
         notice={notice}
         transcriptsOff={transcriptsOff}
         title={activeRow?.title ?? ''}
+        canImportHistory={importable !== null}
+        importing={importing}
+        onImportHistory={importHistory}
         onModel={chooseModel}
         onSend={send}
         onStop={stop}

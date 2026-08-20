@@ -11,6 +11,9 @@ interface Props {
   notice: string
   transcriptsOff: boolean
   title: string
+  canImportHistory: boolean
+  importing: boolean
+  onImportHistory: () => void
   onModel: (model: string) => void
   onSend: (text: string) => void
   onStop: () => void
@@ -24,6 +27,9 @@ export function ChatPane({
   notice,
   transcriptsOff,
   title,
+  canImportHistory,
+  importing,
+  onImportHistory,
   onModel,
   onSend,
   onStop,
@@ -54,7 +60,16 @@ export function ChatPane({
           yeniden çizilemiyor.
         </p>
       )}
-      {notice && <p className="banner">{notice}</p>}
+      {notice && (
+        <p className="banner">
+          {notice}
+          {canImportHistory && (
+            <button className="banner-action" onClick={onImportHistory} disabled={importing}>
+              {importing ? 'Yükleniyor…' : 'Geçmişi yükle'}
+            </button>
+          )}
+        </p>
+      )}
 
       <div className="messages">
         {messages.length === 0 && !sending && (
