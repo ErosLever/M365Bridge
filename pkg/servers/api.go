@@ -1297,16 +1297,27 @@ func replaceRequestTools(body []byte, tools []toolcalling.ToolDef) string {
 	return string(updated)
 }
 
-func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, messages []payload.Message, cfg models.ModelConfig, convID string, tools []toolcalling.ToolDef, local map[string]bool) (toolLoopResult, error) {
+// runToolLoop drives the request-local built-in coding tool loop.
+//
+// It owns the session-to-conversation mapping for this path and writes it as
+// soon as the backend names a conversation, not on the way out. The loop has
+// eight exits, half of them errors, and a store placed on the way out would be
+// missed by whichever exit is added next; a turn that aborts mid-loop would
+// then orphan the conversation M365 had already created. The responders this
+// loop feeds therefore do not store the mapping again.
+func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, messages []payload.Message, cfg models.ModelConfig, sid, convID string, tools []toolcalling.ToolDef, local map[string]bool) (toolLoopResult, error) {
 	currentConvID := convID
 	seen := make(map[string]bool)
 	for iteration := 0; ; iteration++ {
 		text, thinking, backendCalls, finishReason, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, currentConvID, api.config.UserOID, api.config.TenantID, len(tools) > 0)
 		if err != nil {
-			return toolLoopResult{}, err
+			return toolLoopResult{conversationID: currentConvID}, err
 		}
 		if finalConvID != "" {
 			currentConvID = finalConvID
+			if sid != "" {
+				api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
+			}
 		}
 		if len(tools) == 0 {
 			_, finishReason = withoutBackendToolCalls(backendCalls, finishReason)
@@ -1340,7 +1351,7 @@ func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, me
 			return toolLoopResult{thinking: thinking, toolCalls: callerCalls, finishReason: "tool_calls", conversationID: currentConvID}, nil
 		}
 		if iteration >= api.config.CodeToolMaxIterations-1 {
-			return toolLoopResult{}, errors.New("coding tool iteration limit reached")
+			return toolLoopResult{conversationID: currentConvID}, errors.New("coding tool iteration limit reached")
 		}
 		var resultParts []string
 		for _, call := range localCalls {
@@ -1349,7 +1360,7 @@ func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, me
 			// order is repeating it, not asking something new.
 			key := toolcalling.CallSignature(call.Name, string(call.Arguments))
 			if seen[key] {
-				return toolLoopResult{}, fmt.Errorf("duplicate coding tool call %q", call.Name)
+				return toolLoopResult{conversationID: currentConvID}, fmt.Errorf("duplicate coding tool call %q", call.Name)
 			}
 			seen[key] = true
 			var arguments map[string]any
@@ -1358,7 +1369,7 @@ func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, me
 			}
 			encoded, err := codingtools.MarshalResult(api.codeTools.Execute(r.Context(), call.Name, arguments))
 			if err != nil {
-				return toolLoopResult{}, fmt.Errorf("serialize coding tool result: %w", err)
+				return toolLoopResult{conversationID: currentConvID}, fmt.Errorf("serialize coding tool result: %w", err)
 			}
 			resultParts = append(resultParts, toolcalling.FormatSimulatedToolResult(call.ID, call.Name, string(encoded)))
 		}
@@ -1366,7 +1377,7 @@ func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, me
 		request := map[string]any{"model": cfg.OpenAIID, "messages": messages, "tools": tools, "stream": false}
 		requestJSON, err := json.Marshal(request)
 		if err != nil {
-			return toolLoopResult{}, fmt.Errorf("serialize coding tool continuation: %w", err)
+			return toolLoopResult{conversationID: currentConvID}, fmt.Errorf("serialize coding tool continuation: %w", err)
 		}
 		if provider == toolLoopAnthropic {
 			// The synthetic messages of the built-in loop carry no client tool
@@ -1558,7 +1569,7 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	api.recordUserTurn(sid, req.Messages)
 
 	if len(localTools) > 0 {
-		result, err := api.runToolLoop(r, toolLoopOpenAI, req.Messages, cfg, convID, req.Tools, localTools)
+		result, err := api.runToolLoop(r, toolLoopOpenAI, req.Messages, cfg, sid, convID, req.Tools, localTools)
 		if err != nil {
 			api.sendUpstreamError(w, "chat", err)
 			return
@@ -1806,7 +1817,7 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 	hasTools := len(toolcalling.RouteableTools(req.Tools)) > 0
 
 	if len(localTools) > 0 {
-		result, err := api.runToolLoop(r, toolLoopAnthropic, chatMessages, cfg, convID, req.Tools, localTools)
+		result, err := api.runToolLoop(r, toolLoopAnthropic, chatMessages, cfg, sid, convID, req.Tools, localTools)
 		if err != nil {
 			api.sendUpstreamError(w, "chat", err)
 			return
@@ -2312,9 +2323,6 @@ func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoop
 			result.text, result.finishReason = truncated, "length"
 		}
 	}
-	if sid != "" && result.conversationID != "" {
-		api.ctxCache.Set(sessionKeyPrefix+sid, result.conversationID)
-	}
 	api.recordAssistantTurn(sid, cfg.OpenAIID, result.text, result.thinking)
 	usage := openAIUsage(messages, tools, toolChoice, result.text, result.thinking)
 	if stream {
@@ -2811,9 +2819,6 @@ func (api *APIServer) respondBufferedAnthropic(w http.ResponseWriter, result too
 			input = map[string]any{}
 		}
 		content = append(content, map[string]any{"type": "tool_use", "id": call.ID, "name": call.Function.Name, "input": input})
-	}
-	if sid != "" && result.conversationID != "" {
-		api.ctxCache.Set(sessionKeyPrefix+sid, result.conversationID)
 	}
 	usage := anthropicUsage(messages, tools, toolChoice, result.text, result.thinking)
 	response := map[string]any{"id": fmt.Sprintf("msg_%s", uuid.New().String()), "type": "message", "role": "assistant", "content": content, "model": model, "stop_reason": stopReason, "stop_sequence": nil, "usage": usage}
@@ -5138,7 +5143,7 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 	api.uploadImagesAndAnnotate(&messages, convID)
 
 	if len(localTools) > 0 {
-		result, err := api.runToolLoop(r, toolLoopOpenAI, messages, cfg, convID, req.Tools, localTools)
+		result, err := api.runToolLoop(r, toolLoopOpenAI, messages, cfg, sid, convID, req.Tools, localTools)
 		if err != nil {
 			api.sendUpstreamError(w, "response", err)
 			return
@@ -5537,9 +5542,6 @@ func (api *APIServer) respondBufferedResponses(w http.ResponseWriter, result too
 		if truncated, ok := truncateToTokens(result.text, maxTokens); ok {
 			result.text, result.finishReason = truncated, "length"
 		}
-	}
-	if sid != "" && result.conversationID != "" {
-		api.ctxCache.Set(sessionKeyPrefix+sid, result.conversationID)
 	}
 	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
 	response := buildResponsesObject(responseID, cfg.OpenAIID, result.text, result.thinking, result.toolCalls, toolTypes, result.finishReason, countPromptTokens(messages, tools, toolChoice), countTokens(result.text)+outputProtocolTokens, countTokens(result.thinking))
