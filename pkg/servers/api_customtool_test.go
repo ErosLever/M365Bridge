@@ -201,3 +201,18 @@ func TestFunctionCallProgressWithoutTheRequiredFieldsIsDropped(t *testing.T) {
 		t.Fatalf("messages = %#v, want both incomplete items dropped", messages)
 	}
 }
+
+// A client that declares one name twice, freeform and as a function, must get
+// the freeform shape; a grammar body emitted as function_call arguments is not
+// the JSON a client parses there.
+func TestDuplicateToolNamePrefersTheCustomDeclaration(t *testing.T) {
+	custom := toolcalling.ToolDef{Type: "custom", Name: "apply_patch"}
+	function := toolcalling.ToolDef{Type: "function", Name: "apply_patch"}
+
+	if got := responsesToolTypes([]toolcalling.ToolDef{custom, function})["apply_patch"]; got != "custom" {
+		t.Errorf("custom declared first lost to %q", got)
+	}
+	if got := responsesToolTypes([]toolcalling.ToolDef{function, custom})["apply_patch"]; got != "custom" {
+		t.Errorf("custom declared second lost to %q", got)
+	}
+}
