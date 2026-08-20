@@ -220,9 +220,23 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	for _, block := range blocks {
 		blockType, _ := block["type"].(string)
 		switch blockType {
-		case "text":
+		case "text", "input_text", "output_text":
+			// The Responses API names the same block input_text on the way in
+			// and output_text on the way back.
 			if txt, ok := block["text"].(string); ok {
 				m.Content += txt
+			}
+		case "input_image":
+			// Responses format: {"type":"input_image","image_url":"data:image/png;base64,..."}
+			// The url is a bare string here, not the object Chat Completions
+			// wraps it in. A file_id reference is not supported, because this
+			// gateway serves no Files API to resolve it against.
+			if url, ok := block["image_url"].(string); ok {
+				if img := parseDataURL(url); img != nil {
+					m.Images = append(m.Images, *img)
+				} else if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
+					m.Images = append(m.Images, ImageData{RemoteURL: url})
+				}
 			}
 		case "image_url":
 			// OpenAI format: {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}

@@ -4190,7 +4190,16 @@ func responsesToolTypes(tools []toolcalling.ToolDef) map[string]string {
 		if toolType == "" {
 			toolType = "function"
 		}
-		types[responsesToolKey(tool.Namespace, name)] = toolType
+		key := responsesToolKey(tool.Namespace, name)
+		// A client may declare one name twice, once freeform and once as a
+		// function, so a model that cannot follow a grammar still has a call
+		// shape. The custom declaration wins, because a freeform body emitted
+		// as function_call arguments is not the JSON a client parses there,
+		// while JSON carried as a custom tool's input still arrives intact.
+		if types[key] == "custom" {
+			continue
+		}
+		types[key] = toolType
 	}
 	return types
 }
@@ -5414,11 +5423,7 @@ func responsesInputToMessages(input any) []payload.Message {
 			role = "user"
 		}
 
-		content := responsesExtractContent(m["content"])
-		messages = append(messages, payload.Message{
-			Role:    role,
-			Content: content,
-		})
+		messages = append(messages, responsesContentMessage(role, m["content"]))
 	}
 
 	if len(messages) == 0 {
@@ -5429,6 +5434,25 @@ func responsesInputToMessages(input any) []payload.Message {
 
 // responsesExtractContent extracts text from a content field that may be a
 // string or an array of content parts (input_text, output_text, text types).
+// responsesContentMessage converts one Responses message item into a payload
+// message.
+//
+// It routes the content blocks through payload.Message so an image block
+// survives the conversion. responsesExtractContent returns text alone, so a
+// message built from it dropped every image the caller sent, and the upload
+// step further down the Responses path had nothing left to upload.
+func responsesContentMessage(role string, content any) payload.Message {
+	encoded, err := json.Marshal(map[string]any{"role": role, "content": content})
+	if err == nil {
+		var message payload.Message
+		if err := json.Unmarshal(encoded, &message); err == nil {
+			return message
+		}
+	}
+	// A block shape payload.Message rejects still contributes its text.
+	return payload.Message{Role: role, Content: responsesExtractContent(content)}
+}
+
 func responsesExtractContent(content any) string {
 	if content == nil {
 		return ""
