@@ -355,6 +355,7 @@ func TestBuildResponsesObjectPlacesCommentaryBeforeToolCall(t *testing.T) {
 		"",
 		[]client.ToolCall{call},
 		map[string]string{"read_nonce": "function"},
+		false,
 		"tool_calls",
 		1,
 		1,

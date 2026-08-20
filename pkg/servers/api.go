@@ -5208,6 +5208,10 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 	// Upload any images found in multimodal content
 	api.uploadImagesAndAnnotate(&messages, convID)
 
+	// Read once here rather than at each phase decision; the answer depends on
+	// the request alone and does not change while the response is produced.
+	goalOpen := responsesGoalContinuationOpen(req.Input)
+
 	if len(localTools) > 0 {
 		result, err := api.runToolLoop(r, toolLoopOpenAI, messages, cfg, sid, convID, req.Tools, localTools)
 		if err != nil {
@@ -5223,6 +5227,7 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 			req.MaxOutputTokens,
 			req.Stream,
 			responsesToolTypes(toolPolicy.tools),
+			goalOpen,
 			toolPolicy.tools,
 			toolPolicy.promptChoice,
 		)
@@ -5238,6 +5243,7 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 			convID,
 			req.MaxOutputTokens,
 			toolPolicy,
+			goalOpen,
 		)
 	} else {
 		api.nonStreamResponses(
@@ -5249,6 +5255,7 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 			convID,
 			req.MaxOutputTokens,
 			toolPolicy,
+			goalOpen,
 		)
 	}
 }
@@ -5434,6 +5441,108 @@ func responsesInputToMessages(input any) []payload.Message {
 
 // responsesExtractContent extracts text from a content field that may be a
 // string or an array of content parts (input_text, output_text, text types).
+// goalContextMarker opens the block Codex puts in a user item while it is
+// working towards a goal it set itself.
+const goalContextMarker = `<codex_internal_context source="goal">`
+
+// updateGoalToolName is the tool Codex calls to report on that goal. Its output
+// carries the status that closes the goal.
+const updateGoalToolName = "update_goal"
+
+// responsesGoalContinuationOpen reports whether the request is a turn inside an
+// unfinished Codex goal.
+//
+// Codex marks such a turn in its last user item and reports progress by calling
+// update_goal. The goal is closed once one of those calls returns a status of
+// complete or blocked; until then the client expects the turn to continue, so
+// the assistant message is commentary rather than a final answer.
+//
+// Both markers are Codex internals rather than part of the Responses API, and
+// this behaviour has not been measured against a Codex session here. A request
+// that carries neither is unaffected.
+func responsesGoalContinuationOpen(input any) bool {
+	items, ok := input.([]any)
+	if !ok {
+		return false
+	}
+
+	// Only the latest user item counts. A later user item without the marker
+	// is a new request, and its turn is not part of the earlier goal.
+	goalItem := -1
+	for index, item := range items {
+		record, ok := item.(map[string]any)
+		if !ok || record["role"] != "user" {
+			continue
+		}
+		if strings.Contains(responsesExtractContent(record["content"]), goalContextMarker) {
+			goalItem = index
+		} else {
+			goalItem = -1
+		}
+	}
+	if goalItem < 0 {
+		return false
+	}
+
+	rest := items[goalItem+1:]
+	updateGoalCalls := map[string]bool{}
+	for _, item := range rest {
+		record, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch itemType, _ := record["type"].(string); itemType {
+		case "function_call", "custom_tool_call":
+		default:
+			continue
+		}
+		name, _ := record["name"].(string)
+		callID, _ := record["call_id"].(string)
+		if name == updateGoalToolName && callID != "" {
+			updateGoalCalls[callID] = true
+		}
+	}
+
+	for _, item := range rest {
+		record, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch itemType, _ := record["type"].(string); itemType {
+		case "function_call_output", "custom_tool_call_output":
+		default:
+			continue
+		}
+		callID, _ := record["call_id"].(string)
+		if !updateGoalCalls[callID] {
+			continue
+		}
+		output, _ := record["output"].(string)
+		var report struct {
+			Goal struct {
+				Status string `json:"status"`
+			} `json:"goal"`
+		}
+		if json.Unmarshal([]byte(output), &report) != nil {
+			continue
+		}
+		if report.Goal.Status == "complete" || report.Goal.Status == "blocked" {
+			return false
+		}
+	}
+	return true
+}
+
+// responsesMessagePhase names the phase of an assistant message item. A turn
+// that ends in a tool call is commentary, and so is a turn inside a goal the
+// client has not closed.
+func responsesMessagePhase(goalOpen bool, toolCalls []client.ToolCall) string {
+	if len(toolCalls) > 0 || goalOpen {
+		return "commentary"
+	}
+	return "final_answer"
+}
+
 // responsesContentMessage converts one Responses message item into a payload
 // message.
 //
@@ -5503,7 +5612,7 @@ func responsesInputIsEmpty(messages []payload.Message) bool {
 // session state.
 func (api *APIServer) respondResponsesProbe(w http.ResponseWriter, model string, stream bool) {
 	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
-	response := buildResponsesObject(responseID, model, "", "", nil, nil, "stop", 0, 0, 0)
+	response := buildResponsesObject(responseID, model, "", "", nil, nil, false, "stop", 0, 0, 0)
 
 	if !stream {
 		w.Header().Set("Content-Type", "application/json")
@@ -5539,7 +5648,7 @@ func (api *APIServer) respondResponsesProbe(w http.ResponseWriter, model string,
 }
 
 // buildResponsesObject constructs the non-streaming Responses API response object.
-func buildResponsesObject(responseID, model, text, thinking string, toolCalls []client.ToolCall, toolTypes map[string]string, finishReason string, promptTok, completionTok, reasoningTok int) map[string]any {
+func buildResponsesObject(responseID, model, text, thinking string, toolCalls []client.ToolCall, toolTypes map[string]string, goalOpen bool, finishReason string, promptTok, completionTok, reasoningTok int) map[string]any {
 	status := "completed"
 	if finishReason == "length" {
 		status = "incomplete"
@@ -5568,10 +5677,7 @@ func buildResponsesObject(responseID, model, text, thinking string, toolCalls []
 	// Add message item with output_text (only if there is text content)
 	if text != "" || len(toolCalls) == 0 {
 		msgID := fmt.Sprintf("msg_%s", responseID)
-		phase := "final_answer"
-		if len(toolCalls) > 0 {
-			phase = "commentary"
-		}
+		phase := responsesMessagePhase(goalOpen, toolCalls)
 		output = append(output, map[string]any{
 			"id":     msgID,
 			"type":   "message",
@@ -5618,14 +5724,14 @@ func buildResponsesObject(responseID, model, text, thinking string, toolCalls []
 	return resp
 }
 
-func (api *APIServer) respondBufferedResponses(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, cfg models.ModelConfig, sid string, maxTokens int, stream bool, toolTypes map[string]string, tools []toolcalling.ToolDef, toolChoice string) {
+func (api *APIServer) respondBufferedResponses(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, cfg models.ModelConfig, sid string, maxTokens int, stream bool, toolTypes map[string]string, goalOpen bool, tools []toolcalling.ToolDef, toolChoice string) {
 	if maxTokens > 0 {
 		if truncated, ok := truncateToTokens(result.text, maxTokens); ok {
 			result.text, result.finishReason = truncated, "length"
 		}
 	}
 	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
-	response := buildResponsesObject(responseID, cfg.OpenAIID, result.text, result.thinking, result.toolCalls, toolTypes, result.finishReason, countPromptTokens(messages, tools, toolChoice), countTokens(result.text)+outputProtocolTokens, countTokens(result.thinking))
+	response := buildResponsesObject(responseID, cfg.OpenAIID, result.text, result.thinking, result.toolCalls, toolTypes, goalOpen, result.finishReason, countPromptTokens(messages, tools, toolChoice), countTokens(result.text)+outputProtocolTokens, countTokens(result.thinking))
 	if !stream {
 		api.sendJSON(w, http.StatusOK, response)
 		return
@@ -5720,6 +5826,7 @@ func (api *APIServer) nonStreamResponses(
 	sid, convID string,
 	maxTokens int,
 	toolPolicy responsesToolPolicy,
+	goalOpen bool,
 ) {
 	result, err := api.responsesConversation(
 		ctx,
@@ -5873,7 +5980,7 @@ func (api *APIServer) nonStreamResponses(
 	reasoningTok := countTokens(thinking)
 
 	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
-	response := buildResponsesObject(responseID, cfg.OpenAIID, respText, thinking, toolCalls, responsesToolTypes(toolPolicy.tools), finishReason, promptTok, completionTok, reasoningTok)
+	response := buildResponsesObject(responseID, cfg.OpenAIID, respText, thinking, toolCalls, responsesToolTypes(toolPolicy.tools), goalOpen, finishReason, promptTok, completionTok, reasoningTok)
 
 	api.sendJSON(w, http.StatusOK, response)
 
@@ -5896,6 +6003,7 @@ func (api *APIServer) streamResponses(
 	sid, convID string,
 	maxTokens int,
 	toolPolicy responsesToolPolicy,
+	goalOpen bool,
 ) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -6141,11 +6249,13 @@ func (api *APIServer) streamResponses(
 					sendEvent("response.output_item.added", map[string]any{
 						"output_index": outputIdx,
 						"item": map[string]any{
-							"id":      msgID,
-							"type":    "message",
-							"status":  "in_progress",
-							"role":    "assistant",
-							"phase":   "final_answer",
+							"id":     msgID,
+							"type":   "message",
+							"status": "in_progress",
+							"role":   "assistant",
+							// No tool call is known yet; the terminal item below names
+							// the phase again once the turn is parsed.
+							"phase":   responsesMessagePhase(goalOpen, nil),
 							"content": []any{},
 						},
 					})
@@ -6372,10 +6482,7 @@ func (api *APIServer) streamResponses(
 		}
 
 		if messageItemEmitted {
-			phase := "final_answer"
-			if len(toolCalls) > 0 {
-				phase = "commentary"
-			}
+			phase := responsesMessagePhase(goalOpen, toolCalls)
 			sendEvent("response.output_text.done", map[string]any{
 				"item_id":       msgID,
 				"output_index":  messageOutputIndex,
@@ -6418,10 +6525,7 @@ func (api *APIServer) streamResponses(
 					finishReason = "length"
 				}
 			}
-			phase := "final_answer"
-			if len(toolCalls) > 0 {
-				phase = "commentary"
-			}
+			phase := responsesMessagePhase(goalOpen, toolCalls)
 
 			sendEvent("response.output_item.added", map[string]any{
 				"output_index": outputIdx,
@@ -6539,7 +6643,7 @@ func (api *APIServer) streamResponses(
 					"type":   "message",
 					"status": "completed",
 					"role":   "assistant",
-					"phase":  "final_answer",
+					"phase":  responsesMessagePhase(goalOpen, toolCalls),
 					"content": []map[string]any{
 						{
 							"type":        "output_text",
@@ -6563,7 +6667,7 @@ func (api *APIServer) streamResponses(
 	reasoningText := thinkingText.String()
 	reasoningTok := countTokens(reasoningText)
 
-	finalResponse := buildResponsesObject(responseID, openaiModel, fullText, reasoningText, toolCalls, responsesToolTypes(toolPolicy.tools), finishReason, promptTok, completionTok, reasoningTok)
+	finalResponse := buildResponsesObject(responseID, openaiModel, fullText, reasoningText, toolCalls, responsesToolTypes(toolPolicy.tools), goalOpen, finishReason, promptTok, completionTok, reasoningTok)
 	finalResponse["status"] = status
 
 	sendEvent("response.completed", map[string]any{
