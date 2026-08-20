@@ -142,8 +142,8 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) (returnErr erro
 	temporaryPath := temporary.Name()
 	defer func() {
 		if returnErr != nil {
-			temporary.Close()
-			os.Remove(temporaryPath)
+			_ = temporary.Close()
+			_ = os.Remove(temporaryPath)
 		}
 	}()
 
@@ -315,7 +315,7 @@ func (tm *TokenManager) reauthWithSSO() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: authorize request failed: %v", ErrRefreshFailed, err)
 	}
-	defer authResp.Body.Close()
+	defer func() { _ = authResp.Body.Close() }()
 
 	// Follow redirects manually until we get the auth code or reach redirect_uri
 	currentResp := authResp
@@ -374,12 +374,12 @@ func (tm *TokenManager) reauthWithSSO() (string, error) {
 		redirectReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 		redirectReq.Header.Set("Cookie", cookieHeader)
 
-		currentResp.Body.Close()
+		_ = currentResp.Body.Close()
 		currentResp, err = client.Do(redirectReq)
 		if err != nil {
 			return "", fmt.Errorf("%w: redirect request failed: %v", ErrRefreshFailed, err)
 		}
-		defer currentResp.Body.Close()
+		defer func() { _ = currentResp.Body.Close() }()
 	}
 }
 
@@ -481,7 +481,7 @@ func (tm *TokenManager) exchangeAuthCode(authCode, verifier string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("%w: token exchange failed: %v", ErrRefreshFailed, err)
 	}
-	defer tokenResp.Body.Close()
+	defer func() { _ = tokenResp.Body.Close() }()
 
 	body, err := io.ReadAll(tokenResp.Body)
 	if err != nil {
@@ -734,7 +734,7 @@ func (tm *TokenManager) requestDesignerToken(refreshToken string) (string, int, 
 	if err != nil {
 		return "", 0, fmt.Errorf("designer broker token request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -832,7 +832,7 @@ func (tm *TokenManager) acquireBrokerRefreshTokenViaSSO() (string, error) {
 	if err != nil && !strings.Contains(err.Error(), "ErrUseLastResponse") {
 		return "", fmt.Errorf("broker authorize request failed: %w", err)
 	}
-	defer currentResp.Body.Close()
+	defer func() { _ = currentResp.Body.Close() }()
 
 	// Follow redirects manually until we get the auth code or reach brk_redirect_uri.
 	// Microsoft AAD may return intermediate redirects (e.g. /jsdisabled, /kmsi)
@@ -891,12 +891,12 @@ func (tm *TokenManager) acquireBrokerRefreshTokenViaSSO() (string, error) {
 		redirectReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 		redirectReq.Header.Set("Cookie", cookieHeader)
 
-		currentResp.Body.Close()
+		_ = currentResp.Body.Close()
 		currentResp, err = httpClient.Do(redirectReq)
 		if err != nil && !strings.Contains(err.Error(), "ErrUseLastResponse") {
 			return "", fmt.Errorf("broker redirect request failed (hop %d): %w", i, err)
 		}
-		defer currentResp.Body.Close()
+		defer func() { _ = currentResp.Body.Close() }()
 	}
 
 	return "", fmt.Errorf("broker authorize: max redirects (%d) reached without obtaining auth code", maxRedirects)
@@ -938,7 +938,7 @@ func (tm *TokenManager) exchangeBrokerAuthCode(authCode, verifier string) (strin
 	if err != nil {
 		return "", fmt.Errorf("broker code exchange failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

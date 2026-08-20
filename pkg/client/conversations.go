@@ -127,7 +127,7 @@ func (c *ConversationClient) request(ctx context.Context, payload any, destinati
 	if err != nil {
 		return fmt.Errorf("M365 conversation request failed: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, conversationResponseMax+1))
 	if err != nil {

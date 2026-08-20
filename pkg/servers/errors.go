@@ -104,16 +104,16 @@ func classifyUpstreamError(err error) (int, string) {
 	}
 
 	if status, ok := client.UpstreamStatus(err); ok {
-		switch {
-		case status == http.StatusUnauthorized:
+		switch status {
+		case http.StatusUnauthorized:
 			return http.StatusUnauthorized, upstreamAuthFailedCode
-		case status == http.StatusForbidden:
+		case http.StatusForbidden:
 			return http.StatusForbidden, upstreamForbiddenCode
-		case status == http.StatusPaymentRequired, status == http.StatusTooManyRequests:
+		case http.StatusPaymentRequired, http.StatusTooManyRequests:
 			return http.StatusTooManyRequests, upstreamRateLimitCode
-		case status == http.StatusServiceUnavailable:
+		case http.StatusServiceUnavailable:
 			return http.StatusServiceUnavailable, upstreamUnavailableCode
-		case status == http.StatusGatewayTimeout, status == http.StatusRequestTimeout:
+		case http.StatusGatewayTimeout, http.StatusRequestTimeout:
 			return http.StatusGatewayTimeout, upstreamTimeoutCode
 		default:
 			// A dial that never reached a response reports status zero. The

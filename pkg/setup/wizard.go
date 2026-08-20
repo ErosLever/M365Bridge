@@ -321,8 +321,8 @@ func verifyToken(tenant, oid, refreshToken string) error {
 	fmt.Println("  Refresh token encrypted and saved")
 
 	// Set environment variables for verification
-	os.Setenv("M365_TENANT_ID", tenant)
-	os.Setenv("M365_USER_OID", oid)
+	_ = os.Setenv("M365_TENANT_ID", tenant)
+	_ = os.Setenv("M365_USER_OID", oid)
 
 	// Create token manager and verify
 	tokenManager := auth.NewTokenManager(tenant, models.DefaultClientID, models.DefaultScope, defaultRefreshTokenFile, defaultCacheFile)

@@ -277,7 +277,7 @@ func (m *Manager) readFile(a map[string]any) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, m.config.MaxReadBytes+1))
 	if err != nil {
 		return "", false, err
@@ -370,7 +370,7 @@ func (m *Manager) readWalkedFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	info, err := file.Stat()
 	if err != nil {

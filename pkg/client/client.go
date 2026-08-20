@@ -133,11 +133,11 @@ func (c *M365Client) UploadFile(base64Data, mediaType, fileName, conversationID,
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	writer.WriteField("scenario", "UploadImage")
-	writer.WriteField("conversationId", conversationID)
-	writer.WriteField("FileBase64", dataURL)
-	writer.WriteField("optionsSets", "gptvnorm2048")
-	writer.Close()
+	_ = writer.WriteField("scenario", "UploadImage")
+	_ = writer.WriteField("conversationId", conversationID)
+	_ = writer.WriteField("FileBase64", dataURL)
+	_ = writer.WriteField("optionsSets", "gptvnorm2048")
+	_ = writer.Close()
 
 	req, err := http.NewRequest("POST", "https://substrate.office.com/m365Copilot/UploadFile", &body)
 	if err != nil {
@@ -158,7 +158,7 @@ func (c *M365Client) UploadFile(base64Data, mediaType, fileName, conversationID,
 		logging.Errorf("UploadFile: request failed: %v", err)
 		return nil, fmt.Errorf("upload request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -225,26 +225,26 @@ func (c *M365Client) dialConnection(conversationID, userOID, tenantID string) (*
 		status := 0
 		if dialResp != nil {
 			status = dialResp.StatusCode
-			dialResp.Body.Close()
+			_ = dialResp.Body.Close()
 		}
 		logging.Errorf("dialConnection: WebSocket dial failed: status=%d err=%v", status, err)
 		return nil, "", "", &UpstreamError{Op: "dial", Status: status, Err: err}
 	}
 
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(handshakeMessage)); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		logging.Errorf("dialConnection: handshake write failed: %v", err)
 		return nil, "", "", fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
 	}
 
-	conn.SetReadDeadline(time.Now().Add(c.handshakeTimeout))
+	_ = conn.SetReadDeadline(time.Now().Add(c.handshakeTimeout))
 	_, _, err = conn.ReadMessage()
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		logging.Errorf("dialConnection: handshake read failed: %v", err)
 		return nil, "", "", fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
 	}
-	conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
 
 	logging.Debug("dialConnection: WebSocket connected and handshake OK")
 	return conn, hexSID, uuidSID, nil
@@ -258,7 +258,7 @@ func (c *M365Client) Chat(text, tone, gptOverride, conversationID, userOID, tena
 	if err != nil {
 		return "", err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	payloadStr, err := payload.BuildPayload(hexSID, uuidSID, text, tone, gptOverride, false, hasTools, c.webSearchEnabled, nil)
 	if err != nil {
@@ -506,13 +506,13 @@ func (c *M365Client) ChatConversationStreamGenContext(
 			}
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		contextWatchDone := make(chan struct{})
 		defer close(contextWatchDone)
 		go func() {
 			select {
 			case <-ctx.Done():
-				conn.Close()
+				_ = conn.Close()
 			case <-contextWatchDone:
 			}
 		}()
@@ -556,7 +556,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 		var throttling *ThrottlingInfo
 
 		for {
-			conn.SetReadDeadline(time.Now().Add(c.recvFinalTimeout))
+			_ = conn.SetReadDeadline(time.Now().Add(c.recvFinalTimeout))
 			msgType, message, err := conn.ReadMessage()
 			if err != nil {
 				if ctx.Err() != nil {
@@ -571,7 +571,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 				}
 				return
 			}
-			conn.SetReadDeadline(time.Time{})
+			_ = conn.SetReadDeadline(time.Time{})
 
 			if msgType != websocket.TextMessage {
 				continue
@@ -779,13 +779,13 @@ func (c *M365Client) sendRecv(conn *websocket.Conn, payload string) (string, err
 	fullText := ""
 
 	for {
-		conn.SetReadDeadline(time.Now().Add(c.recvTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(c.recvTimeout))
 		msgType, message, err := conn.ReadMessage()
 		if err != nil {
 			logging.Errorf("sendRecv: read error: %v", err)
 			return "", err
 		}
-		conn.SetReadDeadline(time.Time{})
+		_ = conn.SetReadDeadline(time.Time{})
 
 		if msgType != websocket.TextMessage {
 			continue

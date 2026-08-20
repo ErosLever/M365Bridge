@@ -145,7 +145,7 @@ func (tm *TokenManager) refreshLocked() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrRefreshFailed, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -240,7 +240,7 @@ func (tm *TokenManager) GetTokenForScopeAndClient(scope, clientID string) (strin
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrRefreshFailed, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

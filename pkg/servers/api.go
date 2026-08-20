@@ -79,7 +79,9 @@ type ContextCache struct {
 
 // NewContextCache creates a new context cache instance.
 func NewContextCache(cacheDir string) *ContextCache {
-	os.MkdirAll(cacheDir, 0700)
+	if err := os.MkdirAll(cacheDir, 0700); err != nil {
+		logging.Errorf("context cache: cannot create %s: %v", cacheDir, err)
+	}
 	return &ContextCache{
 		cacheDir:   cacheDir,
 		mem:        make(map[string]string),
@@ -502,7 +504,7 @@ func (api *APIServer) Stop() error {
 // handleHealth handles health check requests.
 func (api *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	_, _ = w.Write([]byte("OK"))
 }
 
 // handleV1Health answers the OpenAI-style health probe. It reports reachability
@@ -519,7 +521,7 @@ func (api *APIServer) handleV1Health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // handleModels handles model list requests.
@@ -1464,7 +1466,7 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request body: %v", err))
 		return
 	}
-	r.Body.Close()
+	_ = r.Body.Close()
 
 	var req struct {
 		Model          string                `json:"model"`
@@ -1584,7 +1586,7 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request body: %v", err))
 		return
 	}
-	r.Body.Close()
+	_ = r.Body.Close()
 
 	var req struct {
 		Model         string                `json:"model"`
@@ -1723,7 +1725,7 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request body: %v", err))
 		return
 	}
-	r.Body.Close()
+	_ = r.Body.Close()
 
 	var req struct {
 		Model       string                `json:"model"`
@@ -1933,7 +1935,7 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 	// Send ping event (Anthropic streaming starts with ping)
 	pingData := map[string]any{"type": "ping"}
 	pingJSON, _ := json.Marshal(pingData)
-	fmt.Fprintf(w, "event: ping\ndata: %s\n\n", pingJSON)
+	_, _ = fmt.Fprintf(w, "event: ping\ndata: %s\n\n", pingJSON)
 	flusher.Flush()
 
 	ch := api.m365Client.ChatConversationStreamGenContext(ctx, messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, false)
@@ -1960,7 +1962,7 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 				"error": map[string]any{"type": code, "message": message},
 			}
 			errJSON, _ := json.Marshal(errData)
-			fmt.Fprintf(w, "event: error\ndata: %s\n\n", errJSON)
+			_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", errJSON)
 			flusher.Flush()
 			return
 		}
@@ -1997,7 +1999,7 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 			"log_id":      logID,
 		}
 		compJSON, _ := json.Marshal(compData)
-		fmt.Fprintf(w, "event: completion\ndata: %s\n\n", compJSON)
+		_, _ = fmt.Fprintf(w, "event: completion\ndata: %s\n\n", compJSON)
 		flusher.Flush()
 	}
 	_ = finalToolCalls
@@ -2029,7 +2031,7 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 		"usage": anthropicUsage(messages, nil, "", fullText, thinkingText.String()),
 	}
 	finalJSON, _ := json.Marshal(finalData)
-	fmt.Fprintf(w, "event: completion\ndata: %s\n\n", finalJSON)
+	_, _ = fmt.Fprintf(w, "event: completion\ndata: %s\n\n", finalJSON)
 	flusher.Flush()
 
 	// Cache conversation ID for session continuity
@@ -2672,7 +2674,6 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 			blockIndex++
 			thinkingBlockOpen = false
 		}
-		thinkingClosed = true
 	}
 
 	// If tool calling buffered text, send it now as a text block
@@ -2928,8 +2929,10 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 	if len(toolCalls) > 0 {
 		for _, tc := range toolCalls {
 			var input any
-			json.Unmarshal([]byte(tc.Function.Arguments), &input)
-			if input == nil {
+			// Arguments that do not parse become an empty object rather than a
+			// missing field, because a tool_use block without input is not a
+			// shape the Anthropic clients accept.
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil || input == nil {
 				input = map[string]any{}
 			}
 			content = append(content, map[string]any{
@@ -3023,8 +3026,8 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 				},
 			}
 			jsonData, _ := json.Marshal(errChunk)
-			fmt.Fprintf(w, "data: %s\n\n", jsonData)
-			fmt.Fprintf(w, "data: [DONE]\n\n")
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
+			_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
 			return
 		}
@@ -3069,7 +3072,7 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 			}
 
 			jsonData, _ := json.Marshal(chunkData)
-			fmt.Fprintf(w, "data: %s\n\n", jsonData)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
 			flusher.Flush()
 		}
 	}
@@ -3118,7 +3121,7 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 			},
 		}
 		jsonData, _ := json.Marshal(chunkData)
-		fmt.Fprintf(w, "data: %s\n\n", jsonData)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
 		flusher.Flush()
 	}
 
@@ -3159,8 +3162,8 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 		}
 	}
 	jsonData, _ := json.Marshal(doneChunk)
-	fmt.Fprintf(w, "data: %s\n\n", jsonData)
-	fmt.Fprintf(w, "data: [DONE]\n\n")
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
+	_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
 
 	// Cache conversation ID for session continuity
@@ -3287,7 +3290,7 @@ func (api *APIServer) sendJSON(w http.ResponseWriter, statusCode int, data any) 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(statusCode)
 
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // sendError sends an error response.
@@ -3326,7 +3329,7 @@ func (api *APIServer) sendSSEChunk(w http.ResponseWriter, chunkID, model string,
 	}
 
 	jsonData, _ := json.Marshal(chunk)
-	fmt.Fprintf(w, "data: %s\n\n", jsonData)
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
 }
 
 // sendSSEDone sends the final SSE chunk.
@@ -3353,8 +3356,8 @@ func (api *APIServer) sendSSEDone(w http.ResponseWriter, chunkID, model, finishR
 	}
 
 	jsonData, _ := json.Marshal(chunk)
-	fmt.Fprintf(w, "data: %s\n\n", jsonData)
-	fmt.Fprintf(w, "data: [DONE]\n\n")
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
+	_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 }
 
 // sendSSEError sends an error via SSE.
@@ -3380,14 +3383,14 @@ func (api *APIServer) sendSSEError(w http.ResponseWriter, op, chunkID, model str
 	}
 
 	jsonData, _ := json.Marshal(body)
-	fmt.Fprintf(w, "data: %s\n\n", jsonData)
-	fmt.Fprintf(w, "data: [DONE]\n\n")
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
+	_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 }
 
 // sendAnthropicSSE sends an Anthropic-format SSE event.
 func (api *APIServer) sendAnthropicSSE(w http.ResponseWriter, eventType string, data map[string]any) {
 	jsonData, _ := json.Marshal(data)
-	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, jsonData)
+	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, jsonData)
 }
 
 // uploadImagesAndAnnotate uploads any images found in message Images fields
@@ -3453,7 +3456,7 @@ func fetchRemoteImage(rawURL string) (base64Data, mediaType string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("fetch remote image: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("fetch remote image: HTTP %d", resp.StatusCode)
 	}
@@ -4711,8 +4714,8 @@ func writeResponsesServerError(w http.ResponseWriter, stream bool, responseID, m
 			0,
 		)
 		jsonData, _ := json.Marshal(event)
-		fmt.Fprintf(w, "data: %s\n\n", jsonData)
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}
@@ -5031,7 +5034,7 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request body: %v", err))
 		return
 	}
-	r.Body.Close()
+	_ = r.Body.Close()
 
 	var req responsesRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -5415,7 +5418,7 @@ func (api *APIServer) respondResponsesProbe(w http.ResponseWriter, model string,
 
 	if !stream {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 		return
 	}
 
@@ -5435,7 +5438,7 @@ func (api *APIServer) respondResponsesProbe(w http.ResponseWriter, model string,
 		data["sequence_number"] = sequenceNumber
 		sequenceNumber++
 		jsonData, _ := json.Marshal(data)
-		fmt.Fprintf(w, "data: %s\n\n", jsonData)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
 		flusher.Flush()
 	}
 
@@ -5544,10 +5547,10 @@ func (api *APIServer) respondBufferedResponses(w http.ResponseWriter, result too
 	w.Header().Set("Content-Type", "text/event-stream")
 	for _, event := range []string{"response.created", "response.in_progress"} {
 		data, _ := json.Marshal(map[string]any{"type": event, "response": map[string]any{"id": responseID, "object": "response", "status": "in_progress", "model": cfg.OpenAIID}})
-		fmt.Fprintf(w, "data: %s\n\n", data)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 	}
 	completed, _ := json.Marshal(map[string]any{"type": "response.completed", "response": response})
-	fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", completed)
+	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", completed)
 }
 
 func (api *APIServer) responsesConversationOnce(
@@ -5829,7 +5832,7 @@ func (api *APIServer) streamResponses(
 		data["sequence_number"] = sequenceNumber
 		sequenceNumber++
 		jsonData, _ := json.Marshal(data)
-		fmt.Fprintf(w, "data: %s\n\n", jsonData)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
 		flusher.Flush()
 	}
 	sendFailed := func(code, message string) {
@@ -5842,8 +5845,8 @@ func (api *APIServer) streamResponses(
 		)
 		sequenceNumber++
 		jsonData, _ := json.Marshal(event)
-		fmt.Fprintf(w, "data: %s\n\n", jsonData)
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	}
 
@@ -6135,7 +6138,6 @@ func (api *APIServer) streamResponses(
 	// content chunk triggered the in-loop flush.
 	if toolCallingEnabled && !reasoningFlushed {
 		emitReasoning(thinkingFilter.Flush())
-		reasoningFlushed = true
 	}
 
 	// Finalize reasoning item if emitted. reasoningEmitted holds exactly what was
@@ -6497,7 +6499,7 @@ func (api *APIServer) streamResponses(
 		"response": finalResponse,
 	})
 
-	fmt.Fprintf(w, "data: [DONE]\n\n")
+	_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
 
 	// Cache conversation ID for session continuity
@@ -6541,7 +6543,7 @@ func (api *APIServer) handleResponsesCompact(w http.ResponseWriter, r *http.Requ
 		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request body: %v", err))
 		return
 	}
-	r.Body.Close()
+	_ = r.Body.Close()
 
 	var req responsesRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -6719,7 +6721,7 @@ func (api *APIServer) streamResponsesCompact(ctx context.Context, w http.Respons
 	sendEvent := func(eventType string, data map[string]any) {
 		data["type"] = eventType
 		jsonData, _ := json.Marshal(data)
-		fmt.Fprintf(w, "data: %s\n\n", jsonData)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
 		flusher.Flush()
 	}
 
@@ -6769,7 +6771,7 @@ func (api *APIServer) streamResponsesCompact(ctx context.Context, w http.Respons
 					"error":  map[string]any{"message": chunk.Error.Error()},
 				},
 			})
-			fmt.Fprintf(w, "data: [DONE]\n\n")
+			_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
 			return
 		}
@@ -6830,7 +6832,7 @@ func (api *APIServer) streamResponsesCompact(ctx context.Context, w http.Respons
 		"response": finalResponse,
 	})
 
-	fmt.Fprintf(w, "data: [DONE]\n\n")
+	_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
 
 	if sid != "" && strings.TrimSpace(fullText) != "" {
@@ -6993,7 +6995,7 @@ func (api *APIServer) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		imgBytes, err := io.ReadAll(f)
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read image %d: %v", i, err))
 			return
@@ -7016,7 +7018,7 @@ func (api *APIServer) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	var maskB64, maskFileName, maskMimeType string
 	if maskFile, maskHeader, err := r.FormFile("mask"); err == nil {
 		maskBytes, err := io.ReadAll(maskFile)
-		maskFile.Close()
+		_ = maskFile.Close()
 		if err != nil {
 			api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read mask: %v", err))
 			return
@@ -7310,7 +7312,7 @@ func (api *APIServer) downloadAndBase64(imageURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("download failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

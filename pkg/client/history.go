@@ -89,7 +89,7 @@ func (c *ConversationClient) FetchHistory(ctx context.Context, conversationID st
 	if err != nil {
 		return nil, fmt.Errorf("M365 conversation page request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return nil, fmt.Errorf("%w: status %d", ErrConversationAuthentication, resp.StatusCode)

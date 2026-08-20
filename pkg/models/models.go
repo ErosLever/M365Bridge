@@ -344,7 +344,7 @@ func loadDotEnv() {
 
 		// Only set if not already in environment (env vars take precedence)
 		if os.Getenv(key) == "" {
-			os.Setenv(key, value)
+			_ = os.Setenv(key, value)
 		}
 	}
 }

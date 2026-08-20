@@ -76,7 +76,7 @@ func Close() {
 	mu.Lock()
 	defer mu.Unlock()
 	if fileW != nil {
-		fileW.Close()
+		_ = fileW.Close()
 		fileW = nil
 	}
 }

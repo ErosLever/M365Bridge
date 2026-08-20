@@ -80,7 +80,7 @@ func isHelpFlag(arg string) bool {
 // never mentioned the subcommands and the subcommand sets never mentioned each
 // other. Every invocation form is listed here instead.
 func printUsage(w io.Writer) {
-	fmt.Fprintf(w, `M365Bridge v%s - Microsoft 365 Copilot as an OpenAI and Anthropic API
+	_, _ = fmt.Fprintf(w, `M365Bridge v%s - Microsoft 365 Copilot as an OpenAI and Anthropic API
 
 USAGE
   m365-bridge [flags] ["question"]      Ask one question, or start interactive mode
@@ -124,7 +124,7 @@ func runServer(args []string) {
 	fs.Usage = func() { printUsage(os.Stdout) }
 	port := fs.Int("port", defaultPort, "Port to listen on")
 	showVersion := fs.Bool("version", false, "Show version")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if *showVersion {
 		fmt.Printf("M365 Copilot API Server v%s\n", models.Version)
@@ -175,7 +175,7 @@ func runSetupWizard(args []string) {
 	fs := flag.NewFlagSet("setup-wizard", flag.ExitOnError)
 	fs.Usage = func() { printUsage(os.Stdout) }
 	file := fs.String("file", defaultSetupFile, "Path to setup JSON file containing oid, tenant, and refresh_token")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if err := setup.Run(*file); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -232,7 +232,7 @@ func runCLI() {
 
 	// Create CLI server
 	cliServer := servers.NewCLIServer(config, tokenManager)
-	defer cliServer.Close()
+	defer func() { _ = cliServer.Close() }()
 
 	// Prepare options
 	options := &servers.CLIOptions{
