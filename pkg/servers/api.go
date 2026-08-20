@@ -658,7 +658,7 @@ func anthropicCapabilities(reasoningRoute, thinking bool) map[string]any {
 func modelCatalogEntry(id string, cfg models.ModelConfig, contextWindow, maxInput, maxOutput int, reasoningRoute bool) map[string]any {
 	modalities := []string{"text", "image"}
 	features := []string{"tools", "function_calling", "streaming", "reasoning", "vision"}
-	thinking := strings.Contains(cfg.Tone, "Reasoning")
+	thinking := cfg.Thinking
 	capabilities := map[string]any{
 		"chat_completions":           true,
 		"responses":                  true,
@@ -3679,19 +3679,28 @@ func reasoningEffortRequestsDeliberation(reasoning *responsesReasoning) (bool, e
 // left untouched: M365 has no separate effort dial, so the tone is the only
 // lever.
 func applyReasoningEffort(modelKey string, cfg models.ModelConfig, deliberate bool) models.ModelConfig {
-	if !deliberate || strings.HasSuffix(modelKey, "-reasoning") {
+	if !deliberate {
 		return cfg
 	}
-	// The registry is consulted directly rather than through FindModel, because
-	// a model without a reasoning variant must be left alone rather than
-	// reported as an unknown model.
-	variantKey := modelKey + "-reasoning"
-	variant, ok := models.ModelRegistry[variantKey]
-	if !ok {
-		return cfg
+	// The requested name is resolved to registry keys first, because a caller
+	// that took its id from /v1/models sends the advertised id ("gpt-5.5") and
+	// appending the suffix to that never matches the key ("gpt5.5-reasoning").
+	// The catalog advertised effort support for the same id, so the request ran
+	// on the non-reasoning tone and the caller had no way to notice.
+	for _, key := range models.RegistryKeysFor(modelKey) {
+		if strings.HasSuffix(key, "-reasoning") {
+			return cfg
+		}
+		// The registry is consulted directly rather than through FindModel,
+		// because a model without a reasoning variant must be left alone rather
+		// than reported as an unknown model.
+		variantKey := key + "-reasoning"
+		if variant, ok := models.ModelRegistry[variantKey]; ok {
+			logging.Infof("applyReasoningEffort: routing %s to %s", modelKey, variantKey)
+			return variant
+		}
 	}
-	logging.Infof("applyReasoningEffort: routing %s to %s", modelKey, variantKey)
-	return variant
+	return cfg
 }
 
 // validateToolResultMessages rejects a tool result that answers nothing. The

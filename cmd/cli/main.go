@@ -117,7 +117,7 @@ func runSetupWizard(args []string) {
 // runCLI runs the default CLI mode (single query or interactive).
 func runCLI() {
 	// Parse command-line flags
-	model := flag.String("model", "auto", "Model to use (auto, quick, reasoning, gpt5.2-reasoning, gpt5.4-reasoning, gpt5.5, gpt5.5-reasoning, gpt5.6-reasoning, claude, claude-sonnet, claude-opus, claude-sonnet-4-20250514)")
+	model := flag.String("model", "auto", "Model to use (auto, quick, reasoning, gpt5.2, gpt5.2-reasoning, gpt5.3, gpt5.4, gpt5.4-reasoning, gpt5.5, gpt5.5-reasoning, gpt5.6-reasoning, claude, claude-sonnet, claude-opus, claude-sonnet-4-20250514)")
 	reasoning := flag.Bool("reasoning", false, "Use reasoning mode")
 	interactive := flag.Bool("i", false, "Interactive mode")
 	noStream := flag.Bool("no-stream", false, "Disable streaming")

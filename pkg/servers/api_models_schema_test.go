@@ -154,9 +154,12 @@ func TestModelsCapabilityNamespacesDoNotCollide(t *testing.T) {
 // in step with a broken implementation and the test would pass either way.
 //
 // effort is true where applyReasoningEffort has a `-reasoning` variant to route
-// to; thinking is true where the tone emits ChainOfThoughtSummary.
+// to; thinking is true where the tone was measured emitting a
+// ChainOfThoughtSummary, which is not the same as its name carrying
+// "Reasoning".
 var wantEffort = map[string]bool{
 	"gpt-4-auto": false, "gpt-4-quick": false, "gpt-4-reasoning": false,
+	"gpt-5.2": true, "gpt-5.3": false, "gpt-5.4": true,
 	"gpt-5.2-reasoning": true, "gpt-5.4-reasoning": true,
 	"gpt-5.5": true, "gpt-5.5-reasoning": true, "gpt-5.6-reasoning": true,
 	"claude-sonnet-4.6": false, "claude-opus-4.6": false,
@@ -164,9 +167,10 @@ var wantEffort = map[string]bool{
 
 var wantThinking = map[string]bool{
 	"gpt-4-auto": false, "gpt-4-quick": false, "gpt-4-reasoning": true,
+	"gpt-5.2": false, "gpt-5.3": false, "gpt-5.4": false,
 	"gpt-5.2-reasoning": true, "gpt-5.4-reasoning": true,
 	"gpt-5.5": false, "gpt-5.5-reasoning": true, "gpt-5.6-reasoning": true,
-	"claude-sonnet-4.6": false, "claude-opus-4.6": false,
+	"claude-sonnet-4.6": false, "claude-opus-4.6": true,
 }
 
 // A new registry entry must be added to both tables, otherwise the capability
@@ -254,6 +258,33 @@ func TestModelsKeepClaudeIdsDiscoverable(t *testing.T) {
 	for _, id := range claude {
 		if !strings.HasPrefix(id, "claude") && !strings.HasPrefix(id, "anthropic") {
 			t.Errorf("id %q would be dropped from the Claude Code model picker", id)
+		}
+	}
+}
+
+// The catalog advertises effort support per advertised id, but the routing used
+// to append "-reasoning" to whatever name the request carried. A caller that
+// took its id from this very catalog therefore reached no variant and ran on
+// the non-reasoning tone while the catalog said otherwise. The advertisement
+// and the routing have to agree on every id.
+func TestAdvertisedEffortActuallyRoutes(t *testing.T) {
+	for _, e := range entries(t, rawModels(t)) {
+		id := e["id"].(string)
+		supported := e["capabilities"].(map[string]any)["effort"].(map[string]any)["supported"].(bool)
+
+		cfg, ok := models.FindModel(id)
+		if !ok {
+			t.Errorf("%s is advertised but does not resolve", id)
+			continue
+		}
+		// An id whose own key already names the reasoning variant reaches a
+		// reasoning tone without being rerouted, so both routes count.
+		alreadyVariant := slices.ContainsFunc(models.RegistryKeysFor(id), func(k string) bool {
+			return strings.HasSuffix(k, "-reasoning")
+		})
+		reaches := alreadyVariant || applyReasoningEffort(id, cfg, true) != cfg
+		if reaches != supported {
+			t.Errorf("%s: advertises effort=%v but reaches a reasoning tone=%v", id, supported, reaches)
 		}
 	}
 }

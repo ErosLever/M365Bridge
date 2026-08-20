@@ -305,7 +305,7 @@ Then follow Steps 3-6 above.
 | Flag            | Type   | Default | Description                                                                                                                                                                        |
 |-----------------|--------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `-i`            | bool   | false   | Interactive mode (multi-turn conversation)                                                                                                                                         |
-| `--model`       | string | `auto`  | Model to use: `auto`, `quick`, `reasoning`, `gpt5.2-reasoning`, `gpt5.4-reasoning`, `gpt5.5`, `gpt5.5-reasoning`, `gpt5.6-reasoning`, `claude`, `claude-sonnet`, `claude-opus`, `claude-sonnet-4-20250514` |
+| `--model`       | string | `auto`  | Model to use: `auto`, `quick`, `reasoning`, `gpt5.2`, `gpt5.2-reasoning`, `gpt5.3`, `gpt5.4`, `gpt5.4-reasoning`, `gpt5.5`, `gpt5.5-reasoning`, `gpt5.6-reasoning`, `claude`, `claude-sonnet`, `claude-opus`, `claude-sonnet-4-20250514` |
 | `--reasoning`   | bool   | false   | Use reasoning mode                                                                                                                                                                 |
 | `--no-stream`   | bool   | false   | Disable streaming, print full response at once                                                                                                                                     |
 | `--list-models` | bool   | false   | List all available models and exit                                                                                                                                                 |
@@ -535,12 +535,15 @@ All model selection is via the `tone` field sent to the M365 backend. The `Overr
 | `reasoning`                | Gpt_5_2_Reasoning | gpt-4-reasoning   | Yes       | GPT-5   |
 | `gpt5.2-reasoning`         | Gpt_5_2_Reasoning | gpt-5.2-reasoning | Yes       | GPT-5   |
 | `gpt5.4-reasoning`         | Gpt_5_4_Reasoning | gpt-5.4-reasoning | Yes       | GPT-5   |
+| `gpt5.2`                   | Gpt_5_2_Chat      | gpt-5.2           | No        | GPT-5   |
+| `gpt5.3`                   | Gpt_5_3_Chat      | gpt-5.3           | No        | GPT-5   |
+| `gpt5.4`                   | Gpt_5_4_Chat      | gpt-5.4           | No        | GPT-5   |
 | `gpt5.5`                   | Gpt_5_5_Chat      | gpt-5.5           | No        | GPT-5   |
 | `gpt5.5-reasoning`         | Gpt_5_5_Reasoning | gpt-5.5-reasoning | Yes       | GPT-5   |
 | `gpt5.6-reasoning`         | Gpt_5_6_Reasoning | gpt-5.6-reasoning | Yes       | GPT-5   |
 | `claude`                   | Claude_Sonnet     | claude-sonnet-4.6 | No        | Claude  |
 | `claude-sonnet`            | Claude_Sonnet     | claude-sonnet-4.6 | No        | Claude  |
-| `claude-opus`              | Claude_Opus       | claude-opus-4.6   | No        | Claude  |
+| `claude-opus`              | Claude_Opus       | claude-opus-4.6   | Yes       | Claude  |
 | `claude-sonnet-4-20250514` | Claude_Sonnet     | claude-sonnet-4.6 | No        | Claude  |
 
 ### Which model should I use?
@@ -552,13 +555,16 @@ All model selection is via the `tone` field sent to the M365 backend. The `Overr
 | Complex reasoning, multi-step problems    | `reasoning`        |
 | GPT-5.2 with deep thinking                | `gpt5.2-reasoning` |
 | GPT-5.4 with deep thinking                | `gpt5.4-reasoning` |
+| GPT-5.2 chat                              | `gpt5.2`           |
+| GPT-5.3 chat                              | `gpt5.3`           |
+| GPT-5.4 chat                              | `gpt5.4`           |
 | GPT-5.5 chat                              | `gpt5.5`           |
 | GPT-5.5 with deep thinking                | `gpt5.5-reasoning` |
 | GPT-5.6 with deep thinking (latest)       | `gpt5.6-reasoning` |
 | Claude Sonnet 4.6 (Anthropic)             | `claude-sonnet`    |
 | Claude Opus 4.6 (Anthropic, most capable) | `claude-opus`      |
 
-A reasoning model produces `reasoning_content` output containing the model's thinking process. OpenAI endpoints expose this as `reasoning_content`; Anthropic endpoints expose it as a `thinking` content block before the `text` block. Claude models do not produce reasoning content. `gpt5.6-reasoning` advertises the capability but has not been observed emitting it.
+A reasoning model produces `reasoning_content` output containing the model's thinking process. OpenAI endpoints expose this as `reasoning_content`; Anthropic endpoints expose it as a `thinking` content block before the `text` block. `claude-opus` produces reasoning content as well; `claude-sonnet` does not. `gpt5.6-reasoning` advertises the capability but has not been observed emitting it. The advertised capability comes from the measured behaviour of each tone rather than from its name.
 
 ### Session ID in Model Name
 

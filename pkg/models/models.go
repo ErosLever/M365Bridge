@@ -4,6 +4,7 @@ package models
 
 import (
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,14 @@ type ModelConfig struct {
 	// Claude Code labels its gateway model picker with it, so an id here would
 	// show the caller a slug where a name belongs.
 	DisplayName string
+	// Thinking records whether the tone was measured emitting reasoning.
+	//
+	// The advertised capability used to be derived from the tone name carrying
+	// "Reasoning", which was wrong in both directions: Claude_Opus reasons and
+	// does not carry it, Gpt_5_6_Reasoning carries it and does not reason. A
+	// name is not evidence, so each entry states what the tone was observed
+	// doing.
+	Thinking bool
 }
 
 // DisplayNameOrDefault returns the human-readable model name, falling back to
@@ -112,18 +121,39 @@ var ModelRegistry = map[string]ModelConfig{
 		Override:    "",
 		OpenAIID:    "gpt-4-reasoning",
 		DisplayName: "GPT Reasoning",
+		Thinking:    true,
 	},
 	"gpt5.2-reasoning": {
 		Tone:        "Gpt_5_2_Reasoning",
 		Override:    "",
 		OpenAIID:    "gpt-5.2-reasoning",
 		DisplayName: "GPT-5.2 Reasoning",
+		Thinking:    true,
 	},
 	"gpt5.4-reasoning": {
 		Tone:        "Gpt_5_4_Reasoning",
 		Override:    "",
 		OpenAIID:    "gpt-5.4-reasoning",
 		DisplayName: "GPT-5.4 Reasoning",
+		Thinking:    true,
+	},
+	"gpt5.2": {
+		Tone:        "Gpt_5_2_Chat",
+		Override:    "",
+		OpenAIID:    "gpt-5.2",
+		DisplayName: "GPT-5.2",
+	},
+	"gpt5.3": {
+		Tone:        "Gpt_5_3_Chat",
+		Override:    "",
+		OpenAIID:    "gpt-5.3",
+		DisplayName: "GPT-5.3",
+	},
+	"gpt5.4": {
+		Tone:        "Gpt_5_4_Chat",
+		Override:    "",
+		OpenAIID:    "gpt-5.4",
+		DisplayName: "GPT-5.4",
 	},
 	"gpt5.5": {
 		Tone:        "Gpt_5_5_Chat",
@@ -136,12 +166,14 @@ var ModelRegistry = map[string]ModelConfig{
 		Override:    "",
 		OpenAIID:    "gpt-5.5-reasoning",
 		DisplayName: "GPT-5.5 Reasoning",
+		Thinking:    true,
 	},
 	"gpt5.6-reasoning": {
 		Tone:        "Gpt_5_6_Reasoning",
 		Override:    "",
 		OpenAIID:    "gpt-5.6-reasoning",
 		DisplayName: "GPT-5.6 Reasoning",
+		Thinking:    true,
 	},
 	// Claude — real Anthropic models (verified via tone test, July 2026)
 	"claude": {
@@ -163,6 +195,7 @@ var ModelRegistry = map[string]ModelConfig{
 		Override:    "",
 		OpenAIID:    "claude-opus-4.6",
 		DisplayName: "Claude Opus 4.6",
+		Thinking:    true,
 		Owner:       OwnerAnthropic,
 	},
 	"claude-sonnet-4-20250514": {
@@ -307,6 +340,29 @@ func loadDotEnv() {
 			os.Setenv(key, value)
 		}
 	}
+}
+
+// RegistryKeysFor reports every registry key a request may reach by name: the
+// key itself when the name is one, otherwise every key sharing the advertised
+// OpenAI ID.
+//
+// Reasoning routing needs this because the variant is found by appending
+// "-reasoning" to a key. A caller that used the id from /v1/models sent
+// "gpt-5.5", the append produced "gpt-5.5-reasoning", no key matched, and the
+// request silently ran on the non-reasoning tone while the catalog advertised
+// effort support for that same id.
+func RegistryKeysFor(name string) []string {
+	if _, ok := ModelRegistry[name]; ok {
+		return []string{name}
+	}
+	var keys []string
+	for key, cfg := range ModelRegistry {
+		if cfg.OpenAIID == name {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // FindModel finds a model configuration by registry key or by advertised
