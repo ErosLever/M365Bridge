@@ -595,6 +595,27 @@ Yanıt ayrıca `reasoning_effort_presets` alanını taşır: her biri Responses 
 
 Her kayıt ayrıca Codex CLI'nin okuduğu, düz OpenAI istemcilerinin yok saydığı model katalog alanlarını taşır: `base_instructions`, `model_messages`, `default_reasoning_level`, `apply_patch_tool_type`, `shell_type`, `tool_mode`, `truncation_policy`, `supports_parallel_tool_calls` ve verbosity ile reasoning-summary varsayılanları. Her yetenek hem üst seviyede hem `capabilities` altında tekrarlanır, çünkü OpenAI uyumlu istemciler bu bilgiyi farklı yerlerde arar.
 
+#### Tek yanıtta iki wire format
+
+Route, OpenAI ve Anthropic istemcilerine aynı anda cevap verir, çünkü iki protokol de proxy'ye aynı yoldan ulaşır. Her kayıt hem geçerli bir OpenAI model nesnesi hem de geçerli bir Anthropic `ModelInfo` nesnesidir; iki alan kümesi çakışmaz, bu yüzden her istemci yalnızca tanıdığını okur.
+
+| Alan                | Protokol  | Açıklama                                                                 |
+|---------------------|-----------|---------------------------------------------------------------------------|
+| `object`            | OpenAI    | Her zaman `model`.                                                        |
+| `created`           | OpenAI    | Unix saniye.                                                              |
+| `owned_by`          | OpenAI    | Tone'un arkasındaki sağlayıcı.                                            |
+| `shutdown_date`     | OpenAI    | Her zaman `null`; emekliye ayrılması planlanan model yok.                 |
+| `type`              | Anthropic | Her zaman `model`.                                                        |
+| `display_name`      | Anthropic | İnsan tarafından okunabilir ad, örneğin `Claude Sonnet 4.6`.              |
+| `created_at`        | Anthropic | `created` ile aynı an, RFC 3339 biçiminde.                                |
+| `max_tokens`        | Anthropic | Çıktı tavanı, `max_output_tokens` ile aynı değer.                         |
+
+Listenin kendisi OpenAI için `object` ve `data`, Anthropic için `has_more`, `first_id` ve `last_id` taşır. Kayıt defterinin tamamı tek sayfaya sığdığı için `has_more` her zaman `false`'tur ve imleçler ilan edilen ilk ve son id'dir.
+
+`capabilities` alanı, düz OpenAI tarzı girdilerin yanında Anthropic'in yetenek ağacını da tutar: `batch`, `citations`, `code_execution`, `context_management`, `effort`, `image_input`, `pdf_input`, `structured_outputs` ve `thinking`, her biri `{"supported": bool}` yaprağı. Değerler proxy'nin gerçekte ne yaptığını bildirir, bu yüzden çoğu `false`'tur. `effort` yalnızca `-reasoning` varyantına yönlendirilebilen bir model için `true`'dur, `thinking` ise yalnızca chain-of-thought içeriği üreten reasoning tone'ları için.
+
+Claude Code gateway modellerini bu route üzerinden keşfeder; yalnızca Anthropic biçimini ayrıştırır ve yalnızca `claude` veya `anthropic` ile başlayan id'leri ekler. Claude tone'ları bu yüzden bu biçimde id taşır.
+
 ### Konuşma Kotası
 
 M365, konuşma başına bir mesaj üst sınırı uygular ve sayaçları update frame'lerinde bildirir. Her tur bunları loglar, örneğin `ConvStream throttling: used=8 max=600 headroom=592`.

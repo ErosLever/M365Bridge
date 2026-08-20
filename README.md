@@ -595,6 +595,27 @@ The response also carries `reasoning_effort_presets`, each an `{effort, descript
 
 Each entry additionally carries the model-catalog fields Codex CLI reads, which plain OpenAI clients ignore: `base_instructions`, `model_messages`, `default_reasoning_level`, `apply_patch_tool_type`, `shell_type`, `tool_mode`, `truncation_policy`, `supports_parallel_tool_calls`, and the verbosity and reasoning-summary defaults. Every capability is repeated both at the top level and under `capabilities`, because OpenAI-compatible clients disagree on where to look for it.
 
+#### Both wire formats in one response
+
+The route answers OpenAI and Anthropic clients at once, because both protocols reach the proxy on the same path. Each entry is a valid OpenAI model object and a valid Anthropic `ModelInfo` at the same time; the two field sets do not collide, so each client reads only what it knows.
+
+| Field               | Protocol  | Description                                                              |
+|---------------------|-----------|--------------------------------------------------------------------------|
+| `object`            | OpenAI    | Always `model`.                                                          |
+| `created`           | OpenAI    | Unix seconds.                                                            |
+| `owned_by`          | OpenAI    | The vendor behind the tone.                                              |
+| `shutdown_date`     | OpenAI    | Always `null`; no model is scheduled to retire.                          |
+| `type`              | Anthropic | Always `model`.                                                          |
+| `display_name`      | Anthropic | Human-readable name, for example `Claude Sonnet 4.6`.                    |
+| `created_at`        | Anthropic | The same instant as `created`, in RFC 3339.                              |
+| `max_tokens`        | Anthropic | The output ceiling, matching `max_output_tokens`.                        |
+
+The list itself carries `object` and `data` for OpenAI, and `has_more`, `first_id` and `last_id` for Anthropic. The whole registry fits in one page, so `has_more` is always `false` and the cursors are the first and last advertised id.
+
+`capabilities` holds Anthropic's capability tree alongside the flat OpenAI-style entries: `batch`, `citations`, `code_execution`, `context_management`, `effort`, `image_input`, `pdf_input`, `structured_outputs` and `thinking`, each a `{"supported": bool}` leaf. The values state what the proxy actually does, so most read `false`. `effort` is `true` only for a model that has a `-reasoning` variant to route to, and `thinking` only for a reasoning tone, which is the one that emits chain-of-thought content.
+
+Claude Code discovers gateway models through this route, and it reads only the Anthropic format and only adds ids beginning with `claude` or `anthropic`. The Claude tones therefore keep such ids.
+
 ### Conversation Quota
 
 M365 enforces a per-conversation message ceiling and reports the counters on its update frames. Every turn logs them, for example `ConvStream throttling: used=8 max=600 headroom=592`.

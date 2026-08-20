@@ -519,39 +519,146 @@ func (api *APIServer) handleModels(w http.ResponseWriter, r *http.Request) {
 
 	// Several registry keys are aliases for the same model, so the list is keyed
 	// by the advertised id and sorted; a map range would otherwise return
-	// duplicates in a different order on every request.
+	// duplicates in a different order on every request. The keys are kept
+	// because reasoning routing is a property of the key, not of the id.
 	byID := make(map[string]models.ModelConfig, len(models.ModelRegistry))
-	for _, cfg := range models.ModelRegistry {
+	keysByID := make(map[string][]string, len(models.ModelRegistry))
+	for key, cfg := range models.ModelRegistry {
 		byID[cfg.OpenAIID] = cfg
+		keysByID[cfg.OpenAIID] = append(keysByID[cfg.OpenAIID], key)
 	}
 	ids := slices.Sorted(maps.Keys(byID))
 
 	modelList := make([]map[string]any, 0, len(ids))
 	for _, id := range ids {
-		modelList = append(modelList, modelCatalogEntry(id, byID[id], contextWindow, maxInput, maxOutput))
+		modelList = append(modelList, modelCatalogEntry(
+			id, byID[id], contextWindow, maxInput, maxOutput, supportsReasoningRoute(keysByID[id])))
 	}
 
 	response := map[string]any{
 		"object":                   "list",
 		"data":                     modelList,
 		"reasoning_effort_presets": models.ReasoningEffortPresets,
+
+		// Anthropic's Models API paginates its list and its clients read these
+		// three fields. The whole registry always fits in one page, so the
+		// cursors are the first and last advertised id and there is never more.
+		"has_more": false,
+		"first_id": firstOrNil(ids),
+		"last_id":  lastOrNil(ids),
 	}
 
 	api.sendJSON(w, http.StatusOK, response)
+}
+
+// supportsReasoningRoute reports whether any registry key for one advertised
+// model reaches a reasoning variant. applyReasoningEffort routes `key` to
+// `key+"-reasoning"`, so a model without that sibling ignores the effort a
+// caller asks for and must not advertise the capability.
+func supportsReasoningRoute(keys []string) bool {
+	for _, key := range keys {
+		if strings.HasSuffix(key, "-reasoning") {
+			return true
+		}
+		if _, ok := models.ModelRegistry[key+"-reasoning"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// firstOrNil returns the first id, or nil for an empty registry. Anthropic
+// types the cursor as nullable, so an empty string would be a wrong value
+// rather than an absent one.
+func firstOrNil(ids []string) any {
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids[0]
+}
+
+// lastOrNil returns the last id, or nil for an empty registry.
+func lastOrNil(ids []string) any {
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids[len(ids)-1]
 }
 
 // codexBaseInstructions is advertised in the model catalog. Codex builds its
 // own request instructions from it; the proxy never forwards it upstream.
 const codexBaseInstructions = "You are a helpful AI assistant. When asked to write code, always provide the complete implementation — never truncate, abbreviate, or return only a fragment. Write full, working code with all logic included."
 
+// modelCreated is the advertised creation time. The registry records no real
+// release date, so one fixed value is published in both encodings rather than
+// two that could disagree.
+const modelCreated = 1700000000
+
+// capabilitySupport renders one Anthropic capability leaf.
+func capabilitySupport(supported bool) map[string]any {
+	return map[string]any{"supported": supported}
+}
+
+// anthropicCapabilities describes one model in the shape Anthropic's Models API
+// publishes. Every leaf states what this proxy actually does, so a client that
+// reads the tree is not told about a feature the proxy never implements.
+func anthropicCapabilities(reasoningRoute, thinking bool) map[string]any {
+	return map[string]any{
+		// No Batch API, no Anthropic citations, no code execution tool, and no
+		// context management strategies are implemented by this proxy.
+		"batch":          capabilitySupport(false),
+		"citations":      capabilitySupport(false),
+		"code_execution": capabilitySupport(false),
+		"context_management": map[string]any{
+			"supported":                false,
+			"clear_thinking_20251015":  capabilitySupport(false),
+			"clear_tool_uses_20250919": capabilitySupport(false),
+			"compact_20260112":         capabilitySupport(false),
+		},
+		// Effort is honoured only when the model has a reasoning variant to
+		// route to; every advertised preset name is otherwise accepted.
+		"effort": map[string]any{
+			"supported": reasoningRoute,
+			"low":       capabilitySupport(reasoningRoute),
+			"medium":    capabilitySupport(reasoningRoute),
+			"high":      capabilitySupport(reasoningRoute),
+			"max":       capabilitySupport(reasoningRoute),
+			"xhigh":     capabilitySupport(reasoningRoute),
+		},
+		"image_input": capabilitySupport(true),
+		// PDF content blocks are not converted for the backend, and no strict
+		// schema or JSON mode is enforced on a reply.
+		"pdf_input":          capabilitySupport(false),
+		"structured_outputs": capabilitySupport(false),
+		// Thinking is surfaced only for the reasoning tones, which emit
+		// ChainOfThoughtSummary; there is no adaptive mode to select.
+		"thinking": map[string]any{
+			"supported": thinking,
+			"types": map[string]any{
+				"enabled":  capabilitySupport(thinking),
+				"adaptive": capabilitySupport(false),
+			},
+		},
+	}
+}
+
 // modelCatalogEntry builds one /v1/models entry.
+//
+// The entry carries the OpenAI model object and the Anthropic ModelInfo at
+// once, because both protocols are served from this one route and each reads
+// only the fields it knows. OpenAI requires id, object, created and owned_by;
+// Anthropic requires id, type, display_name and created_at. The two field sets
+// do not collide, so neither client needs a separate endpoint.
 //
 // Capability fields appear both at the top level and under `capabilities`
 // because OpenAI-compatible clients disagree on where to look, and Codex reads
-// a further set of fields that plain OpenAI clients ignore.
-func modelCatalogEntry(id string, cfg models.ModelConfig, contextWindow, maxInput, maxOutput int) map[string]any {
+// a further set of fields that plain OpenAI clients ignore. Anthropic's
+// capability tree is merged into the same map; its key names are disjoint from
+// the flat OpenAI-style ones, so both survive.
+func modelCatalogEntry(id string, cfg models.ModelConfig, contextWindow, maxInput, maxOutput int, reasoningRoute bool) map[string]any {
 	modalities := []string{"text", "image"}
 	features := []string{"tools", "function_calling", "streaming", "reasoning", "vision"}
+	thinking := strings.Contains(cfg.Tone, "Reasoning")
 	capabilities := map[string]any{
 		"chat_completions":           true,
 		"responses":                  true,
@@ -572,15 +679,27 @@ func modelCatalogEntry(id string, cfg models.ModelConfig, contextWindow, maxInpu
 		"output_modalities":          []string{"text"},
 		"supported_features":         features,
 	}
+	// Anthropic's tree uses key names none of the flat entries above take, so
+	// merging leaves both readable from the one map.
+	maps.Copy(capabilities, anthropicCapabilities(reasoningRoute, thinking))
 
 	return map[string]any{
-		"id":       id,
-		"slug":     id,
-		"object":   "model",
-		"created":  1700000000,
-		"owned_by": cfg.OwnerOrDefault(),
+		// OpenAI model object: id, object, created and owned_by are required,
+		// shutdown_date is nullable and nothing is scheduled to retire.
+		"id":            id,
+		"slug":          id,
+		"object":        "model",
+		"created":       modelCreated,
+		"owned_by":      cfg.OwnerOrDefault(),
+		"shutdown_date": nil,
 
-		"display_name":      id,
+		// Anthropic ModelInfo: type, display_name and created_at complete the
+		// object, and max_tokens is its name for the output ceiling.
+		"type":       "model",
+		"created_at": time.Unix(modelCreated, 0).UTC().Format(time.RFC3339),
+		"max_tokens": maxOutput,
+
+		"display_name":      cfg.DisplayNameOrDefault(),
 		"description":       "Public model endpoint.",
 		"visibility":        "list",
 		"supported_in_api":  true,

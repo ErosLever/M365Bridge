@@ -29,6 +29,19 @@ type ModelConfig struct {
 	Override string // Optional GPT model override identifier
 	OpenAIID string // OpenAI-compatible model identifier
 	Owner    string // Who built the model behind the tone; defaults to OwnerMicrosoft
+	// DisplayName is the human-readable label Anthropic's Models API requires.
+	// Claude Code labels its gateway model picker with it, so an id here would
+	// show the caller a slug where a name belongs.
+	DisplayName string
+}
+
+// DisplayNameOrDefault returns the human-readable model name, falling back to
+// the advertised id so a new registry entry never publishes an empty label.
+func (c ModelConfig) DisplayNameOrDefault() string {
+	if c.DisplayName == "" {
+		return c.OpenAIID
+	}
+	return c.DisplayName
 }
 
 // Model owners advertised through /v1/models. The Claude tones reach real
@@ -80,65 +93,76 @@ func ReasoningEffortNames() []string {
 // ModelRegistry maps model keys to their configurations.
 var ModelRegistry = map[string]ModelConfig{
 	"auto": {
-		Tone:     "Magic",
-		Override: "",
-		OpenAIID: "gpt-4-auto",
+		Tone:        "Magic",
+		Override:    "",
+		OpenAIID:    "gpt-4-auto",
+		DisplayName: "GPT Auto",
 	},
 	"quick": {
-		Tone:     "Chat",
-		Override: "",
-		OpenAIID: "gpt-4-quick",
+		Tone:        "Chat",
+		Override:    "",
+		OpenAIID:    "gpt-4-quick",
+		DisplayName: "GPT Quick",
 	},
 	"reasoning": {
-		Tone:     "Magic",
-		Override: "",
-		OpenAIID: "gpt-4-reasoning",
+		Tone:        "Magic",
+		Override:    "",
+		OpenAIID:    "gpt-4-reasoning",
+		DisplayName: "GPT Reasoning",
 	},
 	"gpt5.5": {
-		Tone:     "Gpt_5_5_Chat",
-		Override: "",
-		OpenAIID: "gpt-5.5",
+		Tone:        "Gpt_5_5_Chat",
+		Override:    "",
+		OpenAIID:    "gpt-5.5",
+		DisplayName: "GPT-5.5",
 	},
 	"gpt5.5-reasoning": {
-		Tone:     "Gpt_5_5_Reasoning",
-		Override: "",
-		OpenAIID: "gpt-5.5-reasoning",
+		Tone:        "Gpt_5_5_Reasoning",
+		Override:    "",
+		OpenAIID:    "gpt-5.5-reasoning",
+		DisplayName: "GPT-5.5 Reasoning",
 	},
 	"gpt5.6-reasoning": {
-		Tone:     "Gpt_5_6_Reasoning",
-		Override: "",
-		OpenAIID: "gpt-5.6-reasoning",
+		Tone:        "Gpt_5_6_Reasoning",
+		Override:    "",
+		OpenAIID:    "gpt-5.6-reasoning",
+		DisplayName: "GPT-5.6 Reasoning",
 	},
 	// Claude — real Anthropic models (verified via tone test, July 2026)
 	"claude": {
-		Tone:     "Claude_Sonnet",
-		Override: "",
-		OpenAIID: "claude-sonnet-4.6",
-		Owner:    OwnerAnthropic,
+		Tone:        "Claude_Sonnet",
+		Override:    "",
+		OpenAIID:    "claude-sonnet-4.6",
+		DisplayName: "Claude Sonnet 4.6",
+		Owner:       OwnerAnthropic,
 	},
 	"claude-sonnet": {
-		Tone:     "Claude_Sonnet",
-		Override: "",
-		OpenAIID: "claude-sonnet-4.6",
-		Owner:    OwnerAnthropic,
+		Tone:        "Claude_Sonnet",
+		Override:    "",
+		OpenAIID:    "claude-sonnet-4.6",
+		DisplayName: "Claude Sonnet 4.6",
+		Owner:       OwnerAnthropic,
 	},
 	"claude-opus": {
-		Tone:     "Claude_Opus",
-		Override: "",
-		OpenAIID: "claude-opus-4.6",
-		Owner:    OwnerAnthropic,
+		Tone:        "Claude_Opus",
+		Override:    "",
+		OpenAIID:    "claude-opus-4.6",
+		DisplayName: "Claude Opus 4.6",
+		Owner:       OwnerAnthropic,
 	},
 	"claude-fable": {
-		Tone:     "Claude_Fable",
-		Override: "",
-		OpenAIID: "claude-fable-5",
-		Owner:    OwnerAnthropic,
+		Tone:        "Claude_Fable",
+		Override:    "",
+		OpenAIID:    "claude-fable-5",
+		DisplayName: "Claude Fable 5",
+		Owner:       OwnerAnthropic,
 	},
 	"claude-sonnet-4-20250514": {
-		Tone:     "Claude_Sonnet",
-		Override: "",
-		OpenAIID: "claude-sonnet-4.6",
-		Owner:    OwnerAnthropic,
+		Tone:        "Claude_Sonnet",
+		Override:    "",
+		OpenAIID:    "claude-sonnet-4.6",
+		DisplayName: "Claude Sonnet 4.6",
+		Owner:       OwnerAnthropic,
 	},
 }
 
