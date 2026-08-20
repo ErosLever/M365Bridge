@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/auth"
@@ -86,6 +87,10 @@ USAGE
   m365-bridge [flags] ["question"]      Ask one question, or start interactive mode
   m365-bridge serve [flags]             Run the HTTP API server and web interface
   m365-bridge setup-wizard [flags]      Import credentials from a browser export
+  m365-bridge --help                    Print this text
+
+  Every flag is optional. With none, serve listens on port %d and setup-wizard
+  reads %s.
 
 CLI FLAGS
   -model <name>     Model to use (default %q). See -list-models for the full list.
@@ -102,20 +107,81 @@ SERVE FLAGS
 SETUP-WIZARD FLAGS
   -file <path>      Setup JSON with oid, tenant and refresh_token (default %q)
 
-ENVIRONMENT
-  M365_TENANT_ID    Required. Directory (tenant) ID.
-  M365_USER_OID     Required. Object ID of the signed-in user.
-  M365_API_KEYS     Comma-separated keys that clients must present. Unset means open.
-  M365_ENABLE_WEB_UI  Serves the browser interface at / and records transcripts (default on).
-  Read from data/.env; a process environment variable takes precedence.
-  The README documents every remaining variable.
+`, models.Version, defaultPort, defaultSetupFile, defaultModel, defaultPort, defaultSetupFile)
 
+	printEnvironment(w)
+
+	_, _ = fmt.Fprint(w, `
 EXAMPLES
   m365-bridge "explain the CAP theorem"
   m365-bridge -model gpt5.5-reasoning -i
   m365-bridge serve --port 8000
   m365-bridge --list-models
-`, models.Version, defaultModel, defaultPort, defaultSetupFile)
+  m365-bridge setup-wizard
+`)
+}
+
+// printEnvironment writes every environment variable the binary reads.
+//
+// The defaults come from the constants LoadConfig applies, so a changed default
+// cannot leave a stale value here. The text used to name four variables and
+// defer the rest to the README, which did not document the two the process
+// exits without.
+func printEnvironment(w io.Writer) {
+	_, _ = fmt.Fprintf(w, `ENVIRONMENT
+  Read from data/.env; a process environment variable takes precedence.
+
+  Identity
+    M365_TENANT_ID                 Required. Directory (tenant) ID.
+    M365_USER_OID                  Required. Object ID of the signed-in user.
+    M365_CLIENT_ID                 OAuth client the tokens are issued to
+                                   (default %s).
+
+  Server access
+    M365_API_KEYS                  Comma-separated keys a client must present.
+                                   Unset leaves every route open.
+    M365_API_KEY                   A single key; read only when M365_API_KEYS
+                                   is unset.
+    M365_ENABLE_WEB_UI             Serve the browser interface at / and record a
+                                   transcript per session (default true).
+
+  Answers
+    M365_ENABLE_WEB_SEARCH         Let Copilot search the web (default true).
+    M365_MAX_TOOL_ROUNDS           Tool rounds one turn may drive before the
+                                   request is refused (default %d, ceiling %d).
+    M365_CONTEXT_WINDOW            Context window /v1/models advertises
+                                   (default %d). M365 enforces its own limits.
+    M365_MAX_OUTPUT_TOKENS         Output budget /v1/models advertises
+                                   (default %d).
+    M365_IMAGE_HOST_ALLOWLIST      Hosts a generated image may be fetched from,
+                                   comma-separated (default %s).
+    TZ                             Timezone sent with each turn; falls back to
+                                   the system zone, then UTC.
+
+  Built-in coding tools, off unless enabled
+    M365_ENABLE_CODE_TOOLS         Run the built-in file and command tools on
+                                   this host (default false).
+    M365_AUTO_EXPOSE_TOOLS         Offer them to a request that sent no tools
+                                   (default false).
+    M365_WORKSPACE_DIR             Directory the tools may not leave
+                                   (default %q).
+    M365_CODE_TOOL_TIMEOUT         Timeout for one command (default %s).
+    M365_CODE_TOOL_MAX_ITERATIONS  Tool rounds inside one request (default %d).
+    M365_CODE_TOOL_MAX_OUTPUT      Bytes kept from one command (default %d).
+    M365_CODE_TOOL_MAX_READ_BYTES  Bytes read from one file (default %d).
+`,
+		models.DefaultClientID,
+		models.DefaultMaxToolRounds,
+		models.MaxToolRoundsCeiling,
+		models.DefaultContextWindowTokens,
+		models.DefaultMaxOutputTokens,
+		strings.Join(models.DefaultImageHostAllowlist, ","),
+		models.DefaultWorkspaceDir,
+		models.DefaultCodeToolTimeout,
+		models.DefaultCodeToolMaxIterations,
+		models.DefaultCodeToolMaxOutput,
+		models.DefaultCodeToolMaxReadBytes,
+	)
 }
 
 // runServer starts the HTTP API server.

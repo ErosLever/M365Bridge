@@ -260,6 +260,28 @@ const (
 	MaxToolRoundsCeiling = 512
 )
 
+// Defaults for every remaining configurable value. They are named constants
+// rather than literals inside LoadConfig because the usage text prints them:
+// a literal in both places would let the documented default drift away from
+// the one the binary applies.
+const (
+	// DefaultContextWindowTokens is the context window /v1/models advertises.
+	DefaultContextWindowTokens = 1_000_000
+	// DefaultMaxOutputTokens is the output budget /v1/models advertises.
+	DefaultMaxOutputTokens = 1_000_000
+	// DefaultWorkspaceDir is the directory the built-in coding tools are
+	// confined to.
+	DefaultWorkspaceDir = "."
+	// DefaultCodeToolTimeout is the wall clock a single tool command may take.
+	DefaultCodeToolTimeout = 30 * time.Second
+	// DefaultCodeToolMaxOutput is the number of bytes kept from one command.
+	DefaultCodeToolMaxOutput = 1 << 20
+	// DefaultCodeToolMaxReadBytes is the number of bytes read from one file.
+	DefaultCodeToolMaxReadBytes = 1 << 20
+	// DefaultCodeToolMaxIterations is the tool round cap inside one request.
+	DefaultCodeToolMaxIterations = 10
+)
+
 // DefaultImageHostAllowlist holds the Microsoft hosts that serve generated
 // images. The designerapp access token is issued for this resource, so it must
 // not be sent anywhere else.
@@ -279,14 +301,14 @@ func LoadConfig() *Config {
 		APIKeys:               parseAPIKeys(os.Getenv("M365_API_KEYS"), os.Getenv("M365_API_KEY")),
 		EnableCodeTools:       getEnvBool("M365_ENABLE_CODE_TOOLS", false),
 		AutoExposeTools:       getEnvBool("M365_AUTO_EXPOSE_TOOLS", false),
-		WorkspaceDir:          getEnvWithDefault("M365_WORKSPACE_DIR", "."),
-		CodeToolTimeout:       getEnvDuration("M365_CODE_TOOL_TIMEOUT", 30*time.Second),
-		CodeToolMaxOutput:     getEnvInt64("M365_CODE_TOOL_MAX_OUTPUT", 1<<20),
-		CodeToolMaxReadBytes:  getEnvInt64("M365_CODE_TOOL_MAX_READ_BYTES", 1<<20),
-		CodeToolMaxIterations: getEnvInt("M365_CODE_TOOL_MAX_ITERATIONS", 10),
+		WorkspaceDir:          getEnvWithDefault("M365_WORKSPACE_DIR", DefaultWorkspaceDir),
+		CodeToolTimeout:       getEnvDuration("M365_CODE_TOOL_TIMEOUT", DefaultCodeToolTimeout),
+		CodeToolMaxOutput:     getEnvInt64("M365_CODE_TOOL_MAX_OUTPUT", DefaultCodeToolMaxOutput),
+		CodeToolMaxReadBytes:  getEnvInt64("M365_CODE_TOOL_MAX_READ_BYTES", DefaultCodeToolMaxReadBytes),
+		CodeToolMaxIterations: getEnvInt("M365_CODE_TOOL_MAX_ITERATIONS", DefaultCodeToolMaxIterations),
 		ImageHostAllowlist:    getEnvHostList("M365_IMAGE_HOST_ALLOWLIST", DefaultImageHostAllowlist),
-		ContextWindowTokens:   getEnvInt("M365_CONTEXT_WINDOW", 1_000_000),
-		MaxOutputTokens:       getEnvInt("M365_MAX_OUTPUT_TOKENS", 1_000_000),
+		ContextWindowTokens:   getEnvInt("M365_CONTEXT_WINDOW", DefaultContextWindowTokens),
+		MaxOutputTokens:       getEnvInt("M365_MAX_OUTPUT_TOKENS", DefaultMaxOutputTokens),
 		MaxToolRounds:         min(getEnvInt("M365_MAX_TOOL_ROUNDS", DefaultMaxToolRounds), MaxToolRoundsCeiling),
 		EnableWebSearch:       getEnvBool("M365_ENABLE_WEB_SEARCH", true),
 		EnableWebUI:           getEnvBool("M365_ENABLE_WEB_UI", true),
