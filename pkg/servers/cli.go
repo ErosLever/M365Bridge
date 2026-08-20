@@ -5,7 +5,9 @@ package servers
 import (
 	"bufio"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/auth"
@@ -57,15 +59,18 @@ type CLIOptions struct {
 	ListModels  bool
 }
 
-// listModels prints all available models.
+// listModels prints all available models, sorted by key. A map range would
+// print the same list in a different order on every run, which reads as if the
+// registry itself had changed.
 func (cli *CLIServer) listModels() error {
 	fmt.Println("Available models:")
-	for key, cfg := range models.ModelRegistry {
+	for _, key := range slices.Sorted(maps.Keys(models.ModelRegistry)) {
+		cfg := models.ModelRegistry[key]
 		desc := cfg.Tone
 		if cfg.Override != "" {
 			desc += fmt.Sprintf(" (%s)", cfg.Override)
 		}
-		fmt.Printf("  %-12s - %s\n", key, desc)
+		fmt.Printf("  %-24s - %s\n", key, desc)
 	}
 	return nil
 }
