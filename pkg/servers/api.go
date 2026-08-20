@@ -1028,7 +1028,7 @@ func (api *APIServer) sendConversationError(w http.ResponseWriter, err error) {
 // handleCORS handles CORS preflight requests.
 func (api *APIServer) handleCORS(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-Id")
 	w.WriteHeader(http.StatusOK)
 }

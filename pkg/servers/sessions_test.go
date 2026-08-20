@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/auth"
@@ -250,6 +251,87 @@ func TestSessionRejectsAnEmptyID(t *testing.T) {
 	api.handleSession(rec, httptest.NewRequest(http.MethodGet, "/v1/sessions/", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// putSession issues a bind request with the given raw JSON body.
+func putSession(t *testing.T, api *APIServer, sessionID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/v1/sessions/"+sessionID, strings.NewReader(body))
+	api.handleSession(rec, req)
+	return rec
+}
+
+// A conversation started in the M365 web or mobile client has no mapping here,
+// so without a bind route this gateway could never continue it.
+func TestSessionPutBindsAnExistingConversation(t *testing.T) {
+	api := sessionTestServer(t)
+
+	rec := putSession(t, api, "dev-test-002", `{"conversation_id":"conv-from-m365"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	if got := api.ctxCache.Get(sessionKeyPrefix + "dev-test-002"); got != "conv-from-m365" {
+		t.Fatalf("stored conversation = %q, want conv-from-m365", got)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["id"] != "dev-test-002" || body["conversation_id"] != "conv-from-m365" {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+	if body["object"] != "session" {
+		t.Fatalf("object = %v, want session", body["object"])
+	}
+}
+
+// Rebinding is the point of the route, not an accident: the same session id
+// must be able to move to another conversation.
+func TestSessionPutReplacesAnExistingBinding(t *testing.T) {
+	api := sessionTestServer(t)
+	api.ctxCache.Set(sessionKeyPrefix+"dev-test-002", "conv-old")
+
+	if rec := putSession(t, api, "dev-test-002", `{"conversation_id":"conv-new"}`); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if got := api.ctxCache.Get(sessionKeyPrefix + "dev-test-002"); got != "conv-new" {
+		t.Fatalf("stored conversation = %q, want conv-new", got)
+	}
+}
+
+// An accepted empty binding would send an empty conversation id upstream on
+// every later turn, which silently starts a new conversation each time.
+func TestSessionPutRejectsABodyWithoutAConversation(t *testing.T) {
+	api := sessionTestServer(t)
+	for name, body := range map[string]string{
+		"empty string": `{"conversation_id":""}`,
+		"only spaces":  `{"conversation_id":"   "}`,
+		"absent field": `{}`,
+		"not json":     `conv-1`,
+	} {
+		rec := putSession(t, api, "dev-test-002", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400, body %s", name, rec.Code, rec.Body.String())
+		}
+		if got := api.ctxCache.Get(sessionKeyPrefix + "dev-test-002"); got != "" {
+			t.Errorf("%s: a rejected request still wrote %q", name, got)
+		}
+	}
+}
+
+func TestSessionPutRejectsAnOversizedConversationID(t *testing.T) {
+	api := sessionTestServer(t)
+	body := `{"conversation_id":"` + strings.Repeat("a", maxConversationIDLength+1) + `"}`
+
+	rec := putSession(t, api, "dev-test-002", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if got := api.ctxCache.Get(sessionKeyPrefix + "dev-test-002"); got != "" {
+		t.Fatalf("an oversized id was stored: %q", got)
 	}
 }
 

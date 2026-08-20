@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -61,11 +62,55 @@ func (api *APIServer) handleSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		api.sendJSON(w, http.StatusOK, sessionJSON(record))
+	case http.MethodPut:
+		api.bindSession(w, r, sessionID)
 	case http.MethodDelete:
 		api.deleteSession(w, r, sessionID)
 	default:
 		api.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}
+}
+
+// maxConversationIDLength bounds the value a caller may bind. Real ids are far
+// shorter, and the value travels upstream on every later turn.
+const maxConversationIDLength = 256
+
+// bindSession points a session id at a conversation that already exists.
+//
+// The chat path resolves a session id to a conversation id, but nothing wrote
+// that mapping except a completed turn. A conversation started somewhere else,
+// in the M365 web or mobile client, therefore could not be continued through
+// this gateway at all. Binding it here is the only way to reach it.
+func (api *APIServer) bindSession(w http.ResponseWriter, r *http.Request, sessionID string) {
+	var req struct {
+		ConversationID string `json:"conversation_id"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	conversationID := strings.TrimSpace(req.ConversationID)
+	if conversationID == "" {
+		api.sendError(w, http.StatusBadRequest, "conversation_id is required")
+		return
+	}
+	if len(conversationID) > maxConversationIDLength {
+		api.sendError(w, http.StatusBadRequest, "conversation_id is too long")
+		return
+	}
+
+	api.ctxCache.Set(sessionKeyPrefix+sessionID, conversationID)
+	logging.Infof("Bound session %s to conversation %s", sessionID, conversationID)
+
+	record, ok := api.ctxCache.Lookup(sessionID)
+	if !ok {
+		// Set writes both the in-memory entry and the file, so a miss here
+		// means the write did not survive and the caller must not be told the
+		// binding holds.
+		api.sendError(w, http.StatusInternalServerError, "Failed to store the session mapping")
+		return
+	}
+	api.sendJSON(w, http.StatusOK, sessionJSON(record))
 }
 
 // deleteSession clears a mapping so the next turn starts a new conversation.
