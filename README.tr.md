@@ -34,6 +34,7 @@ Uygulamanız -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Bac
 - API anahtarı kimlik doğrulama (`M365_API_KEYS` / `M365_API_KEY`)
 - Tüm uç noktalarda max_tokens uygulaması (tiktoken BPE)
 - Etkileşimli kullanım için CLI arayüzü
+- Binary'ye gömülü tarayıcı arayüzü (konuşma listesi, akışlı sohbet, model seçimi)
 - Alt komut yönlendirmeli tek binary
 
 ## Kurulum
@@ -492,6 +493,43 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)
 ```
 
+## Tarayıcı Arayüzü
+
+Sunucunun kök adresini tarayıcıda açın (varsayılan Docker kurulumunda `http://localhost:8230/`). Arayüz binary'ye gömülüdür, bu yüzden ayrı bir asset dizini ve çalıştırılacak ikinci bir süreç yoktur.
+
+Sol tarafta konuşmaları listeler, cevapları geldikçe akıtır, `GET /v1/models` listesinden model seçtirir, konuşma oluşturur, yeniden adlandırır ve siler.
+
+Sayfanın kendisi API anahtarı olmadan sunulur, çünkü anahtarı soran ekran anahtar isteyemez. Yaptığı tüm veri çağrıları diğer istemcilerle aynı `withAuth` middleware'inden geçer. Anahtar cookie'de saklanır ve `Authorization` başlığıyla gönderilir; tarayıcının kendiliğinden eklediği bir cookie olarak asla gitmez, bu yüzden siteler arası bir istek onu taşıyamaz.
+
+### Sidebar neyi gösterir
+
+İki kaynak birleştirilir. `GET /v1/conversations` isimleri verir ve M365 web cookie'leri gerektirir; `GET /v1/sessions` konuşmayı devam ettirilebilir kılan oturum ID'lerini verir. İkisinde de bulunan bir konuşma tek satırdır.
+
+Cookie yoksa ilk çağrı başarısız olur, sidebar yalnızca yerel eşlemelere düşer ve bunu yazar. Sadece M365'in bildiği bir konuşma işaretlenir ve açtığınız anda ona bir oturum ID'si bağlanır; başka bir istemcide başlamış bir konuşmayı burada devam ettirilebilir kılan budur.
+
+### Transcript'ler
+
+Backend geçmişi conversation ID ile takip eder ve asla geri göndermez, bu yüzden gateway taşıdığı turların kendi kaydını tutar: oturum başına bir dosya, `data/transcripts` altında. Mesaj içeriğinin diske ulaştığı tek yer burasıdır. Oturum başına kayıt, mesaj başına bayt ve depodaki dosya sayısı sınırlıdır.
+
+Bu gateway dışında başlamış bir konuşmanın kaydı yoktur; açtığınızda geçmişi boş görünür ve arayüz bunu söyler, uydurmaz. Bir oturumu silmek transcript'ini de siler; hiçbir şey üretmeyen bir tur da siler, çünkü ikisi de o ID altında yeni bir konuşma başlatır.
+
+### Yapılandırma
+
+| Değişken              | Varsayılan | Açıklama                                                                                        |
+|-----------------------|------------|--------------------------------------------------------------------------------------------------|
+| `M365_ENABLE_WEB_UI`  | `1`        | Arayüzü `/` altında sunar ve transcript kaydeder. `0`, `false`, `off` veya `no` ikisini de kapatır. |
+
+Kapatmak arayüzü kaldırır (`/` 404 döner) ve kaydı durdurur; yalnızca proxy olarak çalışan bir kurulumun istediği budur. Bu durumda `GET /v1/sessions/{id}/messages` `404 transcripts_disabled` döndürür.
+
+### Arayüzü derlemek
+
+Kaynaklar `web/` altında, build çıktısı `pkg/webui/dist` altında commit'lidir, çünkü `go:embed` onu derleme sırasında okur. `web/` altında bir şey değiştirdikten sonra yeniden derleyin:
+
+```bash
+make ui      # node container'ında derler ve çıktıyı pkg/webui/dist'e kopyalar
+make up      # imajı yeniden kurar ve container'ı yeniden başlatır
+```
+
 ## API Uç Noktaları
 
 | Uç Nokta                         | Açıklama                                                |
@@ -513,10 +551,17 @@ print(resp.choices[0].message.content)
 | `GET /v1/quota`                  | Son gözlenen M365 konuşma mesaj kotası                  |
 | `GET /v1/sessions`               | Oturum-sohbet eşlemelerini listeler                     |
 | `GET /v1/sessions/{id}`          | Bir oturumun sohbet ID'sini okur                        |
+| `PUT /v1/sessions/{id}`          | Oturumu var olan bir sohbete bağlar                     |
+| `GET /v1/sessions/{id}/messages` | Oturumun kayıtlı turlarını okur                         |
 | `DELETE /v1/sessions/{id}`       | Sohbeti siler ve eşlemeyi temizler                      |
 | `POST /mcp`                      | Model Context Protocol sunucusu (JSON-RPC 2.0)          |
 | `GET /v1/health`                 | Codex için erişilebilirlik probe'u (kimlik doğrulama gerekmez) |
 | `GET /health`                    | Sağlık kontrolü (kimlik doğrulama gerektirmez)          |
+| `GET /`                          | Tarayıcı arayüzü (sayfa için kimlik doğrulama gerekmez) |
+
+`PUT /v1/sessions/{id}` gövdesinde `{"conversation_id": "..."}` alır ve oturumu var olan bir sohbete yöneltir. Sohbet yolu yalnızca oturumdan sohbete çözümleme yapar, bu yüzden bu olmadan M365 web veya mobil istemcisinde başlamış bir sohbet gateway üzerinden devam ettirilemez. Var olan bir oturumu yeniden bağlamak serbesttir.
+
+`GET /v1/sessions/{id}/messages` gateway'in o oturum için kaydettiklerini döndürür. `M365_ENABLE_WEB_UI` kapalıyken `404 transcripts_disabled` döner, başka bir yerde başlamış bir sohbet için boş liste döner.
 
 ## Hata Yanıtları
 

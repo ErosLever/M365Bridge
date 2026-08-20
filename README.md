@@ -34,6 +34,7 @@ Your App -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Backend
 - API key authentication (`M365_API_KEYS` / `M365_API_KEY`)
 - max_tokens enforcement across all endpoints (tiktoken BPE)
 - CLI interface for interactive use
+- Browser interface compiled into the binary (conversation list, streaming chat, model picker)
 - Single binary with subcommand routing
 
 ## Installation
@@ -492,6 +493,43 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)
 ```
 
+## Web Interface
+
+Open the server's root URL in a browser (`http://localhost:8230/` under the shipped Docker setup). The interface is compiled into the binary, so there is no separate asset directory and no second process to run.
+
+It lists conversations in a sidebar, streams answers as they arrive, lets you pick a model from `GET /v1/models`, and creates, renames and deletes conversations.
+
+The page itself is served without an API key, because the screen that asks for the key cannot require one. Every data call it makes goes through the same `withAuth` middleware as any other client. The key is stored in a cookie and sent in the `Authorization` header, never as a cookie the browser attaches on its own, so no cross-site request can carry it.
+
+### What the sidebar shows
+
+Two sources are merged. `GET /v1/conversations` supplies the names and needs M365 web cookies; `GET /v1/sessions` supplies the session ids that make a conversation continuable. A conversation present in both is one row.
+
+Without cookies the first call fails, the sidebar falls back to the local mappings alone and says so. A conversation that only M365 knows is marked and gets a session id bound to it the moment you open it, which is what makes a conversation started on another client continuable here.
+
+### Transcripts
+
+The backend tracks history by conversation ID and never replays it, so the gateway keeps its own record of the turns it carried, one file per session under `data/transcripts`. This is the only place message content reaches disk. Entries per session, bytes per message and files in the store are all bounded.
+
+A conversation started outside this gateway has no record, so its history is empty when you open it and the interface says so rather than inventing one. Deleting a session deletes its transcript, and so does a turn that produced nothing, since both start a new conversation under that id.
+
+### Configuration
+
+| Variable              | Default | Description                                                                                       |
+|-----------------------|---------|---------------------------------------------------------------------------------------------------|
+| `M365_ENABLE_WEB_UI`  | `1`     | Serves the interface at `/` and records transcripts. `0`, `false`, `off` or `no` disables both.    |
+
+Turning it off removes the interface (`/` returns 404) and stops the recording, which is what a deployment that only proxies wants. `GET /v1/sessions/{id}/messages` then answers `404 transcripts_disabled`.
+
+### Building the interface
+
+The sources live in `web/` and the build output is committed at `pkg/webui/dist`, because `go:embed` reads it at compile time. Rebuild it after changing anything under `web/`:
+
+```bash
+make ui      # builds in a node container and copies the output into pkg/webui/dist
+make up      # rebuilds the image and restarts the container
+```
+
 ## API Endpoints
 
 | Endpoint                         | Description                                            |
@@ -513,10 +551,17 @@ print(resp.choices[0].message.content)
 | `GET /v1/quota`                  | Last observed M365 conversation message quota          |
 | `GET /v1/sessions`               | List the session to conversation mappings              |
 | `GET /v1/sessions/{id}`          | Read one session's conversation ID                     |
+| `PUT /v1/sessions/{id}`          | Bind a session to an existing conversation             |
+| `GET /v1/sessions/{id}/messages` | Read the recorded turns of a session                   |
 | `DELETE /v1/sessions/{id}`       | Delete the conversation and clear the mapping          |
 | `POST /mcp`                      | Model Context Protocol server (JSON-RPC 2.0)           |
 | `GET /v1/health`                 | Reachability probe for Codex (no auth required)        |
 | `GET /health`                    | Health check (no auth required)                        |
+| `GET /`                          | Browser interface (no auth required for the page)      |
+
+`PUT /v1/sessions/{id}` takes `{"conversation_id": "..."}` and points a session at a conversation that already exists. The chat path only ever resolves a session to a conversation, so without this a conversation started in the M365 web or mobile client could not be continued through the gateway. Rebinding an existing session is allowed.
+
+`GET /v1/sessions/{id}/messages` returns what the gateway recorded for that session. It answers `404 transcripts_disabled` when `M365_ENABLE_WEB_UI` is off, and an empty list for a conversation that was started elsewhere.
 
 ## Error Responses
 
