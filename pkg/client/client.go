@@ -545,6 +545,9 @@ func (c *M365Client) ChatConversationStreamGenContext(
 		// it, which is why Reset appears alongside WriteString.
 		var accText strings.Builder
 		var accThinking strings.Builder
+		// citations holds back a citation run that has not finished arriving,
+		// because a delta already emitted cannot be retracted.
+		var citations citationFilter
 		var finalConvID string
 		var throttling *ThrottlingInfo
 
@@ -677,6 +680,11 @@ func (c *M365Client) ChatConversationStreamGenContext(
 											if lastMsg, ok := msgs[len(msgs)-1].(map[string]any); ok {
 												if carriesAnswerText(lastMsg) {
 													if newText, ok := lastMsg["text"].(string); ok && newText != "" {
+														// The snapshot restates the whole answer, so
+														// it is stripped whole rather than through the
+														// streaming filter, and stays comparable with
+														// the accumulation that was already filtered.
+														newText = stripCitations(newText)
 														if chunk, advanced := snapshotDelta(accText.String(), newText); advanced {
 															accText.Reset()
 															accText.WriteString(newText)
@@ -692,9 +700,14 @@ func (c *M365Client) ChatConversationStreamGenContext(
 										}
 									}
 									if writeAtCursor, ok := argMap["writeAtCursor"].(string); ok {
-										accText.WriteString(writeAtCursor)
-										if !emit(StreamChunk{Text: writeAtCursor, IsFinal: false}) {
-											return
+										// A citation run can straddle two deltas, so the
+										// filter holds the tail back rather than emitting
+										// text it would have to retract.
+										if emitText := citations.push(writeAtCursor); emitText != "" {
+											accText.WriteString(emitText)
+											if !emit(StreamChunk{Text: emitText, IsFinal: false}) {
+												return
+											}
 										}
 									}
 								}
@@ -722,6 +735,12 @@ func (c *M365Client) ChatConversationStreamGenContext(
 						}
 					}
 				} else if msgType, ok := data["type"].(float64); ok && int(msgType) == 3 {
+					// A run still held here never closed, so it was a truncated
+					// citation marker rather than answer text. Report the drop
+					// instead of letting it vanish silently.
+					if held := citations.flush(); held != "" {
+						logging.Warnf("ChatConversationStreamGen: dropped %d bytes of an unterminated citation marker", len(held))
+					}
 					if emptyTurn(accText.String(), toolCalls) {
 						logging.Errorf("ChatConversationStreamGen: %v (thinking=%d bytes)", ErrEmptyTurn, accThinking.Len())
 						emit(StreamChunk{Error: ErrEmptyTurn})
@@ -790,7 +809,10 @@ func (c *M365Client) sendRecv(conn *websocket.Conn, payload string) (string, err
 								if msgs, ok := argMap["messages"].([]any); ok && len(msgs) > 0 {
 									if lastMsg, ok := msgs[len(msgs)-1].(map[string]any); ok && carriesAnswerText(lastMsg) {
 										if text, ok := lastMsg["text"].(string); ok {
-											fullText = text
+											// This path replaces rather than
+											// accumulates, so the whole text is
+											// stripped each time.
+											fullText = stripCitations(text)
 										}
 									}
 								}
