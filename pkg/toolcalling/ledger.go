@@ -128,9 +128,13 @@ func normalizeFailure(result string) string {
 	return normalized
 }
 
-// callSignature identifies a call by what it does, not by the id the client
+// CallSignature identifies a call by what it does, not by the id the client
 // assigned it. Two turns of the same loop use different ids for the same work.
-func callSignature(name, arguments string) string {
+//
+// Every duplicate check in this project compares signatures, so that one answer
+// to "is this the same call" serves the client-driven ledger and the
+// request-local loop alike.
+func CallSignature(name, arguments string) string {
 	return name + "\x00" + CanonicalArguments(arguments)
 }
 
@@ -167,7 +171,7 @@ func BuildLedger(calls []LedgerCall, results []LedgerResult, rounds int) Ledger 
 		evidence.Result = compactResult(result)
 		ledger.Completed = append(ledger.Completed, evidence)
 
-		signature := callSignature(call.Name, call.Arguments)
+		signature := CallSignature(call.Name, call.Arguments)
 		if seenCall[signature] {
 			ledger.RepeatedCall = true
 			if ledger.RepetitionSignature == "" {
@@ -193,10 +197,10 @@ func BuildLedger(calls []LedgerCall, results []LedgerResult, rounds int) Ledger 
 // CompletedCount reports how many times a call with this name and these
 // arguments already has a result in the history.
 func (l Ledger) CompletedCount(name, arguments string) int {
-	signature := callSignature(name, arguments)
+	signature := CallSignature(name, arguments)
 	count := 0
 	for _, evidence := range l.Completed {
-		if callSignature(evidence.Name, evidence.Arguments) == signature {
+		if CallSignature(evidence.Name, evidence.Arguments) == signature {
 			count++
 		}
 	}

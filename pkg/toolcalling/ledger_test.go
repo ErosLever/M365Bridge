@@ -302,3 +302,42 @@ func TestEvidenceNoteStaysBoundedForAHugeResult(t *testing.T) {
 		t.Fatalf("note does not report the truncation: %.200q", note)
 	}
 }
+
+// The request-local coding-tool loop and the client-driven ledger both ask "is
+// this the same call", so they share one answer. A model that re-emits a call
+// with its JSON keys in another order is repeating it.
+func TestCallSignatureIgnoresKeyOrderAndWhitespace(t *testing.T) {
+	same := []string{
+		`{"path":"a.go","limit":10}`,
+		`{"limit":10,"path":"a.go"}`,
+		"{ \"path\" : \"a.go\" , \"limit\" : 10 }",
+		"\n\t{\"limit\":10,\"path\":\"a.go\"}\n",
+	}
+	want := CallSignature("read_file", same[0])
+	for _, arguments := range same[1:] {
+		if got := CallSignature("read_file", arguments); got != want {
+			t.Errorf("CallSignature(%q) = %q, want %q", arguments, got, want)
+		}
+	}
+}
+
+func TestCallSignatureSeparatesDifferentCalls(t *testing.T) {
+	base := CallSignature("read_file", `{"path":"a.go"}`)
+	for _, other := range []struct{ name, arguments string }{
+		{"read_file", `{"path":"b.go"}`},
+		{"write_file", `{"path":"a.go"}`},
+		{"read_file", ``},
+	} {
+		if got := CallSignature(other.name, other.arguments); got == base {
+			t.Errorf("%s/%s collides with the base signature", other.name, other.arguments)
+		}
+	}
+}
+
+// A non-JSON argument string is still a stable identity, so it must not collapse
+// every such call into one signature.
+func TestCallSignatureKeepsNonJSONArgumentsDistinct(t *testing.T) {
+	if CallSignature("shell_command", "ls -la") == CallSignature("shell_command", "rm -rf /") {
+		t.Error("two different non-JSON argument strings share a signature")
+	}
+}

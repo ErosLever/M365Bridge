@@ -1344,7 +1344,10 @@ func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, me
 		}
 		var resultParts []string
 		for _, call := range localCalls {
-			key := call.Name + "\x00" + string(call.Arguments)
+			// The arguments are normalized before they identify a call, because
+			// a model that re-emits the same call with its JSON keys in another
+			// order is repeating it, not asking something new.
+			key := toolcalling.CallSignature(call.Name, string(call.Arguments))
 			if seen[key] {
 				return toolLoopResult{}, fmt.Errorf("duplicate coding tool call %q", call.Name)
 			}
