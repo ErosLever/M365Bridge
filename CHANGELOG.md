@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.4.4] - 2026-08-20
+
+### Added
+- Keep a Responses turn inside an unfinished Codex goal as `commentary` rather than `final_answer`, so the client continues the turn until an `update_goal` output reports `complete` or `blocked`
+
+### Fixed
+- Stream a custom tool's input over `response.custom_tool_call_input.delta` and `.done` instead of `response.function_call_arguments`, and name it by the item id the surrounding `output_item` events announced
+- Carry an `input_image` block through the Responses input converter; the image was flattened away before the upload step the path already had
+- Read a Responses `input_image` url as the bare string the API sends, and accept the `input_text` and `output_text` block names
+
+### Changed
+- Keep the `custom` declaration when one tool name is declared both freeform and as a function, because a freeform body is not the JSON a client parses in function-call arguments
+
 ## [1.4.3] - 2026-08-20
 
 ### Changed
