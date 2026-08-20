@@ -193,20 +193,17 @@ window.fetch = async function(...args) {
       } else if (args[0] instanceof Request) {
         bodyStr = await args[0].clone().text();
       }
-      const isTarget = new URLSearchParams(bodyStr).get('client_id') === targetClientID;
+      // The sign-in exchange sends the target as brk_client_id and puts a
+      // broker client_id in its place, so both are accepted.
+      const params = new URLSearchParams(bodyStr);
+      const isTarget = params.get('client_id') === targetClientID
+                    || params.get('brk_client_id') === targetClientID;
       if (isTarget) {
         const clone = resp.clone();
         const data = await clone.json();
         if (data.refresh_token) {
           captured = true;
           const result = {oid, tenant, refresh_token: data.refresh_token};
-          try {
-            if (window.cookieStore) {
-              const cookies = await cookieStore.getAll();
-              const sso = cookies.filter(c => c.name === 'ESTSAUTH' || c.name === 'ESTSAUTHPERSISTENT');
-              if (sso.length > 0) result.sso_cookies = sso.map(c => ({name: c.name, value: c.value}));
-            }
-          } catch(e) {}
           console.log('===== COPY THE COMPLETE JSON BELOW =====');
           console.log(JSON.stringify(result, null, 2));
         }
@@ -245,34 +242,31 @@ if (msal) {
       });
     } catch(e) {}
   }
-  return 'Token refresh triggered. Copy the JSON output above.';
+  return 'Token refresh triggered. If no JSON appeared, click a link in the left navigation.';
 }
-return 'Interceptor installed but MSAL instance not found. Navigate within m365.cloud.microsoft to trigger a token refresh, then copy the JSON output.';
+return 'Interceptor installed. Click a link in the left navigation (for example Search) to trigger a token refresh, then copy the JSON output.';
 })()
 ```
 
 </details>
 
-4. The console will output: `===== COPY THE COMPLETE JSON BELOW =====`
-5. Copy the JSON output. It will look like this:
+4. **Click a link in the left navigation** (for example **Search**). The snippet only listens for a token refresh; it can no longer force one, because the page no longer exposes its MSAL instance to the console. Navigating inside the page triggers the refresh.
+5. The console will then output: `===== COPY THE COMPLETE JSON BELOW =====`
+6. Copy the JSON output. It will look like this:
 
 ```json
 {
   "oid": "your-oid",
   "tenant": "your-tenant",
-  "refresh_token": "your-refresh-token",
-  "sso_cookies": [
-    {"name": "ESTSAUTH", "value": "..."},
-    {"name": "ESTSAUTHPERSISTENT", "value": "..."}
-  ]
+  "refresh_token": "your-refresh-token"
 }
 ```
 
-> **Note:** SSO cookies are captured automatically if the `cookieStore` API is available (Chrome, Edge). If `sso_cookies` is missing from the output, see Step 4 below.
+> **Note:** The snippet cannot read the SSO cookies. They live on `login.microsoftonline.com` rather than on this page, and they are `HttpOnly`, so no script on any page can read them. Step 4 collects them by hand.
 
-#### Step 4 (Optional): Get SSO cookies manually
+#### Step 4 (Recommended): Get SSO cookies
 
-If the script above did not capture SSO cookies automatically (e.g. Firefox, or third-party cookie restrictions), capture them manually:
+Without these two cookies the setup stops working after 24 hours. Collect them by hand:
 
 Microsoft SPA refresh tokens expire after **24 hours**. Without SSO cookies, you must repeat Step 3 every 24 hours. SSO cookies enable automatic renewal and last weeks/months.
 

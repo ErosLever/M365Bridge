@@ -193,20 +193,17 @@ window.fetch = async function(...args) {
       } else if (args[0] instanceof Request) {
         bodyStr = await args[0].clone().text();
       }
-      const isTarget = new URLSearchParams(bodyStr).get('client_id') === targetClientID;
+      // The sign-in exchange sends the target as brk_client_id and puts a
+      // broker client_id in its place, so both are accepted.
+      const params = new URLSearchParams(bodyStr);
+      const isTarget = params.get('client_id') === targetClientID
+                    || params.get('brk_client_id') === targetClientID;
       if (isTarget) {
         const clone = resp.clone();
         const data = await clone.json();
         if (data.refresh_token) {
           captured = true;
           const result = {oid, tenant, refresh_token: data.refresh_token};
-          try {
-            if (window.cookieStore) {
-              const cookies = await cookieStore.getAll();
-              const sso = cookies.filter(c => c.name === 'ESTSAUTH' || c.name === 'ESTSAUTHPERSISTENT');
-              if (sso.length > 0) result.sso_cookies = sso.map(c => ({name: c.name, value: c.value}));
-            }
-          } catch(e) {}
           console.log('===== COPY THE COMPLETE JSON BELOW =====');
           console.log(JSON.stringify(result, null, 2));
         }
@@ -245,34 +242,31 @@ if (msal) {
       });
     } catch(e) {}
   }
-  return 'Token refresh triggered. Copy the JSON output above.';
+  return 'Token refresh triggered. If no JSON appeared, click a link in the left navigation.';
 }
-return 'Interceptor installed but MSAL instance not found. Navigate within m365.cloud.microsoft to trigger a token refresh, then copy the JSON output.';
+return 'Interceptor installed. Click a link in the left navigation (for example Search) to trigger a token refresh, then copy the JSON output.';
 })()
 ```
 
 </details>
 
-4. Konsolda şu çıktıyı göreceksiniz: `===== COPY THE COMPLETE JSON BELOW =====`
-5. JSON çıktısını kopyalayın. Şu formatta olacaktır:
+4. **Sol menüde bir bağlantıya tıklayın** (örneğin **Search**). Snippet yalnızca token yenilemesini dinler, kendisi tetikleyemez; sayfa MSAL instance'ını artık konsola açmıyor. Sayfa içinde gezinmek yenilemeyi tetikler.
+5. Konsolda şu çıktıyı göreceksiniz: `===== COPY THE COMPLETE JSON BELOW =====`
+6. JSON çıktısını kopyalayın. Şu formatta olacaktır:
 
 ```json
 {
   "oid": "sizin-oid",
   "tenant": "sizin-tenant",
-  "refresh_token": "sizin-refresh-token",
-  "sso_cookies": [
-    {"name": "ESTSAUTH", "value": "..."},
-    {"name": "ESTSAUTHPERSISTENT", "value": "..."}
-  ]
+  "refresh_token": "sizin-refresh-token"
 }
 ```
 
-> **Not:** `cookieStore` API'si mevcut ise (Chrome, Edge) SSO cookie'leri otomatik yakalanır. Çıktıda `sso_cookies` yoksa aşağıdaki Adım 4'e bakın.
+> **Not:** Snippet SSO cookie'lerini okuyamaz. Bu cookie'ler bu sayfada değil `login.microsoftonline.com` üzerinde bulunur ve `HttpOnly` işaretlidir, yani hiçbir sayfadaki hiçbir script onları okuyamaz. Adım 4 onları el ile toplar.
 
-#### Adım 4 (Opsiyonel): SSO cookie'leri manuel olarak alın
+#### Adım 4 (Önerilir): SSO cookie'leri alın
 
-Yukarıdaki script SSO cookie'leri otomatik yakalayamadıysa (örn. Firefox veya üçüncü taraf cookie kısıtlamaları), manuel olarak yakalayın:
+Bu iki cookie olmadan kurulum 24 saat sonra çalışmayı bırakır. Onları el ile toplayın:
 
 Microsoft SPA refresh token'ları **24 saat** sonra süresi dolar. SSO cookie'leri olmadan, 24 saatte bir Adım 3'ü tekrarlamanız gerekir. SSO cookie'leri otomatik yenilemeyi sağlar ve haftalarca/aylarca dayanır.
 
