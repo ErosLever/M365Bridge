@@ -7,26 +7,40 @@ import (
 )
 
 // cutAtStopSequence returns text ending just before the earliest occurrence of
-// any stop sequence, and reports whether one was found. The sequence itself is
-// removed, which is what both provider protocols specify: the caller asked the
-// completion to end there, so the marker is not part of the answer.
+// any stop sequence, together with the sequence that matched. The sequence
+// itself is removed, which is what both provider protocols specify: the caller
+// asked the completion to end there, so the marker is not part of the answer.
+// The second result is empty when no sequence was found, which is the test for
+// whether one fired.
 //
 // An empty sequence is ignored rather than matching at offset zero, which would
 // blank every completion.
-func cutAtStopSequence(text string, stopSequences []string) (string, bool) {
+func cutAtStopSequence(text string, stopSequences []string) (string, string) {
 	cut := -1
+	matched := ""
 	for _, sequence := range stopSequences {
 		if sequence == "" {
 			continue
 		}
 		if i := strings.Index(text, sequence); i >= 0 && (cut < 0 || i < cut) {
-			cut = i
+			cut, matched = i, sequence
 		}
 	}
 	if cut < 0 {
-		return text, false
+		return text, ""
 	}
-	return text[:cut], true
+	return text[:cut], matched
+}
+
+// nullableString reports a matched stop sequence as JSON, using null rather
+// than an empty string when nothing matched. Both provider protocols document
+// the field as nullable, and a client that tests for null would read "" as a
+// sequence that fired.
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 // stopSequenceWriter releases streamed text only once it can no longer become
@@ -40,7 +54,7 @@ type stopSequenceWriter struct {
 	sequences []string
 	holdBack  int
 	pending   string
-	stopped   bool
+	match     string
 }
 
 // newStopSequenceWriter builds a writer for the request's stop sequences. With
@@ -62,16 +76,22 @@ func (s *stopSequenceWriter) active() bool {
 	return len(s.sequences) > 0
 }
 
+// matched returns the stop sequence that ended the completion, or an empty
+// string when none did.
+func (s *stopSequenceWriter) matched() string {
+	return s.match
+}
+
 // stoppedEarly reports whether a stop sequence ended the completion.
 func (s *stopSequenceWriter) stoppedEarly() bool {
-	return s.stopped
+	return s.match != ""
 }
 
 // next takes the next upstream chunk and returns the text that is safe to emit
 // now. The second result reports that a stop sequence was reached, after which
 // the caller stops reading and emits nothing more.
 func (s *stopSequenceWriter) next(chunk string) (string, bool) {
-	if s.stopped {
+	if s.stoppedEarly() {
 		return "", true
 	}
 	if !s.active() {
@@ -79,8 +99,8 @@ func (s *stopSequenceWriter) next(chunk string) (string, bool) {
 	}
 
 	s.pending += chunk
-	if cut, found := cutAtStopSequence(s.pending, s.sequences); found {
-		s.stopped = true
+	if cut, matched := cutAtStopSequence(s.pending, s.sequences); matched != "" {
+		s.match = matched
 		s.pending = ""
 		return cut, true
 	}
@@ -100,7 +120,7 @@ func (s *stopSequenceWriter) next(chunk string) (string, bool) {
 // flush returns the held-back tail once the upstream ends without a stop
 // sequence.
 func (s *stopSequenceWriter) flush() string {
-	if s.stopped {
+	if s.stoppedEarly() {
 		return ""
 	}
 	tail := s.pending

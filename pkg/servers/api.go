@@ -1906,7 +1906,8 @@ func (api *APIServer) nonStreamAnthropicComplete(w http.ResponseWriter, messages
 	// stop_sequence while still returning the text past the sequence would
 	// contradict the response's own stop_reason.
 	stopReason := "end_turn"
-	if cut, found := cutAtStopSequence(respText, stopSequences); found {
+	cut, matchedStop := cutAtStopSequence(respText, stopSequences)
+	if matchedStop != "" {
 		respText = cut
 		stopReason = "stop_sequence"
 	}
@@ -1926,9 +1927,11 @@ func (api *APIServer) nonStreamAnthropicComplete(w http.ResponseWriter, messages
 		"completion":  respText,
 		"stop_reason": stopReason,
 		"model":       model,
-		"stop":        nil,
-		"log_id":      fmt.Sprintf("cmpl_%s", uuid.New().String()),
-		"usage":       anthropicUsage(messages, nil, "", respText, thinking),
+		// The Complete format names the sequence that ended the answer here.
+		// It stays null when the answer ended on its own.
+		"stop":   nullableString(matchedStop),
+		"log_id": fmt.Sprintf("cmpl_%s", uuid.New().String()),
+		"usage":  anthropicUsage(messages, nil, "", respText, thinking),
 	}
 
 	api.sendJSON(w, http.StatusOK, response)
@@ -2064,7 +2067,7 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 		"completion":  "",
 		"stop_reason": stopReason,
 		"model":       model,
-		"stop":        nil,
+		"stop":        nullableString(stopWriter.matched()),
 		"log_id":      logID,
 		// The intermediate events carry deltas, so usage belongs on the last
 		// one. The legacy Complete format defines no such field; it is reported

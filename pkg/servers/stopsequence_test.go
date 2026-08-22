@@ -7,10 +7,10 @@ import (
 )
 
 func TestCutAtStopSequenceRemovesTheSequenceAndWhatFollows(t *testing.T) {
-	got, found := cutAtStopSequence("answer\n\nHuman: next question", []string{"\n\nHuman:"})
+	got, matched := cutAtStopSequence("answer\n\nHuman: next question", []string{"\n\nHuman:"})
 
-	if !found {
-		t.Fatal("the stop sequence was not found")
+	if matched != "\n\nHuman:" {
+		t.Fatalf("matched = %q, want the sequence that fired", matched)
 	}
 	if got != "answer" {
 		t.Errorf("text = %q, want the text before the sequence", got)
@@ -20,10 +20,10 @@ func TestCutAtStopSequenceRemovesTheSequenceAndWhatFollows(t *testing.T) {
 // With several sequences the completion ends at whichever arrives first, not
 // at whichever was listed first.
 func TestCutAtStopSequenceUsesTheEarliestMatch(t *testing.T) {
-	got, found := cutAtStopSequence("one END two STOP three", []string{"STOP", "END"})
+	got, matched := cutAtStopSequence("one END two STOP three", []string{"STOP", "END"})
 
-	if !found {
-		t.Fatal("the stop sequence was not found")
+	if matched != "END" {
+		t.Fatalf("matched = %q, want the earliest sequence, not the first listed", matched)
 	}
 	if got != "one " {
 		t.Errorf("text = %q, want the text before the earliest sequence", got)
@@ -34,19 +34,19 @@ func TestCutAtStopSequenceLeavesTextWithoutAMatchAlone(t *testing.T) {
 	const text = "a complete answer"
 
 	for _, sequences := range [][]string{nil, {}, {"STOP"}, {""}} {
-		got, found := cutAtStopSequence(text, sequences)
-		if found || got != text {
-			t.Errorf("sequences %#v gave (%q, %v), want the text unchanged", sequences, got, found)
+		got, matched := cutAtStopSequence(text, sequences)
+		if matched != "" || got != text {
+			t.Errorf("sequences %#v gave (%q, %q), want the text unchanged", sequences, got, matched)
 		}
 	}
 }
 
 // An empty sequence would match at offset zero and blank every completion.
 func TestCutAtStopSequenceIgnoresAnEmptySequence(t *testing.T) {
-	got, found := cutAtStopSequence("hello STOP world", []string{"", "STOP"})
+	got, matched := cutAtStopSequence("hello STOP world", []string{"", "STOP"})
 
-	if !found {
-		t.Fatal("the real sequence was not found")
+	if matched != "STOP" {
+		t.Fatalf("matched = %q, want the real sequence", matched)
 	}
 	if got != "hello " {
 		t.Errorf("text = %q, want the text before the real sequence", got)
@@ -77,8 +77,31 @@ func TestStopSequenceWriterHoldsBackASplitSequence(t *testing.T) {
 	if got != "answer" {
 		t.Errorf("emitted %q, want only the text before the sequence", got)
 	}
-	if !writer.stoppedEarly() {
-		t.Error("the writer did not report the stop sequence")
+	// The client is told which sequence ended the answer, not merely that one
+	// did, because a request may carry several.
+	if got := writer.matched(); got != "\n\nHuman:" {
+		t.Errorf("matched = %q, want the sequence that fired", got)
+	}
+}
+
+func TestStopSequenceWriterNamesNoSequenceWithoutAMatch(t *testing.T) {
+	writer := newStopSequenceWriter([]string{"STOP"})
+
+	drive(writer, "a complete answer")
+
+	if got := writer.matched(); got != "" {
+		t.Errorf("matched = %q, want no sequence", got)
+	}
+}
+
+// A client that tests the stop field for null would read an empty string as a
+// sequence that fired.
+func TestNullableStringReportsNothingAsNull(t *testing.T) {
+	if got := nullableString(""); got != nil {
+		t.Errorf("nullableString(\"\") = %#v, want nil", got)
+	}
+	if got := nullableString("STOP"); got != "STOP" {
+		t.Errorf("nullableString = %#v, want the sequence", got)
 	}
 }
 
