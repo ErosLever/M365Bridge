@@ -1902,12 +1902,13 @@ func (api *APIServer) nonStreamAnthropicComplete(w http.ResponseWriter, messages
 		return
 	}
 
+	// The completion ends where the caller said it ends. Reporting
+	// stop_sequence while still returning the text past the sequence would
+	// contradict the response's own stop_reason.
 	stopReason := "end_turn"
-	for _, s := range stopSequences {
-		if strings.Contains(respText, s) {
-			stopReason = "stop_sequence"
-			break
-		}
+	if cut, found := cutAtStopSequence(respText, stopSequences); found {
+		respText = cut
+		stopReason = "stop_sequence"
 	}
 
 	// Enforce max_tokens_to_sample on response text
@@ -1970,6 +1971,28 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 	var thinkingText strings.Builder
 	truncated := false
 
+	// A stop sequence can straddle two chunks, so the deltas pass through a
+	// writer that holds back the tail which could still complete one. Without
+	// it the first half of the sequence would already be on the wire by the
+	// time the completion is known to have ended.
+	stopWriter := newStopSequenceWriter(stopSequences)
+	sendCompletionDelta := func(text string) {
+		if text == "" {
+			return
+		}
+		fullTextBuilder.WriteString(text)
+		compData := map[string]any{
+			"type":        "completion",
+			"completion":  text,
+			"stop_reason": nil,
+			"model":       model,
+			"log_id":      logID,
+		}
+		compJSON, _ := json.Marshal(compData)
+		_, _ = fmt.Fprintf(w, "event: completion\ndata: %s\n\n", compJSON)
+		flusher.Flush()
+	}
+
 	var finalConvID string
 	var finalToolCalls []client.ToolCall
 	keepalive := time.NewTicker(sseKeepaliveInterval)
@@ -2014,30 +2037,22 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 			break
 		}
 
-		fullTextBuilder.WriteString(chunk.Text)
-
-		// Send completion event with delta text
-		compData := map[string]any{
-			"type":        "completion",
-			"completion":  chunk.Text,
-			"stop_reason": nil,
-			"model":       model,
-			"log_id":      logID,
-		}
-		compJSON, _ := json.Marshal(compData)
-		_, _ = fmt.Fprintf(w, "event: completion\ndata: %s\n\n", compJSON)
-		flusher.Flush()
+		// Once a stop sequence is reached the writer releases nothing more, but
+		// the loop keeps reading so the final frame still names the
+		// conversation this turn belongs to.
+		emit, _ := stopWriter.next(chunk.Text)
+		sendCompletionDelta(emit)
 	}
 	_ = finalToolCalls
+	// Whatever the writer held back belongs to the answer when no stop sequence
+	// ever arrived.
+	sendCompletionDelta(stopWriter.flush())
 	fullText := fullTextBuilder.String()
 
 	// Determine stop reason
 	stopReason := "end_turn"
-	for _, s := range stopSequences {
-		if strings.Contains(fullText, s) {
-			stopReason = "stop_sequence"
-			break
-		}
+	if stopWriter.stoppedEarly() {
+		stopReason = "stop_sequence"
 	}
 	if truncated {
 		stopReason = "max_tokens"
