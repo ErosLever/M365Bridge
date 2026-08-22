@@ -518,10 +518,7 @@ func (api *APIServer) handleV1Health(w http.ResponseWriter, r *http.Request) {
 		api.handleCORS(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	api.sendJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleModels handles model list requests.
@@ -3298,7 +3295,19 @@ func (api *APIServer) sendJSON(w http.ResponseWriter, statusCode int, data any) 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(statusCode)
 
-	_ = json.NewEncoder(w).Encode(data)
+	writeJSONBody(w, data)
+}
+
+// writeJSONBody encodes the body of a response whose status line has already
+// gone out.
+//
+// The status cannot be taken back at this point, so a failure is reported to
+// the log rather than to the client. Discarding it left a body that stops in
+// the middle of an object with nothing anywhere saying why.
+func writeJSONBody(w http.ResponseWriter, data any) {
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		logging.Errorf("response body encode failed: %v", err)
+	}
 }
 
 // sendError sends an error response.
@@ -4799,7 +4808,7 @@ func writeResponsesServerError(w http.ResponseWriter, stream bool, responseID, m
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(http.StatusBadGateway)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSONBody(w, map[string]any{
 		"error": map[string]any{
 			"message": message,
 			"type":    "server_error",
@@ -5616,7 +5625,7 @@ func (api *APIServer) respondResponsesProbe(w http.ResponseWriter, model string,
 
 	if !stream {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(response)
+		writeJSONBody(w, response)
 		return
 	}
 
