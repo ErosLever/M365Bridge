@@ -27,6 +27,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/atomicfile"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/auth"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/client"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/codingtools"
@@ -85,7 +86,7 @@ func NewContextCache(cacheDir string) *ContextCache {
 	return &ContextCache{
 		cacheDir:   cacheDir,
 		mem:        make(map[string]string),
-		writeFile:  os.WriteFile,
+		writeFile:  atomicfile.Write,
 		removeFile: os.Remove,
 	}
 }
@@ -156,7 +157,11 @@ func (cc *ContextCache) Set(key, convID string) {
 		ConversationID: convID,
 		UpdatedAt:      time.Now().Unix(),
 	})
-	_ = cc.writeFile(cc.path(key), data, 0600)
+	// The mapping stays in memory either way, but a failed write means the next
+	// process starts a new conversation for this session with no record of why.
+	if err := cc.writeFile(cc.path(key), data, 0600); err != nil {
+		logging.Errorf("context cache: cannot persist the mapping for a session: %v", err)
+	}
 }
 
 // List returns every mapping the cache dir holds, newest first, together with

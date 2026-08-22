@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/atomicfile"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/auth"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/crypto"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/models"
@@ -315,7 +316,7 @@ func verifyToken(tenant, oid, refreshToken string) error {
 		return fmt.Errorf("failed to encrypt token: %w", err)
 	}
 
-	if err := os.WriteFile(defaultRefreshTokenFile, []byte(encryptedToken), 0600); err != nil {
+	if err := atomicfile.Write(defaultRefreshTokenFile, []byte(encryptedToken), 0600); err != nil {
 		return fmt.Errorf("failed to save refresh token: %w", err)
 	}
 	fmt.Println("  Refresh token encrypted and saved")
@@ -340,7 +341,7 @@ func saveEnv(tenant, oid string) error {
 	envContent := fmt.Sprintf("# M365 Copilot Configuration\nM365_TENANT_ID=%s\nM365_USER_OID=%s\nM365_CLIENT_ID=%s\n",
 		tenant, oid, models.DefaultClientID)
 
-	if err := os.WriteFile(defaultEnvFile, []byte(envContent), 0600); err != nil {
+	if err := atomicfile.Write(defaultEnvFile, []byte(envContent), 0600); err != nil {
 		return fmt.Errorf("failed to save environment file: %w", err)
 	}
 

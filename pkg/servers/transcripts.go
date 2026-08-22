@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/atomicfile"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/payload"
 )
@@ -63,7 +64,7 @@ func NewTranscriptStore(dir string) *TranscriptStore {
 	}
 	return &TranscriptStore{
 		dir:        dir,
-		writeFile:  os.WriteFile,
+		writeFile:  atomicfile.Write,
 		removeFile: os.Remove,
 	}
 }

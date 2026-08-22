@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/atomicfile"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/crypto"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
 )
@@ -60,8 +61,6 @@ type m365CookieStore struct {
 	ExtractedAt time.Time   `json:"extracted_at"`
 	Cookies     []SSOCookie `json:"cookies"`
 }
-
-var renameFile = os.Rename
 
 // generatePKCE creates a PKCE code verifier and code challenge (S256).
 func generatePKCE() (verifier, challenge string, err error) {
@@ -129,40 +128,11 @@ func saveM365CookieStore(store m365CookieStore) error {
 	return nil
 }
 
-func atomicWriteFile(path string, data []byte, mode os.FileMode) (returnErr error) {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	temporary, err := os.CreateTemp(dir, ".m365-cookies-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary file: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		if returnErr != nil {
-			_ = temporary.Close()
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-
-	if err := temporary.Chmod(mode); err != nil {
-		return fmt.Errorf("failed to set temporary file permissions: %w", err)
-	}
-	if _, err := temporary.Write(data); err != nil {
-		return fmt.Errorf("failed to write temporary file: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		return fmt.Errorf("failed to sync temporary file: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("failed to close temporary file: %w", err)
-	}
-	if err := renameFile(temporaryPath, path); err != nil {
-		return fmt.Errorf("failed to replace file: %w", err)
-	}
-	return nil
+// atomicWriteFile writes a credential file through pkg/atomicfile, so a crash
+// in the middle of a write never leaves a shorter file that still decrypts to
+// nothing useful.
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	return atomicfile.Write(path, data, mode)
 }
 
 // loadSSOCookies reads and decrypts SSO cookies from disk.
