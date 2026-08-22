@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/payload"
@@ -216,15 +217,10 @@ func truncateRunes(s string, limit int) string {
 		return s
 	}
 	cut := limit
-	for cut > 0 && !utf8ValidBoundary(s, cut) {
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
 	return s[:cut]
-}
-
-// utf8ValidBoundary reports whether index i starts a new rune.
-func utf8ValidBoundary(s string, i int) bool {
-	return i >= len(s) || s[i]&0xC0 != 0x80
 }
 
 // lastUserMessage returns the text of the turn the caller is asking about.
