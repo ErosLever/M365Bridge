@@ -1524,10 +1524,8 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Handle JSON mode
-	if req.ResponseFormat != nil {
-		if format, ok := req.ResponseFormat["type"].(string); ok && format == "json_object" {
-			api.injectJSONMode(&req.Messages)
-		}
+	if instruction, ok := jsonModeInstruction(req.ResponseFormat); ok {
+		injectJSONMode(&req.Messages, instruction)
 	}
 
 	preparedTools, localTools := api.prepareCodingTools(req.Tools, false)
@@ -3618,10 +3616,40 @@ func (api *APIServer) uploadImagesAndAnnotate(messages *[]payload.Message, convI
 	}
 }
 
-// injectJSONMode injects JSON mode instructions into messages.
-func (api *APIServer) injectJSONMode(messages *[]payload.Message) {
-	instruction := "You MUST respond with valid JSON only. Do not include markdown code blocks, explanation, or any text outside the JSON object."
+// jsonOnlyInstruction is what a request asking for JSON output adds to the
+// prompt. M365 has no structured-output channel of its own, so the demand can
+// only reach the model as text.
+const jsonOnlyInstruction = "You MUST respond with valid JSON only. Do not include markdown code blocks, explanation, or any text outside the JSON object."
 
+// jsonModeInstruction returns the instruction a response_format asks for, and
+// reports whether the format demands JSON at all.
+//
+// A json_schema format used to be accepted and then ignored, so a client that
+// asked for a strict shape received prose. The schema travels in the
+// instruction because the prompt is the only channel that reaches the model.
+func jsonModeInstruction(format map[string]any) (string, bool) {
+	kind, _ := format["type"].(string)
+	switch kind {
+	case "json_object":
+		return jsonOnlyInstruction, true
+	case "json_schema":
+		wrapper, ok := format["json_schema"].(map[string]any)
+		if !ok || wrapper["schema"] == nil {
+			return jsonOnlyInstruction, true
+		}
+		encoded, err := json.Marshal(wrapper["schema"])
+		if err != nil {
+			logging.Warnf("response_format: cannot encode the declared schema: %v", err)
+			return jsonOnlyInstruction, true
+		}
+		return jsonOnlyInstruction + "\nThe JSON must validate against this JSON Schema:\n" + string(encoded), true
+	default:
+		return "", false
+	}
+}
+
+// injectJSONMode injects JSON mode instructions into messages.
+func injectJSONMode(messages *[]payload.Message, instruction string) {
 	for i, msg := range *messages {
 		if msg.Role == "system" {
 			(*messages)[i].Content = msg.Content + "\n" + instruction
