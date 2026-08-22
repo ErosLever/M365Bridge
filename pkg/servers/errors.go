@@ -68,8 +68,24 @@ const (
 	upstreamTurnFailedCode     = "upstream_turn_failed"
 	modelNotFoundCode          = "model_not_found"
 	internalProcessingCode     = "internal_error"
+	requestTooLargeCode        = "request_too_large"
 	rateLimitRetryAfterSeconds = 60
 )
+
+// sendRequestBodyError answers a request body this service could not read.
+//
+// A body past the cap gets 413 under its own code, so a client can tell a
+// request it must shrink from one that was simply malformed. Both used to
+// arrive as the same 400.
+func (api *APIServer) sendRequestBodyError(w http.ResponseWriter, err error) {
+	if tooLarge, ok := errors.AsType[*http.MaxBytesError](err); ok {
+		logging.Warnf("request body above the limit of %d bytes", tooLarge.Limit)
+		api.sendErrorCode(w, http.StatusRequestEntityTooLarge, requestTooLargeCode,
+			"request body exceeds "+strconv.FormatInt(tooLarge.Limit, 10)+" bytes")
+		return
+	}
+	api.sendError(w, http.StatusBadRequest, "Failed to read request body: "+err.Error())
+}
 
 // classifyUpstreamError maps a failed backend request onto the HTTP status and
 // code the client should see.

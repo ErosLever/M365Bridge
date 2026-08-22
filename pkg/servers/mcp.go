@@ -116,6 +116,9 @@ func (api *APIServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The MCP body carries a tool call's arguments, so it is bounded like the
+	// chat routes rather than left to grow.
+	limitRequestBody(w, r, requestBodyMax)
 	var req mcpRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		api.sendMCPError(w, nil, mcpErrParse, "invalid JSON")

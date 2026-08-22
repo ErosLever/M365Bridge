@@ -1477,9 +1477,10 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	limitRequestBody(w, r, requestBodyMax)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request body: %v", err))
+		api.sendRequestBodyError(w, err)
 		return
 	}
 	_ = r.Body.Close()
@@ -1597,9 +1598,10 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	limitRequestBody(w, r, requestBodyMax)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request body: %v", err))
+		api.sendRequestBodyError(w, err)
 		return
 	}
 	_ = r.Body.Close()
@@ -1694,13 +1696,14 @@ func (api *APIServer) handleAnthropicCountTokens(w http.ResponseWriter, r *http.
 		return
 	}
 
+	limitRequestBody(w, r, requestBodyMax)
 	var req struct {
 		System   json.RawMessage `json:"system"`
 		Messages json.RawMessage `json:"messages"`
 		Tools    json.RawMessage `json:"tools"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
+		api.sendRequestBodyError(w, err)
 		return
 	}
 	if len(req.Messages) == 0 || string(req.Messages) == "null" {
@@ -1736,9 +1739,10 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	limitRequestBody(w, r, requestBodyMax)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request body: %v", err))
+		api.sendRequestBodyError(w, err)
 		return
 	}
 	_ = r.Body.Close()
@@ -1853,8 +1857,9 @@ func (api *APIServer) handleAnthropicComplete(w http.ResponseWriter, r *http.Req
 		StopSequences     []string `json:"stop_sequences"`
 	}
 
+	limitRequestBody(w, r, requestBodyMax)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
+		api.sendRequestBodyError(w, err)
 		return
 	}
 
@@ -3429,6 +3434,29 @@ const (
 // errorBodyExcerptMax caps a failed response body read for logging. Only the
 // first two hundred characters reach the log, so the rest never has to be read.
 const errorBodyExcerptMax = 64 << 10
+
+// Caps on how much of a request body this service will read. A caller can
+// otherwise make the process hold an unbounded amount of memory by sending one
+// request that never ends.
+const (
+	// requestBodyMax bounds a chat, completion or Responses request. Such a
+	// request carries the whole conversation the client holds and may inline a
+	// base64 image, so the cap sits far above a normal turn.
+	requestBodyMax = 32 << 20
+	// imageRequestBodyMax bounds an image generation request, which carries a
+	// prompt and no image data.
+	imageRequestBodyMax = 1 << 20
+	// imageEditBodyMax bounds an image edit upload, which carries the images to
+	// edit as multipart parts.
+	imageEditBodyMax = 64 << 20
+)
+
+// limitRequestBody caps how much of a request body a handler reads. The read
+// fails once the limit is passed, so an oversize body is refused rather than
+// buffered whole.
+func limitRequestBody(w http.ResponseWriter, r *http.Request, max int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, max)
+}
 
 // errRemoteImageRejected marks a caller-supplied image URL the proxy refuses to
 // fetch.
@@ -5121,9 +5149,10 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	limitRequestBody(w, r, requestBodyMax)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request body: %v", err))
+		api.sendRequestBodyError(w, err)
 		return
 	}
 	_ = r.Body.Close()
@@ -6731,9 +6760,10 @@ func (api *APIServer) handleResponsesCompact(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	limitRequestBody(w, r, requestBodyMax)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request body: %v", err))
+		api.sendRequestBodyError(w, err)
 		return
 	}
 	_ = r.Body.Close()
@@ -7069,10 +7099,11 @@ func (api *APIServer) handleImageGenerations(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	limitRequestBody(w, r, imageRequestBodyMax)
 	var req imageGenerationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		logging.Errorf("handleImageGenerations: invalid JSON: %v", err)
-		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
+		api.sendRequestBodyError(w, err)
 		return
 	}
 	if req.Prompt == "" {
@@ -7135,6 +7166,7 @@ func (api *APIServer) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse multipart form
+	limitRequestBody(w, r, imageEditBodyMax)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		logging.Errorf("handleImageEdits: failed to parse multipart form: %v", err)
 		api.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to parse multipart form: %v", err))
