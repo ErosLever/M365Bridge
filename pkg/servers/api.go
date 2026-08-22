@@ -1307,7 +1307,7 @@ func replaceRequestTools(body []byte, tools []toolcalling.ToolDef) string {
 // missed by whichever exit is added next; a turn that aborts mid-loop would
 // then orphan the conversation M365 had already created. The responders this
 // loop feeds therefore do not store the mapping again.
-func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, messages []payload.Message, cfg models.ModelConfig, sid, convID string, tools []toolcalling.ToolDef, local map[string]bool) (toolLoopResult, error) {
+func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, messages []payload.Message, cfg models.ModelConfig, sid, convID string, tools []toolcalling.ToolDef, noParallel bool, local map[string]bool) (toolLoopResult, error) {
 	currentConvID := convID
 	seen := make(map[string]bool)
 	for iteration := 0; ; iteration++ {
@@ -1325,7 +1325,7 @@ func (api *APIServer) runToolLoop(r *http.Request, provider toolLoopProvider, me
 			_, finishReason = withoutBackendToolCalls(backendCalls, finishReason)
 			return toolLoopResult{text: text, thinking: thinking, finishReason: finishReason, conversationID: currentConvID}, nil
 		}
-		contracts := toolcalling.ContractsFor(tools)
+		contracts := toolcalling.ContractsFor(tools).WithoutParallel(noParallel)
 		var simulated toolcalling.SimulatedResult
 		if provider == toolLoopAnthropic {
 			simulated = toolcalling.ParseSimulatedResponseAnthropic(text, toolNamesFromDefs(tools), contracts)
@@ -1495,7 +1495,10 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		User           string                `json:"user"`
 		Tools          []toolcalling.ToolDef `json:"tools"`
 		ToolChoice     any                   `json:"tool_choice"`
-		StreamOptions  *streamOptions        `json:"stream_options"`
+		// A pointer, because an absent parallel_tool_calls means the OpenAI
+		// default of true rather than false.
+		ParallelToolCalls *bool          `json:"parallel_tool_calls"`
+		StreamOptions     *streamOptions `json:"stream_options"`
 	}
 
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -1569,8 +1572,10 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	// message the caller sent rather than losing it.
 	api.recordUserTurn(sid, req.Messages)
 
+	noParallel := refusesParallelToolCalls(req.ParallelToolCalls)
+
 	if len(localTools) > 0 {
-		result, err := api.runToolLoop(r, toolLoopOpenAI, req.Messages, cfg, sid, convID, req.Tools, localTools)
+		result, err := api.runToolLoop(r, toolLoopOpenAI, req.Messages, cfg, sid, convID, req.Tools, noParallel, localTools)
 		if err != nil {
 			api.sendUpstreamError(w, "chat", err)
 			return
@@ -1579,9 +1584,9 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if req.Stream {
-		api.streamChatCompletions(r.Context(), w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice), includeStreamUsage(req.StreamOptions))
+		api.streamChatCompletions(r.Context(), w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice), noParallel, includeStreamUsage(req.StreamOptions))
 	} else {
-		api.nonStreamChatCompletions(w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
+		api.nonStreamChatCompletions(w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice), noParallel)
 	}
 }
 
@@ -1820,8 +1825,10 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 	// Determine if client-defined tools are present (for optionsSets stripping)
 	hasTools := len(toolcalling.RouteableTools(req.Tools)) > 0
 
+	noParallel := anthropicRefusesParallelToolCalls(req.ToolChoice)
+
 	if len(localTools) > 0 {
-		result, err := api.runToolLoop(r, toolLoopAnthropic, chatMessages, cfg, sid, convID, req.Tools, localTools)
+		result, err := api.runToolLoop(r, toolLoopAnthropic, chatMessages, cfg, sid, convID, req.Tools, noParallel, localTools)
 		if err != nil {
 			api.sendUpstreamError(w, "chat", err)
 			return
@@ -1830,9 +1837,9 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if req.Stream {
-		api.streamAnthropicMessages(r.Context(), w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice))
+		api.streamAnthropicMessages(r.Context(), w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice), noParallel)
 	} else {
-		api.nonStreamAnthropicMessages(w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice))
+		api.nonStreamAnthropicMessages(w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice), noParallel)
 	}
 }
 
@@ -2062,7 +2069,7 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 }
 
 // streamChatCompletions streams chat completion responses in OpenAI format.
-func (api *APIServer) streamChatCompletions(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, includeUsage bool) {
+func (api *APIServer) streamChatCompletions(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, noParallel, includeUsage bool) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -2186,7 +2193,7 @@ func (api *APIServer) streamChatCompletions(ctx context.Context, w http.Response
 	// Parse simulated tool calls from full text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
 	if toolCallingEnabled {
-		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
+		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice).WithoutParallel(noParallel)
 		sim := toolcalling.ParseSimulatedResponse(fullText, toolNamesFromDefs(tools), contracts)
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, contracts, fullText, sim)
 		sim = dropSettledToolCalls(buildToolLedger(messages), toolChoice, sim)
@@ -2351,7 +2358,7 @@ func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoop
 }
 
 // nonStreamChatCompletions handles non-streaming chat completion in OpenAI format.
-func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
+func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, noParallel bool) {
 	respText, thinking, toolCalls, finishReason, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 	if err != nil {
 		if sid != "" {
@@ -2370,7 +2377,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 
 	// Parse simulated tool calls from response text if tool calling is enabled
 	if hasTools {
-		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
+		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice).WithoutParallel(noParallel)
 		sim := toolcalling.ParseSimulatedResponse(respText, toolNamesFromDefs(tools), contracts)
 		sim = api.repairSimulatedToolCalls(toolLoopOpenAI, messages, cfg, tools, contracts, respText, sim)
 		sim = dropSettledToolCalls(buildToolLedger(messages), toolChoice, sim)
@@ -2480,7 +2487,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 }
 
 // streamAnthropicMessages streams messages in Anthropic SSE format.
-func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
+func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, noParallel bool) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -2653,7 +2660,7 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 	// Parse simulated tool calls from full text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
 	if toolCallingEnabled {
-		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
+		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice).WithoutParallel(noParallel)
 		sim := toolcalling.ParseSimulatedResponseAnthropic(fullText, toolNamesFromDefs(tools), contracts)
 		sim = api.repairSimulatedToolCalls(toolLoopAnthropic, messages, cfg, tools, contracts, fullText, sim)
 		sim = dropSettledToolCalls(buildToolLedger(messages), toolChoice, sim)
@@ -2861,7 +2868,7 @@ func (api *APIServer) respondBufferedAnthropic(w http.ResponseWriter, result too
 }
 
 // nonStreamAnthropicMessages handles non-streaming Anthropic messages response.
-func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
+func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, noParallel bool) {
 	respText, thinking, toolCalls, finishReason, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 	if err != nil {
 		if sid != "" {
@@ -2880,7 +2887,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 
 	// Parse simulated tool calls from response text if tool calling is enabled
 	if hasTools {
-		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice)
+		contracts := toolcalling.ContractsFor(tools).WithChoice(toolChoice).WithoutParallel(noParallel)
 		sim := toolcalling.ParseSimulatedResponseAnthropic(respText, toolNamesFromDefs(tools), contracts)
 		sim = api.repairSimulatedToolCalls(toolLoopAnthropic, messages, cfg, tools, contracts, respText, sim)
 		sim = dropSettledToolCalls(buildToolLedger(messages), toolChoice, sim)
@@ -4090,6 +4097,21 @@ func anthropicToolChoiceEnforcement(toolChoice map[string]any) string {
 	return name
 }
 
+// refusesParallelToolCalls reports whether an OpenAI parallel_tool_calls field
+// forbids more than one call per turn. An absent field means the protocol
+// default, which allows them.
+func refusesParallelToolCalls(parallel *bool) bool {
+	return parallel != nil && !*parallel
+}
+
+// anthropicRefusesParallelToolCalls reads Anthropic's disable_parallel_tool_use,
+// which carries the same meaning as OpenAI's parallel_tool_calls but lives
+// inside the tool_choice object rather than beside it.
+func anthropicRefusesParallelToolCalls(toolChoice map[string]any) bool {
+	disabled, _ := toolChoice["disable_parallel_tool_use"].(bool)
+	return disabled
+}
+
 // toolChoiceString normalizes the tool_choice field to a string ("auto",
 // "required", "none", or a function name) for prompt-building purposes.
 func toolChoiceString(toolChoice any) string {
@@ -4126,6 +4148,9 @@ type responsesToolPolicy struct {
 	// parsing, so the ledger has to travel with the policy instead of being
 	// rebuilt from the messages the parser sees.
 	ledger toolcalling.Ledger
+	// noParallel carries the request's parallel_tool_calls: false. It rides on
+	// the policy because the policy is what reaches both Responses paths.
+	noParallel bool
 }
 
 // allows reports whether this policy still permits a call to the named tool.
@@ -4517,7 +4542,7 @@ func parseResponsesSimulation(text string, policy responsesToolPolicy) (response
 		content:      text,
 		finishReason: "stop",
 	}
-	simulated := toolcalling.ParseSimulatedResponseResponses(text, policy.allowedToolNames, toolcalling.ContractsFor(policy.tools))
+	simulated := toolcalling.ParseSimulatedResponseResponses(text, policy.allowedToolNames, toolcalling.ContractsFor(policy.tools).WithoutParallel(policy.noParallel))
 	// A grammar tool's body arrives unfenced, either as the lone bridge
 	// envelope or as bare source. It may be the whole reply, or it may end up
 	// as the extracted content of an otherwise valid envelope; either way it
@@ -5156,6 +5181,9 @@ type responsesRequest struct {
 	User               string                `json:"user"`
 	Metadata           map[string]any        `json:"metadata"`
 	Reasoning          *responsesReasoning   `json:"reasoning"`
+	// A pointer, because an absent parallel_tool_calls means the OpenAI
+	// default of true rather than false.
+	ParallelToolCalls *bool `json:"parallel_tool_calls"`
 }
 
 // responsesReasoning is the reasoning block Codex CLI sends. M365 decides how
@@ -5214,6 +5242,7 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 		api.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	toolPolicy.noParallel = refusesParallelToolCalls(req.ParallelToolCalls)
 	requestJSON := replaceRequestTools(bodyBytes, req.Tools)
 
 	// Convert Responses API input to payload.Message list
@@ -5288,7 +5317,7 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 	goalOpen := responsesGoalContinuationOpen(req.Input)
 
 	if len(localTools) > 0 {
-		result, err := api.runToolLoop(r, toolLoopOpenAI, messages, cfg, sid, convID, req.Tools, localTools)
+		result, err := api.runToolLoop(r, toolLoopOpenAI, messages, cfg, sid, convID, req.Tools, toolPolicy.noParallel, localTools)
 		if err != nil {
 			api.sendUpstreamError(w, "response", err)
 			return

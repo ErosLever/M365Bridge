@@ -379,6 +379,7 @@ func parseSimulatedResponse(text string, allowedToolNames []string, contracts To
 
 	result.HasPayload = true
 	parseChatCompletionPayload(best, &result, allowed, contracts, preserveToolContent)
+	result.ToolCalls = contracts.keepFirstWhenSerial(result.ToolCalls)
 	if len(result.ToolCalls) > 0 {
 		logging.Infof("ParseSimulatedResponse: parsed %d tool calls", len(result.ToolCalls))
 	} else if result.Content != "" {
@@ -425,6 +426,7 @@ func ParseSimulatedResponseAnthropic(text string, allowedToolNames []string, con
 
 	result.HasPayload = true
 	parseAnthropicPayload(best, &result, allowed, contracts)
+	result.ToolCalls = contracts.keepFirstWhenSerial(result.ToolCalls)
 	if len(result.ToolCalls) > 0 {
 		logging.Infof("ParseSimulatedResponseAnthropic: parsed %d tool calls", len(result.ToolCalls))
 	} else if result.Content != "" {

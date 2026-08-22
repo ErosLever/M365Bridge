@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
 )
 
 // SchemaByTool maps each declared tool name to its JSON schema. It supports the
@@ -45,6 +47,11 @@ type ToolContracts struct {
 	// it, but a model that ignores the instruction must not reach the client,
 	// so it is enforced here as well.
 	Choice string
+	// NoParallel carries a caller that refused parallel tool calls, through
+	// OpenAI's parallel_tool_calls or Anthropic's disable_parallel_tool_use.
+	// Such a caller executes one call per turn, so a second call in the same
+	// response would either be dropped by the client or answered out of order.
+	NoParallel bool
 }
 
 // ContractsFor builds the validation contracts for the declared tools.
@@ -59,6 +66,28 @@ func ContractsFor(tools []ToolDef) ToolContracts {
 func (c ToolContracts) WithChoice(choice string) ToolContracts {
 	c.Choice = choice
 	return c
+}
+
+// WithoutParallel returns the contracts with parallel tool calls refused when
+// disabled is true. An absent request field means parallel calls are allowed,
+// which is the default in both provider protocols.
+func (c ToolContracts) WithoutParallel(disabled bool) ToolContracts {
+	c.NoParallel = disabled
+	return c
+}
+
+// keepFirstWhenSerial returns the calls the caller is willing to receive. A
+// caller that refused parallel calls gets the first one; the rest are dropped
+// rather than reordered, because the model emits them in the order it wants
+// them run and a later round can ask for the next one.
+func (c ToolContracts) keepFirstWhenSerial(calls []ToolCall) []ToolCall {
+	if !c.NoParallel || len(calls) <= 1 {
+		return calls
+	}
+	for _, dropped := range calls[1:] {
+		logging.Warnf("tool calls: dropping %q, the request refused parallel tool calls", dropped.Name)
+	}
+	return calls[:1]
 }
 
 // choiceAllows reports whether tool_choice permits calling name.
