@@ -34,6 +34,13 @@ const (
 	tokenURLTemplate = "https://login.microsoftonline.com/%s/oauth2/v2.0/token"
 	// cacheExpiryBuffer is the time buffer before token expiry to trigger refresh.
 	cacheExpiryBuffer = 60 * time.Second
+	// tokenResponseMax caps a token endpoint response. The body is a small JSON
+	// object, so anything near this size is a redirected or hostile endpoint
+	// rather than a token, and reading it whole would hold it all in memory.
+	tokenResponseMax = 1 << 20
+	// authPageMax caps a sign-in page read while following redirects. Those
+	// pages are HTML and much larger than a token response.
+	authPageMax = 4 << 20
 )
 
 // TokenCache represents the cached access token data.
@@ -147,9 +154,13 @@ func (tm *TokenManager) refreshLocked() (string, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	// One extra byte distinguishes "exactly at the limit" from "truncated".
+	body, err := io.ReadAll(io.LimitReader(resp.Body, tokenResponseMax+1))
 	if err != nil {
 		return "", fmt.Errorf("%w: failed to read response", ErrRefreshFailed)
+	}
+	if len(body) > tokenResponseMax {
+		return "", fmt.Errorf("%w: token response exceeds %d bytes", ErrRefreshFailed, tokenResponseMax)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -242,9 +253,13 @@ func (tm *TokenManager) GetTokenForScopeAndClient(scope, clientID string) (strin
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	// One extra byte distinguishes "exactly at the limit" from "truncated".
+	body, err := io.ReadAll(io.LimitReader(resp.Body, tokenResponseMax+1))
 	if err != nil {
 		return "", fmt.Errorf("%w: failed to read response", ErrRefreshFailed)
+	}
+	if len(body) > tokenResponseMax {
+		return "", fmt.Errorf("%w: token response exceeds %d bytes", ErrRefreshFailed, tokenResponseMax)
 	}
 
 	if resp.StatusCode != http.StatusOK {

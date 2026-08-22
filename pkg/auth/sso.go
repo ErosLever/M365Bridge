@@ -322,7 +322,11 @@ func (tm *TokenManager) reauthWithSSO() (string, error) {
 	for {
 		location := currentResp.Header.Get("Location")
 		if location == "" {
-			body, _ := io.ReadAll(currentResp.Body)
+			body, _ := io.ReadAll(io.LimitReader(currentResp.Body, authPageMax+1))
+			if len(body) > authPageMax {
+				logging.Warnf("sign-in page exceeds %d bytes; a meta refresh past the cap is not followed", authPageMax)
+				body = body[:authPageMax]
+			}
 			bodyStr := string(body)
 			// Check for meta refresh redirect in HTML
 			if metaURL := extractMetaRefreshURL(bodyStr); metaURL != "" {
@@ -483,9 +487,12 @@ func (tm *TokenManager) exchangeAuthCode(authCode, verifier string) (string, err
 	}
 	defer func() { _ = tokenResp.Body.Close() }()
 
-	body, err := io.ReadAll(tokenResp.Body)
+	body, err := io.ReadAll(io.LimitReader(tokenResp.Body, tokenResponseMax+1))
 	if err != nil {
 		return "", fmt.Errorf("%w: failed to read token response: %v", ErrRefreshFailed, err)
+	}
+	if len(body) > tokenResponseMax {
+		return "", fmt.Errorf("%w: token response exceeds %d bytes", ErrRefreshFailed, tokenResponseMax)
 	}
 
 	if tokenResp.StatusCode != http.StatusOK {
@@ -736,9 +743,12 @@ func (tm *TokenManager) requestDesignerToken(refreshToken string) (string, int, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, tokenResponseMax+1))
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to read designer broker token response: %w", err)
+	}
+	if len(respBody) > tokenResponseMax {
+		return "", 0, fmt.Errorf("designer broker token response exceeds %d bytes", tokenResponseMax)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -842,7 +852,11 @@ func (tm *TokenManager) acquireBrokerRefreshTokenViaSSO() (string, error) {
 	for i := range maxRedirects {
 		location := currentResp.Header.Get("Location")
 		if location == "" {
-			body, _ := io.ReadAll(currentResp.Body)
+			body, _ := io.ReadAll(io.LimitReader(currentResp.Body, authPageMax+1))
+			if len(body) > authPageMax {
+				logging.Warnf("sign-in page exceeds %d bytes; a meta refresh past the cap is not followed", authPageMax)
+				body = body[:authPageMax]
+			}
 			bodyStr := string(body)
 			// Check for meta refresh redirect in HTML (AAD sometimes uses this)
 			if metaURL := extractMetaRefreshURL(bodyStr); metaURL != "" {
@@ -940,9 +954,12 @@ func (tm *TokenManager) exchangeBrokerAuthCode(authCode, verifier string) (strin
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, tokenResponseMax+1))
 	if err != nil {
 		return "", fmt.Errorf("failed to read broker code exchange response: %w", err)
+	}
+	if len(respBody) > tokenResponseMax {
+		return "", fmt.Errorf("broker code exchange response exceeds %d bytes", tokenResponseMax)
 	}
 
 	if resp.StatusCode != http.StatusOK {

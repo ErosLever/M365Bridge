@@ -3421,6 +3421,10 @@ const (
 	remoteImageTimeout    = 30 * time.Second
 )
 
+// errorBodyExcerptMax caps a failed response body read for logging. Only the
+// first two hundred characters reach the log, so the rest never has to be read.
+const errorBodyExcerptMax = 64 << 10
+
 // errRemoteImageRejected marks a caller-supplied image URL the proxy refuses to
 // fetch.
 var errRemoteImageRejected = errors.New("remote image URL rejected")
@@ -7499,7 +7503,9 @@ func (api *APIServer) downloadAndBase64(imageURL string) (string, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		// Only an excerpt of this body is logged, so a truncated read is
+		// enough and the whole error page never has to be held in memory.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyExcerptMax))
 		errCode := resp.Header.Get("X-Errorcode")
 		failReason := resp.Header.Get("X-Failurereason")
 		logging.Errorf("Image download failed: status=%d, x-errorcode=%s, x-failurereason=%s, body=%s",
@@ -7507,10 +7513,14 @@ func (api *APIServer) downloadAndBase64(imageURL string) (string, error) {
 		return "", fmt.Errorf("download returned status %d: x-errorcode=%s, x-failurereason=%s", resp.StatusCode, errCode, failReason)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// One extra byte distinguishes "exactly at the limit" from "truncated".
+	body, err := io.ReadAll(io.LimitReader(resp.Body, remoteImageMaxBytes+1))
 	if err != nil {
 		logging.Errorf("downloadAndBase64: failed to read body: %v", err)
 		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+	if len(body) > remoteImageMaxBytes {
+		return "", fmt.Errorf("generated image exceeds %d bytes", remoteImageMaxBytes)
 	}
 
 	logging.Infof("downloadAndBase64: success, size=%d bytes", len(body))

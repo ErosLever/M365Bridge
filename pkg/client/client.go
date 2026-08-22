@@ -38,6 +38,10 @@ const (
 	defaultRecvFinalTimeout = 60 * time.Second
 	// progressMessageType marks a status message rather than answer text.
 	progressMessageType = "Progress"
+	// uploadResponseMax caps an upload response. The body is a small JSON
+	// object naming the stored file, so a body near this size is a redirected
+	// or hostile endpoint rather than an upload result.
+	uploadResponseMax = 1 << 20
 )
 
 var (
@@ -160,10 +164,14 @@ func (c *M365Client) UploadFile(base64Data, mediaType, fileName, conversationID,
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// One extra byte distinguishes "exactly at the limit" from "truncated".
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, uploadResponseMax+1))
 	if err != nil {
 		logging.Errorf("UploadFile: failed to read response: %v", err)
 		return nil, fmt.Errorf("failed to read upload response: %w", err)
+	}
+	if len(respBody) > uploadResponseMax {
+		return nil, fmt.Errorf("upload response exceeds %d bytes", uploadResponseMax)
 	}
 
 	if resp.StatusCode != http.StatusOK {
