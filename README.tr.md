@@ -750,6 +750,23 @@ Akışlı bir `/v1/messages` turu bu nesneyi Anthropic wire format'ının böld�
 
 `/v1/chat/completions` ve `/v1/completions` OpenAI `stream_options` nesnesini kabul eder. `{"include_usage": false}` akışlı bir turdan usage nesnesini kaldırır. `stream_options` hiç verilmezse usage nesnesi gönderilir; bu, OpenAI'nin `false` olan kendi varsayılanından farklıdır: bu proxy her akışlı turda usage bildirmiştir ve buradaki istemciler onu okur. Prompt token'ları mesaj rolleri ve içerikleri, serileştirilmiş tool tanımları ve `tool_choice` değeri üzerinden, artı mesaj başına ve tool başına sabit bir çerçeve payı ile sayılır. `tool_choice` payı yalnızca istek tool tanımladığında uygulanır. Aynı tur bu nedenle her uç noktada aynı maliyeti verir.
 
+### Stop Sequence'ler
+
+Bir stop sequence, yanıtı çağıranın belirttiği yerde bitirir. Her sohbet uç noktası bunu kendi protokolünün adıyla kabul eder:
+
+| Uç nokta                | Alan            | Şekil                       |
+|-------------------------|-----------------|-----------------------------|
+| `/v1/chat/completions`  | `stop`          | Bir string veya string dizisi |
+| `/v1/completions`       | `stop`          | Bir string veya string dizisi |
+| `/v1/messages`          | `stop_sequences`| String dizisi               |
+| `/v1/complete`          | `stop_sequences`| String dizisi               |
+
+Yanıt, içinde geçen en erken sequence'ten hemen önce kesilir ve sequence'in kendisi kaldırılır; böylece bir turu çerçeveleyen çağıran, çerçeveyi geri okumaz. Birden çok sequence verildiğinde yanıt, listede ilk yazılana değil, metinde ilk gelene göre biter. Boş sequence, sıfır konumunda eşleşmek yerine yok sayılır.
+
+OpenAI uç noktaları, kendiliğinden biten bir yanıtla aynı olan sıradan `finish_reason: "stop"` değerini bildirir. Anthropic uç noktaları `stop_reason: "stop_sequence"` bildirir ve tetiklenen sequence'i adlandırır: `/v1/messages` `stop_sequence` alanında, `/v1/complete` `stop` alanında. Yanıt kendiliğinden bittiğinde her iki alan da `null` kalır; böylece null kontrolü yapan bir istemci boş string ile yanıltılmaz. Önce `max_tokens` sınırına ulaşılırsa o kazanır ve bildirilen sebep `max_tokens` olur.
+
+Akışlı bir yanıt sonradan değil, üretilirken kesilir. Bir sequence iki upstream chunk'ına bölünebilir; bu nedenle delta'lar, sequence'i tamamlayabilecek kuyruğu geride tutan bir writer'dan geçer ve karakter sınırında serbest bırakılır. Stop sequence göndermeyen bir istek hiçbir şeyi geride tutmaz ve her chunk'ı geldiği anda alır.
+
 ## MCP Sunucusu
 
 `POST /mcp`, M365 Copilot'u Model Context Protocol istemcilerine JSON-RPC 2.0 üzerinden sunar (protokol sürümü `2025-06-18`). `initialize`, `tools/list`, `tools/call` ve `ping` desteklenir; lifecycle notification'ları gövdesiz `202` ile yanıtlanır. Bir API anahtarı yapılandırılmışsa bu route anahtar gerektirir.
@@ -870,6 +887,7 @@ Yanıt:
 - Tool call argümanları, tanımlanan JSON şemasına göre doğrulanır: `type`, `enum`, `required`, iç içe `properties` ve dizi `items`. Sözleşmeyi ihlal eden çağrı düşürülür ve proxy, ret gerekçesini taşıyan tek seferlik düzeltici bir yeniden-sorma yapar; böylece agent istemcileri çalıştırılamaz bir çağrı almaz. Bu, tek adımlı araç çağrılarında en iyi sonucu verir; çok turlu sürekli agent döngüleri (örneğin Claude Code'un `/init` komutu veya alt-agent görevleri) M365 backend modelinin kendi araç kullanım güvenilirliğine bağlıdır ve garanti edilmez.
 - `additionalProperties: false` altında, şemanın tanımlamadığı argümanlar reddedilmek yerine silinir; böylece tek bir fazla alan bir tur maliyetine yol açmaz.
 - `tool_choice` yalnızca prompt'ta istenmez, yanıt ayrıştırılırken zorlanır. `"none"` altında hiçbir çağrı iletilmez; belirli bir fonksiyon pinlendiğinde başka bir tool'a yapılan çağrı düşürülür ve yeniden sorulur.
+- `parallel_tool_calls: false` (OpenAI, `/v1/chat/completions` ve `/v1/responses` üzerinde) ve `tool_choice.disable_parallel_tool_use: true` (Anthropic, `/v1/messages` üzerinde) aynı şekilde zorlanır: tur başına en fazla bir çağrı iletilir, kalanlar yeniden sıralanmak yerine düşürülür. Model çağrıları çalıştırılmasını istediği sırayla üretir ve bir sonraki tur sıradakini isteyebilir. Alan hiç verilmezse paralel çağrılara izin verilir; bu, her iki protokolün de varsayılanıdır.
 - Her tool call id'si yeni bir `call_<uuid>` değeridir. Backend'in kendi id'leri turlar arasında tekrar eder ve istemciler bunları çift kayıt olarak reddeder.
 - `tool_call_id` (OpenAI), `tool_use_id` (Anthropic) veya `call_id` (Responses) alanı eksik olan ya da aynı istekte hiç tanımlanmamış bir çağrıyı işaret eden tool sonucu HTTP 400 ile reddedilir. Hiç tool call tanımlamayan bir istek id kontrolünü atlar; böylece geçmişini kısaltmış bir istemci engellenmez.
 - Backend, tool içeren bir isteği tool'ların var olmadığını söyleyen, işi kendi sandbox'ında çalıştırdığını iddia eden ya da çağıranın makinesine erişemediğini belirten düz metinle yanıtladığında, proxy açık bir talimatla bir kez yeniden sorar. İfadeler İngilizce, Çince ve Türkçe olarak tanınır. Sıradan bir metin yanıtı olduğu gibi geçer.

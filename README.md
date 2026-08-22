@@ -750,6 +750,23 @@ A streaming `/v1/messages` turn splits that object the way the Anthropic wire fo
 
 `/v1/chat/completions` and `/v1/completions` accept the OpenAI `stream_options` object. `{"include_usage": false}` withholds the usage object from a streaming turn. Leaving `stream_options` out keeps the usage object, which differs from OpenAI's own default of `false`: this proxy has always reported usage on every streaming turn and clients here read it. Prompt tokens are counted from the message roles and contents, the serialized tool definitions and the `tool_choice` value, plus a fixed per-message and per-tool framing allowance. The `tool_choice` allowance applies only when the request declared tools. The same turn therefore costs the same on every endpoint.
 
+### Stop Sequences
+
+A stop sequence ends the answer where the caller said it ends. Every chat endpoint accepts one under its own protocol's name:
+
+| Endpoint                | Field           | Shape                        |
+|-------------------------|-----------------|------------------------------|
+| `/v1/chat/completions`  | `stop`          | A string or an array of them |
+| `/v1/completions`       | `stop`          | A string or an array of them |
+| `/v1/messages`          | `stop_sequences`| An array of strings          |
+| `/v1/complete`          | `stop_sequences`| An array of strings          |
+
+The answer is cut just before the earliest sequence that appears in it, and the sequence itself is removed, so a caller that frames a turn does not read the frame back. With several sequences the answer ends at whichever arrives first, not at whichever was listed first. An empty sequence is ignored rather than matching at offset zero.
+
+The OpenAI endpoints report the ordinary `finish_reason: "stop"`, the same as an answer that ended on its own. The Anthropic endpoints report `stop_reason: "stop_sequence"` and name the sequence that fired: `/v1/messages` in `stop_sequence`, `/v1/complete` in `stop`. Both fields stay `null` when the answer ended on its own, so a client testing for null is not misled by an empty string. `max_tokens` still wins when it is reached first, and the reported reason becomes `max_tokens`.
+
+A streamed answer is cut as it is produced, not afterwards. A sequence can straddle two upstream chunks, so the deltas pass through a writer that holds back the tail which could still complete one, released on a character boundary. A request that sends no stop sequence holds nothing back and receives every chunk as it arrives.
+
 ## MCP Server
 
 `POST /mcp` exposes M365 Copilot to Model Context Protocol clients over JSON-RPC 2.0 (protocol revision `2025-06-18`). It supports `initialize`, `tools/list`, `tools/call`, and `ping`; lifecycle notifications are acknowledged with `202` and no body. The route requires an API key when one is configured.
@@ -870,6 +887,7 @@ Response:
 - Tool call arguments are validated against the declared JSON schema: `type`, `enum`, `required`, nested `properties`, and array `items`. A call that violates the contract is dropped, and the proxy performs a single corrective re-ask carrying the rejection reason so agent clients never receive an unexecutable call. This works best for single-step tool calls; sustained multi-round agent loops (for example Claude Code's `/init` or sub-agent tasks) depend on the M365 backend model's own tool-use reliability and are not guaranteed.
 - Under `additionalProperties: false`, arguments the schema does not declare are removed rather than rejected, so one stray field does not cost a round trip.
 - `tool_choice` is enforced when the response is parsed, not only asked for in the prompt. Under `"none"` no call is forwarded; when a specific function is pinned, a call to any other tool is dropped and re-asked.
+- `parallel_tool_calls: false` (OpenAI, on `/v1/chat/completions` and `/v1/responses`) and `tool_choice.disable_parallel_tool_use: true` (Anthropic, on `/v1/messages`) are enforced the same way: at most one call is forwarded per turn, and the rest are dropped rather than reordered, because the model emits them in the order it wants them run and the next round can ask for the following one. Leaving the field out allows parallel calls, which is the default in both protocols.
 - Every tool call id is a fresh `call_<uuid>`. The backend's own ids repeat across turns, which clients reject as duplicates.
 - A tool result whose `tool_call_id` (OpenAI), `tool_use_id` (Anthropic), or `call_id` (Responses) is missing, or names a call the same request never declared, is rejected with HTTP 400. A request that declares no tool calls at all skips the id check, so a client that trimmed its history is not blocked.
 - When the backend answers a tool request with prose that denies the tools exist, claims to have run the work in its own sandbox, or states that it cannot reach the caller's machine, the proxy re-asks once with an explicit instruction. The phrasings are recognized in English, Chinese and Turkish. An ordinary text answer passes through untouched.
