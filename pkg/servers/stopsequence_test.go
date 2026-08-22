@@ -94,6 +94,39 @@ func TestStopSequenceWriterNamesNoSequenceWithoutAMatch(t *testing.T) {
 	}
 }
 
+// OpenAI's stop is a single string or an array of them, so it arrives untyped
+// and both shapes have to reach the same list.
+func TestOpenAIStopSequencesAcceptsBothShapes(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		stop any
+		want []string
+	}{
+		{"absent", nil, nil},
+		{"single string", "STOP", []string{"STOP"}},
+		{"array", []any{"A", "B"}, []string{"A", "B"}},
+		{"empty string", "", nil},
+		{"array with an empty entry", []any{"", "B"}, []string{"B"}},
+		{"array with a non-string entry", []any{7, "B"}, []string{"B"}},
+		// A malformed stop leaves the request answerable, so it is ignored
+		// rather than refused.
+		{"wrong type", 7, nil},
+		{"object", map[string]any{"a": 1}, nil},
+	} {
+		got := openAIStopSequences(c.stop)
+		if len(got) != len(c.want) {
+			t.Errorf("%s: openAIStopSequences = %#v, want %#v", c.name, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: openAIStopSequences = %#v, want %#v", c.name, got, c.want)
+				break
+			}
+		}
+	}
+}
+
 // A client that tests the stop field for null would read an empty string as a
 // sequence that fired.
 func TestNullableStringReportsNothingAsNull(t *testing.T) {

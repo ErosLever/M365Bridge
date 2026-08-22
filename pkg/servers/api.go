@@ -1499,6 +1499,8 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		// default of true rather than false.
 		ParallelToolCalls *bool          `json:"parallel_tool_calls"`
 		StreamOptions     *streamOptions `json:"stream_options"`
+		// Either a single string or an array of them, so it arrives untyped.
+		Stop any `json:"stop"`
 	}
 
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -1573,6 +1575,7 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	api.recordUserTurn(sid, req.Messages)
 
 	noParallel := refusesParallelToolCalls(req.ParallelToolCalls)
+	stopSequences := openAIStopSequences(req.Stop)
 
 	if len(localTools) > 0 {
 		result, err := api.runToolLoop(r, toolLoopOpenAI, req.Messages, cfg, sid, convID, req.Tools, noParallel, localTools)
@@ -1580,13 +1583,13 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 			api.sendUpstreamError(w, "chat", err)
 			return
 		}
-		api.respondBufferedChat(w, result, req.Messages, cfg, sid, req.MaxTokens, req.Stream, req.Tools, toolChoiceString(req.ToolChoice))
+		api.respondBufferedChat(w, result, req.Messages, cfg, sid, req.MaxTokens, req.Stream, req.Tools, toolChoiceString(req.ToolChoice), stopSequences)
 		return
 	}
 	if req.Stream {
-		api.streamChatCompletions(r.Context(), w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice), noParallel, includeStreamUsage(req.StreamOptions))
+		api.streamChatCompletions(r.Context(), w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice), stopSequences, noParallel, includeStreamUsage(req.StreamOptions))
 	} else {
-		api.nonStreamChatCompletions(w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice), noParallel)
+		api.nonStreamChatCompletions(w, req.Messages, cfg, sid, convID, req.MaxTokens, hasTools, req.Tools, toolChoiceString(req.ToolChoice), stopSequences, noParallel)
 	}
 }
 
@@ -1618,6 +1621,8 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 		Tools         []toolcalling.ToolDef `json:"tools"`
 		ToolChoice    any                   `json:"tool_choice"`
 		StreamOptions *streamOptions        `json:"stream_options"`
+		// Either a single string or an array of them, so it arrives untyped.
+		Stop any `json:"stop"`
 	}
 
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -1653,10 +1658,12 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 
 	hasTools := len(toolcalling.RouteableTools(req.Tools)) > 0
 
+	stopSequences := openAIStopSequences(req.Stop)
+
 	if req.Stream {
-		api.streamCompletions(r.Context(), w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice), includeStreamUsage(req.StreamOptions))
+		api.streamCompletions(r.Context(), w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice), stopSequences, includeStreamUsage(req.StreamOptions))
 	} else {
-		api.nonStreamCompletions(w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice))
+		api.nonStreamCompletions(w, messages, cfg, req.MaxTokens, sid, convID, hasTools, req.Tools, toolChoiceString(req.ToolChoice), stopSequences)
 	}
 }
 
@@ -1759,6 +1766,9 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 		Temperature float64               `json:"temperature"`
 		Tools       []toolcalling.ToolDef `json:"tools"`
 		ToolChoice  map[string]any        `json:"tool_choice"`
+		// Anthropic declares stop_sequences as an array of strings, unlike
+		// OpenAI's stop, which is also a bare string.
+		StopSequences []string `json:"stop_sequences"`
 	}
 
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -1833,13 +1843,13 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 			api.sendUpstreamError(w, "chat", err)
 			return
 		}
-		api.respondBufferedAnthropic(w, result, chatMessages, req.Model, sid, req.MaxTokens, req.Stream, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice))
+		api.respondBufferedAnthropic(w, result, chatMessages, req.Model, sid, req.MaxTokens, req.Stream, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice), req.StopSequences)
 		return
 	}
 	if req.Stream {
-		api.streamAnthropicMessages(r.Context(), w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice), noParallel)
+		api.streamAnthropicMessages(r.Context(), w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice), req.StopSequences, noParallel)
 	} else {
-		api.nonStreamAnthropicMessages(w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice), noParallel)
+		api.nonStreamAnthropicMessages(w, chatMessages, cfg, req.Model, req.MaxTokens, sid, convID, hasTools, req.Tools, anthropicToolChoiceEnforcement(req.ToolChoice), req.StopSequences, noParallel)
 	}
 }
 
@@ -2087,7 +2097,7 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 }
 
 // streamChatCompletions streams chat completion responses in OpenAI format.
-func (api *APIServer) streamChatCompletions(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, noParallel, includeUsage bool) {
+func (api *APIServer) streamChatCompletions(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, stopSequences []string, noParallel, includeUsage bool) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -2123,6 +2133,25 @@ func (api *APIServer) streamChatCompletions(ctx context.Context, w http.Response
 	// chunks, so we can't parse incrementally. When no tools are present, stream
 	// text directly regardless of the global ToolCalling flag.
 	toolCallingEnabled := hasTools
+
+	// A stop sequence can straddle two chunks, so the deltas of a directly
+	// streamed answer pass through a writer that holds back the tail which
+	// could still complete one. A tool-enabled turn is buffered whole, so it
+	// takes the trailing cut below instead.
+	stopWriter := newStopSequenceWriter(stopSequences)
+	sendContentDelta := func(text string) {
+		if text == "" {
+			return
+		}
+		fullTextBuilder.WriteString(text)
+		delta := map[string]any{"content": text}
+		if !hasContent {
+			delta["role"] = "assistant"
+			hasContent = true
+		}
+		api.sendSSEChunk(w, chunkID, openaiModel, delta)
+		flusher.Flush()
+	}
 
 	var finalConvID string
 	var finalToolCalls []client.ToolCall
@@ -2188,23 +2217,20 @@ func (api *APIServer) streamChatCompletions(ctx context.Context, w http.Response
 			break
 		}
 
-		fullTextBuilder.WriteString(chunk.Text)
-
-		// If tool calling is not enabled, stream text directly
+		// If tool calling is not enabled, stream text directly. The writer
+		// decides what is safe to release, and it also feeds the accumulator,
+		// so the recorded answer matches what the client received.
 		if !toolCallingEnabled {
-			if !hasContent {
-				api.sendSSEChunk(w, chunkID, openaiModel, map[string]any{
-					"role":    "assistant",
-					"content": chunk.Text,
-				})
-				hasContent = true
-			} else {
-				api.sendSSEChunk(w, chunkID, openaiModel, map[string]any{
-					"content": chunk.Text,
-				})
-			}
-			flusher.Flush()
+			emit, _ := stopWriter.next(chunk.Text)
+			sendContentDelta(emit)
+			continue
 		}
+		fullTextBuilder.WriteString(chunk.Text)
+	}
+	if !toolCallingEnabled {
+		// Whatever the writer held back belongs to the answer when no stop
+		// sequence ever arrived.
+		sendContentDelta(stopWriter.flush())
 	}
 	fullText := fullTextBuilder.String()
 
@@ -2231,6 +2257,11 @@ func (api *APIServer) streamChatCompletions(ctx context.Context, w http.Response
 			}
 		}
 		fullText = replaceUnverifiedCompletionClaim(fullText, hasTools, buildToolLedger(messages), len(simToolCalls))
+		// A tool-enabled turn is buffered whole and emitted below, so its stop
+		// sequence is applied here rather than through the writer.
+		if cut, matched := cutAtStopSequence(fullText, stopSequences); matched != "" {
+			fullText = cut
+		}
 	}
 
 	if toolCallingEnabled {
@@ -2347,7 +2378,13 @@ func (api *APIServer) updateChatStreamSession(sid, model, finalConvID, fullText,
 	api.recordAssistantTurn(sid, model, fullText, thinkingText)
 }
 
-func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, cfg models.ModelConfig, sid string, maxTokens int, stream bool, tools []toolcalling.ToolDef, toolChoice string) {
+func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, cfg models.ModelConfig, sid string, maxTokens int, stream bool, tools []toolcalling.ToolDef, toolChoice string, stopSequences []string) {
+	// A stop sequence ends the answer where the caller said it ends. OpenAI
+	// reports that as the ordinary "stop", the same as an answer that ended on
+	// its own, so only the text changes.
+	if cut, matched := cutAtStopSequence(result.text, stopSequences); matched != "" {
+		result.text, result.finishReason = cut, "stop"
+	}
 	if maxTokens > 0 {
 		if truncated, ok := truncateToTokens(result.text, maxTokens); ok {
 			result.text, result.finishReason = truncated, "length"
@@ -2376,7 +2413,7 @@ func (api *APIServer) respondBufferedChat(w http.ResponseWriter, result toolLoop
 }
 
 // nonStreamChatCompletions handles non-streaming chat completion in OpenAI format.
-func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, noParallel bool) {
+func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, sid, convID string, maxTokens int, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, stopSequences []string, noParallel bool) {
 	respText, thinking, toolCalls, finishReason, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 	if err != nil {
 		if sid != "" {
@@ -2432,6 +2469,14 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 		return
 	}
 	respText = withoutUnverifiedCompletionClaim(respText, hasTools, buildToolLedger(messages), toolCalls)
+
+	// A stop sequence ends the answer where the caller said it ends. OpenAI
+	// reports that as the ordinary "stop", the same as an answer that ended on
+	// its own, so only the text changes.
+	if cut, matched := cutAtStopSequence(respText, stopSequences); matched != "" {
+		respText = cut
+		finishReason = "stop"
+	}
 
 	// Enforce max_tokens on response text
 	if maxTokens > 0 {
@@ -2505,7 +2550,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 }
 
 // streamAnthropicMessages streams messages in Anthropic SSE format.
-func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, noParallel bool) {
+func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, stopSequences []string, noParallel bool) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -2553,6 +2598,25 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 	textBlockOpen := false
 	blockIndex := 0
 	toolCallingEnabled := hasTools
+
+	// A stop sequence can straddle two chunks, so the deltas of a directly
+	// streamed answer pass through a writer that holds back the tail which
+	// could still complete one. A tool-enabled turn is buffered whole, so it
+	// takes the trailing cut below instead.
+	stopWriter := newStopSequenceWriter(stopSequences)
+	sendTextDelta := func(text string) {
+		if text == "" {
+			return
+		}
+		fullTextBuilder.WriteString(text)
+		api.sendAnthropicSSE(w, "content_block_delta", map[string]any{
+			"type":  "content_block_delta",
+			"index": blockIndex,
+			"delta": map[string]any{"type": "text_delta", "text": text},
+		})
+		flusher.Flush()
+	}
+
 	ch := api.m365Client.ChatConversationStreamGenContext(ctx, messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 
 	var finalConvID string
@@ -2660,20 +2724,25 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 			break
 		}
 
-		fullTextBuilder.WriteString(chunk.Text)
-
-		// If tool calling is not enabled, stream text deltas directly
+		// If tool calling is not enabled, stream text deltas directly. The
+		// writer decides what is safe to release, and it also feeds the
+		// accumulator, so the reported usage matches what the client received.
 		if !toolCallingEnabled {
-			delta := map[string]any{
-				"type":  "content_block_delta",
-				"index": blockIndex,
-				"delta": map[string]any{"type": "text_delta", "text": chunk.Text},
-			}
-			api.sendAnthropicSSE(w, "content_block_delta", delta)
-			flusher.Flush()
+			emit, _ := stopWriter.next(chunk.Text)
+			sendTextDelta(emit)
+			continue
 		}
+		fullTextBuilder.WriteString(chunk.Text)
+	}
+	if !toolCallingEnabled {
+		// Whatever the writer held back belongs to the answer when no stop
+		// sequence ever arrived.
+		sendTextDelta(stopWriter.flush())
 	}
 	fullText := fullTextBuilder.String()
+	// Empty on the tool-enabled path, where the writer never ran and the cut
+	// below sets it instead.
+	matchedStop := stopWriter.matched()
 
 	// Parse simulated tool calls from full text if tool calling is enabled
 	var simToolCalls []toolcalling.ToolCall
@@ -2698,6 +2767,12 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 			}
 		}
 		fullText = replaceUnverifiedCompletionClaim(fullText, hasTools, buildToolLedger(messages), len(simToolCalls))
+		// A tool-enabled turn is buffered whole and emitted below, so its stop
+		// sequence is applied here rather than through the writer.
+		if cut, matched := cutAtStopSequence(fullText, stopSequences); matched != "" {
+			fullText = cut
+			matchedStop = matched
+		}
 	}
 
 	// Flush any remaining filtered thinking when the response was thinking-only
@@ -2795,17 +2870,22 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 
 	// Send message_delta event
 	stopReason := "end_turn"
+	if matchedStop != "" {
+		stopReason = "stop_sequence"
+	}
 	if truncated {
 		stopReason = "max_tokens"
+		matchedStop = ""
 	}
 	if len(toolCalls) > 0 {
 		stopReason = "tool_use"
+		matchedStop = ""
 	}
 	msgDelta := map[string]any{
 		"type": "message_delta",
 		"delta": map[string]any{
 			"stop_reason":   stopReason,
-			"stop_sequence": nil,
+			"stop_sequence": nullableString(matchedStop),
 		},
 		"usage": map[string]any{
 			"output_tokens":    countTokens(fullText) + outputProtocolTokens,
@@ -2829,14 +2909,21 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 	}
 }
 
-func (api *APIServer) respondBufferedAnthropic(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, model, sid string, maxTokens int, stream bool, tools []toolcalling.ToolDef, toolChoice string) {
+func (api *APIServer) respondBufferedAnthropic(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, model, sid string, maxTokens int, stream bool, tools []toolcalling.ToolDef, toolChoice string, stopSequences []string) {
 	stopReason := "end_turn"
 	if len(result.toolCalls) > 0 {
 		stopReason = "tool_use"
 	}
+	// The answer ends where the caller said it ends, and Anthropic names the
+	// sequence that ended it alongside the reason.
+	cut, matchedStop := cutAtStopSequence(result.text, stopSequences)
+	if matchedStop != "" {
+		result.text, stopReason = cut, "stop_sequence"
+	}
 	if maxTokens > 0 {
 		if truncated, ok := truncateToTokens(result.text, maxTokens); ok {
 			result.text, stopReason = truncated, "max_tokens"
+			matchedStop = ""
 		}
 	}
 	content := []map[string]any{}
@@ -2851,7 +2938,7 @@ func (api *APIServer) respondBufferedAnthropic(w http.ResponseWriter, result too
 		content = append(content, map[string]any{"type": "tool_use", "id": call.ID, "name": call.Function.Name, "input": input})
 	}
 	usage := anthropicUsage(messages, tools, toolChoice, result.text, result.thinking)
-	response := map[string]any{"id": fmt.Sprintf("msg_%s", uuid.New().String()), "type": "message", "role": "assistant", "content": content, "model": model, "stop_reason": stopReason, "stop_sequence": nil, "usage": usage}
+	response := map[string]any{"id": fmt.Sprintf("msg_%s", uuid.New().String()), "type": "message", "role": "assistant", "content": content, "model": model, "stop_reason": stopReason, "stop_sequence": nullableString(matchedStop), "usage": usage}
 	if !stream {
 		api.sendJSON(w, http.StatusOK, response)
 		return
@@ -2881,12 +2968,12 @@ func (api *APIServer) respondBufferedAnthropic(w http.ResponseWriter, result too
 		}
 		api.sendAnthropicSSE(w, "content_block_stop", map[string]any{"type": "content_block_stop", "index": i})
 	}
-	api.sendAnthropicSSE(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil}, "usage": map[string]any{"output_tokens": countTokens(result.text)}})
+	api.sendAnthropicSSE(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nullableString(matchedStop)}, "usage": map[string]any{"output_tokens": countTokens(result.text)}})
 	api.sendAnthropicSSE(w, "message_stop", map[string]any{"type": "message_stop"})
 }
 
 // nonStreamAnthropicMessages handles non-streaming Anthropic messages response.
-func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, noParallel bool) {
+func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, anthropicModel string, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, stopSequences []string, noParallel bool) {
 	respText, thinking, toolCalls, finishReason, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 	if err != nil {
 		if sid != "" {
@@ -2948,11 +3035,20 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 	}
 	respText = withoutUnverifiedCompletionClaim(respText, hasTools, buildToolLedger(messages), toolCalls)
 
+	// The answer ends where the caller said it ends, and Anthropic names the
+	// sequence that ended it alongside the reason.
+	cut, matchedStop := cutAtStopSequence(respText, stopSequences)
+	if matchedStop != "" {
+		respText = cut
+		stopReason = "stop_sequence"
+	}
+
 	// Enforce max_tokens on response text
 	if maxTokens > 0 {
 		if truncated, ok := truncateToTokens(respText, maxTokens); ok {
 			respText = truncated
 			stopReason = "max_tokens"
+			matchedStop = ""
 		}
 	}
 
@@ -2989,7 +3085,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 		"content":       content,
 		"model":         anthropicModel,
 		"stop_reason":   stopReason,
-		"stop_sequence": nil,
+		"stop_sequence": nullableString(matchedStop),
 		"usage": map[string]any{
 			"input_tokens":     countPromptTokens(messages, tools, toolChoice),
 			"output_tokens":    countTokens(respText) + outputProtocolTokens,
@@ -3009,7 +3105,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 }
 
 // streamCompletions streams text completion responses in OpenAI text_completion format.
-func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, includeUsage bool) {
+func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, stopSequences []string, includeUsage bool) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "close")
@@ -3038,6 +3134,35 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 	var thinkingBuilder strings.Builder
 	truncated := false
 	toolCallingEnabled := hasTools
+
+	// A stop sequence can straddle two chunks, so the deltas of a directly
+	// streamed answer pass through a writer that holds back the tail which
+	// could still complete one. A tool-enabled turn is buffered whole, so it
+	// takes the trailing cut below instead.
+	stopWriter := newStopSequenceWriter(stopSequences)
+	sendTextDelta := func(text string) {
+		if text == "" {
+			return
+		}
+		fullTextBuilder.WriteString(text)
+		chunkData := map[string]any{
+			"id":      compID,
+			"object":  "text_completion",
+			"created": time.Now().Unix(),
+			"model":   openaiModel,
+			"choices": []map[string]any{
+				{
+					"index":         0,
+					"text":          text,
+					"finish_reason": nil,
+					"logprobs":      nil,
+				},
+			},
+		}
+		jsonData, _ := json.Marshal(chunkData)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
+		flusher.Flush()
+	}
 
 	var finalConvID string
 	var finalToolCalls []client.ToolCall
@@ -3090,29 +3215,20 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 			break
 		}
 
-		fullTextBuilder.WriteString(chunk.Text)
-
-		// If tool calling is not enabled, stream text directly
+		// If tool calling is not enabled, stream text directly. The writer
+		// decides what is safe to release, and it also feeds the accumulator,
+		// so the reported usage matches what the client received.
 		if !toolCallingEnabled {
-			chunkData := map[string]any{
-				"id":      compID,
-				"object":  "text_completion",
-				"created": time.Now().Unix(),
-				"model":   openaiModel,
-				"choices": []map[string]any{
-					{
-						"index":         0,
-						"text":          chunk.Text,
-						"finish_reason": nil,
-						"logprobs":      nil,
-					},
-				},
-			}
-
-			jsonData, _ := json.Marshal(chunkData)
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
-			flusher.Flush()
+			emit, _ := stopWriter.next(chunk.Text)
+			sendTextDelta(emit)
+			continue
 		}
+		fullTextBuilder.WriteString(chunk.Text)
+	}
+	if !toolCallingEnabled {
+		// Whatever the writer held back belongs to the answer when no stop
+		// sequence ever arrived.
+		sendTextDelta(stopWriter.flush())
 	}
 	_ = finalToolCalls
 	fullText := fullTextBuilder.String()
@@ -3140,6 +3256,11 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 			}
 		}
 		fullText = replaceUnverifiedCompletionClaim(fullText, hasTools, buildToolLedger(messages), len(simToolCalls))
+		// A tool-enabled turn is buffered whole and emitted below, so its stop
+		// sequence is applied here rather than through the writer.
+		if cut, matched := cutAtStopSequence(fullText, stopSequences); matched != "" {
+			fullText = cut
+		}
 	}
 
 	// If tool calling buffered text, send it now as a single chunk
@@ -3213,7 +3334,7 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 }
 
 // nonStreamCompletions handles non-streaming text completion.
-func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string) {
+func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []payload.Message, cfg models.ModelConfig, maxTokens int, sid, convID string, hasTools bool, tools []toolcalling.ToolDef, toolChoice string, stopSequences []string) {
 	respText, thinking, toolCalls, finishReason, finalConvID, err := api.m365Client.ChatConversation(messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
 	if err != nil {
 		api.sendUpstreamError(w, "completion", err)
@@ -3257,6 +3378,14 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 		return
 	}
 	respText = withoutUnverifiedCompletionClaim(respText, hasTools, buildToolLedger(messages), toolCalls)
+
+	// A stop sequence ends the answer where the caller said it ends. OpenAI
+	// reports that as the ordinary "stop", the same as an answer that ended on
+	// its own, so only the text changes.
+	if cut, matched := cutAtStopSequence(respText, stopSequences); matched != "" {
+		respText = cut
+		finishReason = "stop"
+	}
 
 	// Enforce max_tokens on response text
 	if maxTokens > 0 {

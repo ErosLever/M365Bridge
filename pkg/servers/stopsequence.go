@@ -32,6 +32,28 @@ func cutAtStopSequence(text string, stopSequences []string) (string, string) {
 	return text[:cut], matched
 }
 
+// openAIStopSequences normalizes OpenAI's stop field, which is a single string
+// or an array of them. Anything else is ignored rather than refused, because a
+// request that carries a malformed stop is still answerable.
+func openAIStopSequences(stop any) []string {
+	switch value := stop.(type) {
+	case string:
+		if value == "" {
+			return nil
+		}
+		return []string{value}
+	case []any:
+		sequences := make([]string, 0, len(value))
+		for _, entry := range value {
+			if sequence, ok := entry.(string); ok && sequence != "" {
+				sequences = append(sequences, sequence)
+			}
+		}
+		return sequences
+	}
+	return nil
+}
+
 // nullableString reports a matched stop sequence as JSON, using null rather
 // than an empty string when nothing matched. Both provider protocols document
 // the field as nullable, and a client that tests for null would read "" as a

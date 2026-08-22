@@ -121,7 +121,7 @@ func TestBufferedChatReportsUsage(t *testing.T) {
 	messages := usageProbeMessages()
 
 	rec := httptest.NewRecorder()
-	api.respondBufferedChat(rec, bufferedProbeResult(), messages, cfg, "", 0, false, nil, "")
+	api.respondBufferedChat(rec, bufferedProbeResult(), messages, cfg, "", 0, false, nil, "", nil)
 
 	usage := decodeUsage(t, rec.Body.Bytes())
 	requireUsageSource(t, usage)
@@ -144,7 +144,7 @@ func TestBufferedChatStreamEndsWithUsage(t *testing.T) {
 	cfg := models.ModelConfig{OpenAIID: "gpt-5.5"}
 
 	rec := httptest.NewRecorder()
-	api.respondBufferedChat(rec, bufferedProbeResult(), usageProbeMessages(), cfg, "", 0, true, nil, "")
+	api.respondBufferedChat(rec, bufferedProbeResult(), usageProbeMessages(), cfg, "", 0, true, nil, "", nil)
 
 	body := rec.Body.String()
 	if !strings.Contains(body, `"usage"`) {
@@ -160,7 +160,7 @@ func TestBufferedAnthropicMatchesTheChatPromptCount(t *testing.T) {
 	messages := usageProbeMessages()
 
 	rec := httptest.NewRecorder()
-	api.respondBufferedAnthropic(rec, bufferedProbeResult(), messages, "claude-sonnet-4", "", 0, false, nil, "")
+	api.respondBufferedAnthropic(rec, bufferedProbeResult(), messages, "claude-sonnet-4", "", 0, false, nil, "", nil)
 
 	usage := decodeUsage(t, rec.Body.Bytes())
 	requireUsageSource(t, usage)
@@ -170,7 +170,7 @@ func TestBufferedAnthropicMatchesTheChatPromptCount(t *testing.T) {
 
 	// The same turn must cost the same on both wire formats.
 	chatRec := httptest.NewRecorder()
-	api.respondBufferedChat(chatRec, bufferedProbeResult(), messages, models.ModelConfig{OpenAIID: "gpt-5.5"}, "", 0, false, nil, "")
+	api.respondBufferedChat(chatRec, bufferedProbeResult(), messages, models.ModelConfig{OpenAIID: "gpt-5.5"}, "", 0, false, nil, "", nil)
 	chatUsage := decodeUsage(t, chatRec.Body.Bytes())
 	if a, o := usageNumber(t, usage, "input_tokens"), usageNumber(t, chatUsage, "prompt_tokens"); a != o {
 		t.Fatalf("anthropic counted %d prompt tokens, openai counted %d", a, o)

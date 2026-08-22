@@ -33,6 +33,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					false,
 					nil,
 					"",
+					nil,
 					false,
 					true,
 				)
@@ -51,6 +52,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					false,
 					nil,
 					"",
+					nil,
 					false,
 				)
 			},
@@ -70,6 +72,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					false,
 					nil,
 					"",
+					nil,
 					false,
 				)
 			},
@@ -88,6 +91,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					false,
 					nil,
 					"",
+					nil,
 					false,
 				)
 			},
