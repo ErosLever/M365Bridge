@@ -15,7 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
+
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/textcut"
 )
 
 // Config controls coding tool execution and resource limits.
@@ -488,7 +489,7 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 		return original, nil
 	}
 	if int64(len(p)) > remaining {
-		p = p[:runeSafeCut(p, int(remaining))]
+		p = textcut.Truncate(p, int(remaining))
 		b.truncated = true
 	}
 	_, err := b.buffer.Write(p)
@@ -499,23 +500,9 @@ func bound(value string, limit int64) (string, bool, error) {
 	if int64(len(value)) <= limit {
 		return value, false, nil
 	}
-	return value[:runeSafeCut(value, int(limit))], true, nil
+	return textcut.Truncate(value, int(limit)), true, nil
 }
 
-// runeSafeCut returns the largest index at or before limit that starts a rune.
-//
-// The limits are byte counts, but a command prints whatever text it likes and a
-// file holds whatever bytes it holds. Cutting in the middle of a multi-byte
-// character would hand the model an invalid byte in place of that character.
-func runeSafeCut[T string | []byte](value T, limit int) int {
-	if limit >= len(value) {
-		return len(value)
-	}
-	for limit > 0 && !utf8.RuneStart(value[limit]) {
-		limit--
-	}
-	return limit
-}
 func tool(name, description string, schema map[string]any) Tool {
 	return Tool{Name: name, Description: description, InputSchema: schema}
 }

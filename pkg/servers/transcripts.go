@@ -10,11 +10,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/atomicfile"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/payload"
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/textcut"
 )
 
 // The backend tracks conversation history by conversation ID and never sends
@@ -107,8 +107,8 @@ func (ts *TranscriptStore) Append(sessionID string, entry TranscriptEntry) {
 	if entry.CreatedAt == 0 {
 		entry.CreatedAt = time.Now().Unix()
 	}
-	entry.Content = truncateRunes(entry.Content, transcriptMaxContent)
-	entry.Thinking = truncateRunes(entry.Thinking, transcriptMaxContent)
+	entry.Content = textcut.Truncate(entry.Content, transcriptMaxContent)
+	entry.Thinking = textcut.Truncate(entry.Thinking, transcriptMaxContent)
 
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -147,8 +147,8 @@ func (ts *TranscriptStore) Replace(sessionID string, entries []TranscriptEntry) 
 		if entry.CreatedAt == 0 {
 			entry.CreatedAt = now
 		}
-		entry.Content = truncateRunes(entry.Content, transcriptMaxContent)
-		entry.Thinking = truncateRunes(entry.Thinking, transcriptMaxContent)
+		entry.Content = textcut.Truncate(entry.Content, transcriptMaxContent)
+		entry.Thinking = textcut.Truncate(entry.Thinking, transcriptMaxContent)
 		cleaned = append(cleaned, entry)
 	}
 	if len(cleaned) > transcriptMaxEntries {
@@ -210,18 +210,6 @@ func (ts *TranscriptStore) evict() {
 			logging.Errorf("transcripts: cannot evict an old record: %v", err)
 		}
 	}
-}
-
-// truncateRunes cuts a string to at most limit bytes without splitting a rune.
-func truncateRunes(s string, limit int) string {
-	if len(s) <= limit {
-		return s
-	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut]
 }
 
 // lastUserMessage returns the text of the turn the caller is asking about.

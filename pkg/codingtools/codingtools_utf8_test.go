@@ -81,17 +81,3 @@ func TestLimitedBufferKeepsWritingUntilTheLimit(t *testing.T) {
 		t.Errorf("buffer = %q", got)
 	}
 }
-
-func TestRuneSafeCutHandlesBothStringAndBytes(t *testing.T) {
-	const s = "şş"
-
-	if got := runeSafeCut(s, 1); got != 0 {
-		t.Errorf("runeSafeCut(string, 1) = %d, want 0", got)
-	}
-	if got := runeSafeCut([]byte(s), 3); got != 2 {
-		t.Errorf("runeSafeCut(bytes, 3) = %d, want 2", got)
-	}
-	if got := runeSafeCut(s, 99); got != len(s) {
-		t.Errorf("runeSafeCut(string, 99) = %d, want %d", got, len(s))
-	}
-}

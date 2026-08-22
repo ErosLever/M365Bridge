@@ -5,7 +5,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/textcut"
 )
 
 // maxFailureSignature caps the normalized failure text kept for comparison.
@@ -114,37 +115,13 @@ func compactResult(result string) string {
 	// Both cuts land on a rune boundary. The caps are byte counts, and a tool
 	// result carries whatever text the tool printed, so a cut in the middle of
 	// a multi-byte character would put an invalid byte in the prompt.
-	head := runeStartAtOrBefore(trimmed, maxEvidenceResult/3)
+	head := textcut.StartAtOrBefore(trimmed, maxEvidenceResult/3)
 	tail := max(maxEvidenceResult-head-minEvidenceTail, minEvidenceTail)
-	tailStart := runeStartAtOrAfter(trimmed, len(trimmed)-tail)
+	tailStart := textcut.StartAtOrAfter(trimmed, len(trimmed)-tail)
 	removed := tailStart - head
 	return trimmed[:head] +
 		"\n... [truncated " + strconv.Itoa(removed) + " bytes] ...\n" +
 		trimmed[tailStart:]
-}
-
-// runeStartAtOrBefore returns the largest index at or before i that starts a
-// rune, so a string cut there keeps every character whole.
-func runeStartAtOrBefore(s string, i int) int {
-	if i >= len(s) {
-		return len(s)
-	}
-	for i > 0 && !utf8.RuneStart(s[i]) {
-		i--
-	}
-	return i
-}
-
-// runeStartAtOrAfter returns the smallest index at or after i that starts a
-// rune, so a string that begins there starts on a whole character.
-func runeStartAtOrAfter(s string, i int) int {
-	if i < 0 {
-		return 0
-	}
-	for i < len(s) && !utf8.RuneStart(s[i]) {
-		i++
-	}
-	return i
 }
 
 // normalizeFailure reduces a failure message to a signature that ignores the
@@ -152,7 +129,7 @@ func runeStartAtOrAfter(s string, i int) int {
 func normalizeFailure(result string) string {
 	normalized := digitRun.ReplaceAllString(strings.ToLower(strings.TrimSpace(result)), "#")
 	if len(normalized) > maxFailureSignature {
-		normalized = normalized[:runeStartAtOrBefore(normalized, maxFailureSignature)]
+		normalized = textcut.Truncate(normalized, maxFailureSignature)
 	}
 	return normalized
 }

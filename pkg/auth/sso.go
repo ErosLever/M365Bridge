@@ -23,6 +23,7 @@ import (
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/atomicfile"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/crypto"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/textcut"
 )
 
 const (
@@ -302,9 +303,7 @@ func (tm *TokenManager) reauthWithSSO() (string, error) {
 			if metaURL := extractMetaRefreshURL(bodyStr); metaURL != "" {
 				location = metaURL
 			} else {
-				if len(bodyStr) > 2000 {
-					bodyStr = bodyStr[:2000]
-				}
+				bodyStr = textcut.Truncate(bodyStr, 2000)
 				return "", fmt.Errorf("%w: no redirect from authorize (status %d): %s", ErrRefreshFailed, currentResp.StatusCode, bodyStr)
 			}
 		}
@@ -423,10 +422,7 @@ func summarizeBrokerAuthorizeResponse(body string) string {
 	}
 
 	compactBody := strings.Join(strings.Fields(body), " ")
-	if len(compactBody) > 300 {
-		compactBody = compactBody[:300]
-	}
-	return compactBody
+	return textcut.Truncate(compactBody, 300)
 }
 
 // exchangeAuthCode exchanges an authorization code for access and refresh tokens.

@@ -21,6 +21,7 @@ import (
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/models"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/payload"
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/textcut"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -609,7 +610,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 					j, _ := json.Marshal(data)
 					s := string(j)
 					if len(s) > 3000 {
-						s = s[:3000] + "...(truncated)"
+						s = textcut.Truncate(s, 3000) + "...(truncated)"
 					}
 					logging.Debugf("ConvStream type=6: %s", s)
 				}
@@ -1056,7 +1057,7 @@ func extractImageGenerationMarkdown(msg map[string]any, seenImages map[string]bo
 		if j, err := json.Marshal(itemMap); err == nil {
 			s := string(j)
 			if len(s) > 2000 {
-				s = s[:2000] + "...(truncated)"
+				s = textcut.Truncate(s, 2000) + "...(truncated)"
 			}
 			logging.Debugf("ImageGen progress item JSON: %s", s)
 		}

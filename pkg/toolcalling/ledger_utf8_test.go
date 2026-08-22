@@ -69,27 +69,3 @@ func TestNormalizeFailureKeepsEveryCharacterWhole(t *testing.T) {
 		t.Errorf("signature = %d bytes, above the cap of %d", len(signature), maxFailureSignature)
 	}
 }
-
-func TestRuneStartHelpersLandOnBoundaries(t *testing.T) {
-	// "şş" is four bytes: 0,1 then 2,3.
-	s := "şş"
-
-	if got := runeStartAtOrBefore(s, 1); got != 0 {
-		t.Errorf("runeStartAtOrBefore(1) = %d, want 0", got)
-	}
-	if got := runeStartAtOrBefore(s, 2); got != 2 {
-		t.Errorf("runeStartAtOrBefore(2) = %d, want 2", got)
-	}
-	if got := runeStartAtOrBefore(s, len(s)); got != len(s) {
-		t.Errorf("runeStartAtOrBefore(len) = %d, want %d", got, len(s))
-	}
-	if got := runeStartAtOrAfter(s, 1); got != 2 {
-		t.Errorf("runeStartAtOrAfter(1) = %d, want 2", got)
-	}
-	if got := runeStartAtOrAfter(s, 3); got != len(s) {
-		t.Errorf("runeStartAtOrAfter(3) = %d, want %d", got, len(s))
-	}
-	if got := runeStartAtOrAfter(s, -1); got != 0 {
-		t.Errorf("runeStartAtOrAfter(-1) = %d, want 0", got)
-	}
-}
