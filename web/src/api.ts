@@ -40,6 +40,37 @@ async function getJSON<T>(path: string): Promise<T> {
   return (await res.json()) as T
 }
 
+/** What the gateway asks a person for before it will answer. */
+export type AuthMode = 'none' | 'password' | 'api_key'
+
+/**
+ * Reads which gate to show.
+ *
+ * The page is served without a credential, so it cannot discover this by making
+ * an ordinary request: with no API key configured every route answers 200, and
+ * a wrong password would look like a right one.
+ */
+export async function fetchAuthMode(): Promise<AuthMode> {
+  const body = await getJSON<{ mode?: AuthMode }>('/v1/auth')
+  return body.mode ?? 'none'
+}
+
+/**
+ * Asks whether a credential is one the gateway accepts.
+ *
+ * It travels in the same header an API client sends its key in, never in a
+ * body, so it stays out of anything that records a payload. The credential is
+ * an argument rather than the stored one, so a check can run before the caller
+ * commits to storing it.
+ */
+export async function verifyCredential(credential: string): Promise<boolean> {
+  const auth: Record<string, string> = credential ? { Authorization: `Bearer ${credential}` } : {}
+  const res = await fetch('/v1/auth/verify', { method: 'POST', headers: auth })
+  if (res.status === 401) return false
+  if (!res.ok) throw await toError(res)
+  return true
+}
+
 export async function listModels(): Promise<ModelEntry[]> {
   const body = await getJSON<{ data?: ModelEntry[] }>('/v1/models')
   return body.data ?? []

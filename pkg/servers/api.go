@@ -8,6 +8,7 @@ import (
 	// md5 is used only to derive cache file names and session ids, never as a
 	// security primitive.
 	"crypto/md5" // #nosec G501
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -378,6 +379,12 @@ func (api *APIServer) Start(port int) error {
 	// 404 as an unreachable provider. It stays public alongside /v1/models
 	// because the probe carries no credential.
 	mux.HandleFunc("/v1/health", api.handleV1Health)
+	// The browser interface is served without a credential, so it has to be
+	// told what to ask for before it can ask. Both routes are public for that
+	// reason: one reports which gate to show, the other says whether an offered
+	// credential is one this gateway accepts.
+	mux.HandleFunc("/v1/auth", api.handleAuthMode)
+	mux.HandleFunc("/v1/auth/verify", api.handleAuthVerify)
 	// MCP exposes Copilot as a tool; it stays behind the API key middleware
 	// because it drives real upstream turns.
 	mux.HandleFunc("/mcp", api.withAuth(api.handleMCP))
@@ -497,9 +504,35 @@ func trimBearerPrefix(header string) string {
 	return header
 }
 
-// isValidAPIKey checks if the given token matches any configured API key.
+// isValidAPIKey reports whether the offered token is a credential this gateway
+// accepts: a configured API key, or the browser interface's password.
+//
+// The interface holds its password in a cookie and sends it in the same header
+// an API client sends its key, so accepting it here is what lets the interface
+// reach the routes behind withAuth without a session mechanism of its own.
+//
+// Every comparison is constant-time. A plain string compare returns as soon as
+// two bytes differ, which tells a caller how much of a guess was right.
 func (api *APIServer) isValidAPIKey(token string) bool {
-	return slices.Contains(api.config.APIKeys, token)
+	match := false
+	for _, key := range api.config.APIKeys {
+		if secretEqual(key, token) {
+			match = true
+		}
+	}
+	if api.config.WebUIPassword != "" && secretEqual(api.config.WebUIPassword, token) {
+		match = true
+	}
+	return match
+}
+
+// secretEqual compares two secrets without returning early on the first
+// differing byte. An empty expectation never matches.
+func secretEqual(expected, offered string) bool {
+	if expected == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(offered)) == 1
 }
 
 // extractAPIKey gets the bearer token from the Authorization header.

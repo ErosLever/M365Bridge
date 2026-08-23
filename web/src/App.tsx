@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from './api'
 import { ApiError } from './types'
 import type { ChatMessage, ConversationRow, ModelEntry } from './types'
-import { apiKeyCookie, modelCookie, readCookie, writeCookie } from './cookies'
+import { apiKeyCookie, clearCookie, modelCookie, readCookie, writeCookie } from './cookies'
 import { useI18n } from './i18n'
 import { ApiKeyGate } from './components/ApiKeyGate'
 import { ChatPane } from './components/ChatPane'
@@ -69,8 +69,18 @@ function firstLine(text: string): string {
 
 export function App() {
   const { t } = useI18n()
+  // The cookie holds whatever credential this browser must send: an API key, or
+  // the interface's password. Both travel in the same header.
   const [apiKey, setApiKeyState] = useState(() => readCookie(apiKeyCookie))
   const [authRequired, setAuthRequired] = useState(false)
+  // Until the gateway says what it asks for, nothing is drawn: opening the
+  // interface first and replacing it with a gate a moment later shows a
+  // conversation list to someone who has not passed the gate yet.
+  const [authMode, setAuthMode] = useState<api.AuthMode | null>(null)
+  const [credentialRejected, setCredentialRejected] = useState(false)
+  // Turns true once the gateway has nothing left to ask for. Every data call
+  // waits on it, so a refused credential never loads a conversation list.
+  const [unlocked, setUnlocked] = useState(false)
 
   const [models, setModels] = useState<ModelEntry[]>([])
   // The default is the id GET /v1/models advertises, not the registry key that
@@ -213,13 +223,61 @@ export function App() {
     // placeholder for a title: changing the language relabels those rows.
   }, [hydrateTitles, report, t])
 
+  // Asks the gateway what it wants before anything is drawn, then tries the
+  // credential this browser already holds. A stored credential the gateway no
+  // longer accepts is cleared rather than retried on every call.
   useEffect(() => {
-    api.listModels().then(setModels).catch(report)
-  }, [report])
+    let cancelled = false
+
+    async function resolveAuth() {
+      let mode: api.AuthMode = 'none'
+      try {
+        mode = await api.fetchAuthMode()
+      } catch {
+        // A gateway that cannot answer this cannot serve a conversation either.
+        // Treating it as open lets the ordinary error path report the failure
+        // instead of holding the interface behind a gate nobody can pass.
+      }
+      if (cancelled) return
+      setAuthMode(mode)
+
+      if (mode === 'none') {
+        setUnlocked(true)
+        return
+      }
+
+      const stored = readCookie(apiKeyCookie)
+      if (!stored) return
+
+      try {
+        if (await api.verifyCredential(stored)) {
+          if (!cancelled) setUnlocked(true)
+          return
+        }
+      } catch {
+        // Fall through to the gate; the user can offer another credential.
+      }
+      if (cancelled) return
+      clearCookie(apiKeyCookie)
+      setApiKeyState('')
+      setCredentialRejected(true)
+    }
+
+    void resolveAuth()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
+    if (!unlocked) return
+    api.listModels().then(setModels).catch(report)
+  }, [report, unlocked])
+
+  useEffect(() => {
+    if (!unlocked) return
     void refreshRows()
-  }, [refreshRows])
+  }, [refreshRows, unlocked])
 
   const openRow = useCallback(
     async (row: ConversationRow) => {
@@ -486,19 +544,48 @@ export function App() {
     writeCookie(modelCookie, next)
   }, [])
 
-  const saveApiKey = useCallback((key: string) => {
-    setApiKeyState(key)
-    api.setApiKey(key)
-    writeCookie(apiKeyCookie, key)
-    setAuthRequired(false)
-    setNotice(null)
-  }, [])
+  // Checks the credential before storing it, so a wrong password is refused at
+  // the gate rather than accepted and then failing on every call behind it.
+  const saveCredential = useCallback(
+    async (credential: string) => {
+      try {
+        if (!(await api.verifyCredential(credential))) {
+          setCredentialRejected(true)
+          return
+        }
+      } catch (err) {
+        report(err)
+        return
+      }
+      setApiKeyState(credential)
+      api.setApiKey(credential)
+      writeCookie(apiKeyCookie, credential)
+      setCredentialRejected(false)
+      setAuthRequired(false)
+      setUnlocked(true)
+      setNotice(null)
+    },
+    [report],
+  )
 
-  // Shown whenever the gateway refused the credential, including the case where
-  // a key is already stored: a stored key that no longer works has to be
-  // replaceable, not a lockout.
-  if (authRequired) {
-    return <ApiKeyGate onSubmit={saveApiKey} />
+  // Nothing is drawn until the gateway has said what it asks for. Opening the
+  // interface first and replacing it with a gate a moment later would show a
+  // conversation list to someone who has not passed the gate yet.
+  if (authMode === null) {
+    return null
+  }
+
+  // Shown while the interface is locked, and again whenever a data call is
+  // refused: a stored credential that no longer works has to be replaceable,
+  // not a lockout.
+  if (!unlocked || authRequired) {
+    return (
+      <ApiKeyGate
+        mode={authMode === 'none' ? 'api_key' : authMode}
+        rejected={credentialRejected}
+        onSubmit={saveCredential}
+      />
+    )
   }
 
   // A row that M365 lists but nothing here has bound carries an empty session

@@ -248,6 +248,18 @@ type Config struct {
 	// the interface off also stops the recording, because a gateway that only
 	// proxies should not write message content to disk.
 	EnableWebUI bool
+	// WebUIPassword gates the browser interface. An empty value opens the
+	// interface to anyone who can reach it.
+	//
+	// The interface holds the password in a cookie and sends it in the same
+	// header an API client sends its key, so the gateway accepts it as one more
+	// credential rather than through a session of its own. That keeps every
+	// credential on a header, where a cross-site form cannot carry it.
+	//
+	// This is a separate switch from APIKeys. A deployment that sets a password
+	// and no API key gates the interface and leaves the API open, which is what
+	// an empty key list means everywhere else.
+	WebUIPassword string
 }
 
 const (
@@ -312,9 +324,13 @@ func LoadConfig() *Config {
 		MaxToolRounds:         min(getEnvInt("M365_MAX_TOOL_ROUNDS", DefaultMaxToolRounds), MaxToolRoundsCeiling),
 		EnableWebSearch:       getEnvBool("M365_ENABLE_WEB_SEARCH", true),
 		EnableWebUI:           getEnvBool("M365_ENABLE_WEB_UI", true),
+		WebUIPassword:         strings.TrimSpace(os.Getenv("M365_WEB_UI_PASSWORD")),
 	}
 
-	logging.Infof("LoadConfig: tenantID=%s userOID=%s clientID=%s apiKeys=%d", cfg.TenantID, cfg.UserOID, cfg.ClientID[:min(8, len(cfg.ClientID))]+"...", len(cfg.APIKeys))
+	// The password itself never reaches a log line; only whether one is set.
+	logging.Infof("LoadConfig: tenantID=%s userOID=%s clientID=%s apiKeys=%d webUIPassword=%t",
+		cfg.TenantID, cfg.UserOID, cfg.ClientID[:min(8, len(cfg.ClientID))]+"...",
+		len(cfg.APIKeys), cfg.WebUIPassword != "")
 	return cfg
 }
 

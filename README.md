@@ -574,11 +574,34 @@ A conversation started outside this gateway has no record, so its history is emp
 
 ### Configuration
 
-| Variable              | Default | Description                                                                                       |
-|-----------------------|---------|---------------------------------------------------------------------------------------------------|
-| `M365_ENABLE_WEB_UI`  | `1`     | Serves the interface at `/` and records transcripts. `0`, `false`, `off` or `no` disables both.    |
+| Variable               | Default | Description                                                                                    |
+|------------------------|---------|------------------------------------------------------------------------------------------------|
+| `M365_ENABLE_WEB_UI`   | `1`     | Serves the interface at `/` and records transcripts. `0`, `false`, `off` or `no` disables both. |
+| `M365_WEB_UI_PASSWORD` | unset   | Password the interface asks for. Unset opens it to anyone who can reach it.                     |
 
 Turning it off removes the interface (`/` returns 404) and stops the recording, which is what a deployment that only proxies wants. `GET /v1/sessions/{id}/messages` then answers `404 transcripts_disabled`.
+
+### Password
+
+Set `M365_WEB_UI_PASSWORD` and the interface asks for it before it draws anything. Leave it unset and the interface opens with no login.
+
+The password is one more credential the gateway accepts, not a session of its own: the browser holds it in a cookie and sends it in the same `Authorization` header an API client sends its key in. Every credential therefore stays on a header, where a cross-site form cannot carry it, and the interface reaches the authenticated routes without a session mechanism that would need CSRF protection of its own.
+
+Two routes exist so the interface can know what to ask for, because the page itself is served without a credential:
+
+| Endpoint               | Description                                                                          |
+|------------------------|--------------------------------------------------------------------------------------|
+| `GET /v1/auth`         | Reports which gate to show: `{"mode": "none" \| "password" \| "api_key"}`             |
+| `POST /v1/auth/verify` | Answers whether the credential in the request header is one this gateway accepts      |
+
+Both are public, and neither returns a secret. The credential travels in the header rather than in a body, so it stays out of anything that records a payload; the log records only that a credential was rejected.
+
+`M365_WEB_UI_PASSWORD` and `M365_API_KEYS` are separate switches:
+
+- **Neither set**: the interface opens with no login, and every route is open.
+- **Password only**: the interface asks for the password. The API stays open, because an empty key list means open everywhere else in this gateway. Set `M365_API_KEYS` as well if the API must be closed too.
+- **Keys only**: the interface asks for an API key, because without one its every data call is refused.
+- **Both**: the interface asks for the password, and the API accepts either the password or a key.
 
 ### Building the interface
 
@@ -618,6 +641,8 @@ The interface uses React, `react-markdown` with `remark-gfm` for answers, and Sw
 | `DELETE /v1/sessions/{id}`       | Delete the conversation and clear the mapping          |
 | `POST /mcp`                      | Model Context Protocol server (JSON-RPC 2.0)           |
 | `GET /v1/health`                 | Reachability probe for Codex (no auth required)        |
+| `GET /v1/auth`                   | Which gate the browser interface must show (no auth required) |
+| `POST /v1/auth/verify`           | Whether the offered credential is accepted (no auth required) |
 | `GET /health`                    | Health check (no auth required)                        |
 | `GET /`                          | Browser interface (no auth required for the page)      |
 

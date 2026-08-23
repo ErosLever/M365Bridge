@@ -38,6 +38,11 @@
   "gate.title": "API anahtarı",
   "gate.body": "Bu gateway {keys} ile yapılandırılmış. Anahtar bu tarayıcıda bir cookie'de saklanır ve her istekte {header} başlığıyla gönderilir.",
   "gate.save": "Kaydet",
+  "gate.passwordTitle": "Parola",
+  "gate.passwordBody": "Bu arayüz {variable} ile korunuyor. Parola bu tarayıcıda bir cookie'de saklanır ve her istekte gönderilir.",
+  "gate.passwordPlaceholder": "Parola",
+  "gate.enter": "Gir",
+  "gate.rejected": "Kabul edilmedi. Yeniden dene.",
 
   "notice.authRequired": "Bu gateway bir API anahtarı istiyor.",
   "notice.foreignConversation": "Bu konuşma bu gateway dışında başlamış. Buradan devam edebilirsin, ya da geçmişini M365 sayfasından yükleyebilirsin.",

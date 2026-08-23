@@ -551,6 +551,12 @@ button.icon.danger {
   color: var(--muted);
 }
 
+.gate-error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+
 .gate-card input {
   font: inherit;
   color: inherit;

@@ -574,11 +574,34 @@ Bu gateway dışında başlamış bir konuşmanın kaydı yoktur; açtığınız
 
 ### Yapılandırma
 
-| Değişken              | Varsayılan | Açıklama                                                                                        |
-|-----------------------|------------|--------------------------------------------------------------------------------------------------|
-| `M365_ENABLE_WEB_UI`  | `1`        | Arayüzü `/` altında sunar ve transcript kaydeder. `0`, `false`, `off` veya `no` ikisini de kapatır. |
+| Değişken               | Varsayılan | Açıklama                                                                                           |
+|------------------------|------------|------------------------------------------------------------------------------------------------------|
+| `M365_ENABLE_WEB_UI`   | `1`        | Arayüzü `/` altında sunar ve transcript kaydeder. `0`, `false`, `off` veya `no` ikisini de kapatır.    |
+| `M365_WEB_UI_PASSWORD` | boş        | Arayüzün sorduğu parola. Boş bırakılırsa arayüz, erişebilen herkese açıktır.                          |
 
 Kapatmak arayüzü kaldırır (`/` 404 döner) ve kaydı durdurur; yalnızca proxy olarak çalışan bir kurulumun istediği budur. Bu durumda `GET /v1/sessions/{id}/messages` `404 transcripts_disabled` döndürür.
+
+### Parola
+
+`M365_WEB_UI_PASSWORD` doluysa arayüz, hiçbir şey çizmeden önce parolayı sorar. Boşsa arayüz girişsiz açılır.
+
+Parola, gateway'in kabul ettiği bir kimlik bilgisidir; kendine ait bir oturum değildir. Tarayıcı onu cookie'de tutar ve bir API istemcisinin anahtarını gönderdiği `Authorization` başlığıyla gönderir. Böylece her kimlik bilgisi header üzerinde kalır, siteler arası bir form onu taşıyamaz ve arayüz, kendi CSRF korumasını gerektirecek bir oturum mekanizması olmadan korumalı rotalara erişir.
+
+Sayfanın kendisi kimlik bilgisi olmadan sunulduğu için, arayüzün neyi soracağını öğrenebilmesi adına iki rota var:
+
+| Uç nokta               | Açıklama                                                                              |
+|------------------------|-----------------------------------------------------------------------------------------|
+| `GET /v1/auth`         | Hangi giriş ekranının gösterileceğini bildirir: `{"mode": "none" \| "password" \| "api_key"}` |
+| `POST /v1/auth/verify` | İstek başlığındaki kimlik bilgisinin bu gateway tarafından kabul edilip edilmediğini söyler |
+
+İkisi de public'tir ve hiçbiri bir sır döndürmez. Kimlik bilgisi gövdede değil başlıkta taşınır, böylece bir payload kaydeden hiçbir yere düşmez; log yalnızca bir kimlik bilgisinin reddedildiğini yazar.
+
+`M365_WEB_UI_PASSWORD` ve `M365_API_KEYS` ayrı anahtarlardır:
+
+- **İkisi de boş**: arayüz girişsiz açılır, her rota açıktır.
+- **Yalnızca parola**: arayüz parolayı sorar. API açık kalır, çünkü bu gateway'de boş anahtar listesi her yerde "açık" demektir. API de kapansın isteniyorsa `M365_API_KEYS` de doldurulmalıdır.
+- **Yalnızca anahtar**: arayüz API anahtarını sorar, çünkü anahtarsız her veri çağrısı reddedilir.
+- **İkisi de dolu**: arayüz parolayı sorar, API ise parolayı da anahtarı da kabul eder.
 
 ### Arayüzü derlemek
 
@@ -620,6 +643,8 @@ Arayüz React, cevaplar için `remark-gfm` ile birlikte `react-markdown` ve diya
 | `DELETE /v1/sessions/{id}`       | Sohbeti siler ve eşlemeyi temizler                      |
 | `POST /mcp`                      | Model Context Protocol sunucusu (JSON-RPC 2.0)          |
 | `GET /v1/health`                 | Codex için erişilebilirlik probe'u (kimlik doğrulama gerekmez) |
+| `GET /v1/auth`                   | Tarayıcı arayüzünün hangi giriş ekranını göstereceği (kimlik doğrulama gerekmez) |
+| `POST /v1/auth/verify`           | Sunulan kimlik bilgisinin kabul edilip edilmediği (kimlik doğrulama gerekmez) |
 | `GET /health`                    | Sağlık kontrolü (kimlik doğrulama gerektirmez)          |
 | `GET /`                          | Tarayıcı arayüzü (sayfa için kimlik doğrulama gerekmez) |
 

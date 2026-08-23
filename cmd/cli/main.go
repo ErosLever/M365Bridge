@@ -144,6 +144,11 @@ func printEnvironment(w io.Writer) {
                                    is unset.
     M365_ENABLE_WEB_UI             Serve the browser interface at / and record a
                                    transcript per session (default true).
+    M365_WEB_UI_PASSWORD           Password the browser interface asks for.
+                                   Unset opens the interface to anyone who can
+                                   reach it. The interface sends it in the same
+                                   header an API client sends its key, so it is
+                                   accepted wherever a key is.
 
   Answers
     M365_ENABLE_WEB_SEARCH         Let Copilot search the web (default true).
