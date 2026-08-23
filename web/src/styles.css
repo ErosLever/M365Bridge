@@ -549,6 +549,49 @@ code {
   font-size: 0.92em;
 }
 
+/* Dialogs.
+
+   SweetAlert2 injects its stylesheet at runtime, after this one, so an equally
+   specific rule here would lose. Its own variables are declared on :root, and
+   html:root outranks that in both directions without depending on order. The
+   values are this interface's own tokens, which already follow the colour
+   scheme, so the popup switches with the rest of the page. */
+html:root {
+  --swal2-width: 26em;
+  --swal2-background: var(--panel);
+  --swal2-color: var(--text);
+  --swal2-border: 1px solid var(--border);
+  --swal2-border-radius: 10px;
+  --swal2-input-background: var(--bg);
+  --swal2-input-border: 1px solid var(--border);
+  --swal2-input-border-radius: 6px;
+  --swal2-input-box-shadow: none;
+  --swal2-input-hover-box-shadow: none;
+  --swal2-input-focus-border: 1px solid var(--accent);
+  --swal2-input-focus-box-shadow: none;
+  --swal2-validation-message-background: var(--bg);
+  --swal2-validation-message-color: var(--danger);
+}
+
+.swal2-popup {
+  font: inherit;
+}
+
+.swal2-title {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.swal2-html-container {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.swal2-input {
+  font: inherit;
+  color: inherit;
+}
+
 @media (max-width: 720px) {
   .layout {
     grid-template-columns: 1fr;

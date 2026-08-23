@@ -1,5 +1,6 @@
 import type { ConversationRow } from '../types'
 import { useI18n } from '../i18n'
+import { confirmDialog, promptDialog } from '../dialogs'
 import { LanguagePicker } from './LanguagePicker'
 
 interface Props {
@@ -45,9 +46,15 @@ export function Sidebar({ rows, activeId, remoteListFailed, onOpen, onNew, onDel
                 <button
                   className="icon"
                   title={t('sidebar.rename')}
-                  onClick={() => {
-                    const name = window.prompt(t('sidebar.renamePrompt'), row.title)
-                    if (name && name.trim()) onRename(row, name.trim())
+                  onClick={async () => {
+                    const name = await promptDialog({
+                      title: t('sidebar.rename'),
+                      value: row.title,
+                      confirmText: t('dialog.save'),
+                      cancelText: t('dialog.cancel'),
+                      emptyText: t('dialog.nameRequired'),
+                    })
+                    if (name) onRename(row, name)
                   }}
                 >
                   ✎
@@ -55,8 +62,15 @@ export function Sidebar({ rows, activeId, remoteListFailed, onOpen, onNew, onDel
                 <button
                   className="icon danger"
                   title={t('sidebar.delete')}
-                  onClick={() => {
-                    if (window.confirm(t('sidebar.deleteConfirm', { title }))) onDelete(row)
+                  onClick={async () => {
+                    const confirmed = await confirmDialog({
+                      title: t('sidebar.delete'),
+                      text: t('sidebar.deleteConfirm', { title }),
+                      confirmText: t('dialog.delete'),
+                      cancelText: t('dialog.cancel'),
+                      danger: true,
+                    })
+                    if (confirmed) onDelete(row)
                   }}
                 >
                   ×

@@ -4,11 +4,15 @@
   "sidebar.language": "Language",
   "sidebar.newConversation": "New conversation",
   "sidebar.rename": "Rename",
-  "sidebar.renamePrompt": "New name",
   "sidebar.delete": "Delete",
   "sidebar.deleteConfirm": "Delete \"{title}\"?",
   "sidebar.empty": "No conversations yet.",
   "sidebar.remoteListFailed": "The M365 conversation list could not be read, so only the conversations opened through this gateway are shown. The full list needs M365 web cookies.",
+
+  "dialog.save": "Save",
+  "dialog.delete": "Delete",
+  "dialog.cancel": "Cancel",
+  "dialog.nameRequired": "Write a name.",
 
   "conversation.new": "New conversation",
   "conversation.unnamed": "Unnamed conversation",

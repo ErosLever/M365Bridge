@@ -4,11 +4,15 @@
   "sidebar.language": "Dil",
   "sidebar.newConversation": "Yeni konuşma",
   "sidebar.rename": "Yeniden adlandır",
-  "sidebar.renamePrompt": "Yeni ad",
   "sidebar.delete": "Sil",
   "sidebar.deleteConfirm": "\"{title}\" silinsin mi?",
   "sidebar.empty": "Henüz konuşma yok.",
   "sidebar.remoteListFailed": "M365 konuşma listesi okunamadı, bu yüzden yalnızca bu gateway üzerinden açılan konuşmalar görünüyor. Listenin tamamı için M365 web cookie'leri gerekiyor.",
+
+  "dialog.save": "Kaydet",
+  "dialog.delete": "Sil",
+  "dialog.cancel": "Vazgeç",
+  "dialog.nameRequired": "Bir ad yaz.",
 
   "conversation.new": "Yeni konuşma",
   "conversation.unnamed": "Adsız konuşma",
