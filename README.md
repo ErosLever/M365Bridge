@@ -611,7 +611,7 @@ Every endpoint reports failures in the OpenAI error shape. `type` is the categor
 {"error": {"message": "M365 rate limit reached for this chat request; retry after the interval in the Retry-After header", "type": "rate_limit_error", "code": "rate_limit_exceeded"}}
 ```
 
-`type` is one of `invalid_request_error`, `authentication_error`, `rate_limit_error` or `server_error`. For a request the proxy rejects on its own, `code` is the status slug, for example `bad_request` or `method_not_allowed`.
+`type` is one of `invalid_request_error`, `authentication_error`, `rate_limit_error` or `server_error`. For a request the proxy rejects on its own, `code` is the status slug, for example `bad_request` or `method_not_allowed`. A body over 32 MiB is the one exception with a name of its own: it answers `413 request_too_large`, so a client can tell a request it must shrink from one that was simply malformed.
 
 A failed backend request is classified rather than reported as a generic `500`:
 
@@ -736,7 +736,7 @@ The route answers OpenAI and Anthropic clients at once, because both protocols r
 
 The list itself carries `object` and `data` for OpenAI, and `has_more`, `first_id` and `last_id` for Anthropic. The whole registry fits in one page, so `has_more` is always `false` and the cursors are the first and last advertised id.
 
-`capabilities` holds Anthropic's capability tree alongside the flat OpenAI-style entries: `batch`, `citations`, `code_execution`, `context_management`, `effort`, `image_input`, `pdf_input`, `structured_outputs` and `thinking`, each a `{"supported": bool}` leaf. The values state what the proxy actually does, so most read `false`. `effort` is `true` only for a model that has a `-reasoning` variant to route to, and `thinking` only for a reasoning tone, which is the one that emits chain-of-thought content.
+`capabilities` holds Anthropic's capability tree alongside the flat OpenAI-style entries: `batch`, `citations`, `code_execution`, `context_management`, `effort`, `image_input`, `pdf_input`, `structured_outputs` and `thinking`. Every node carries a `supported` boolean, and three of them nest one level further under it: `effort` names each accepted value (`low`, `medium`, `high`, `xhigh`, `max`), `thinking` names its `types` (`enabled`, `adaptive`), and `context_management` names each dated strategy. The values state what the proxy actually does, so most read `false`. `effort` is `true` only for a model that has a `-reasoning` variant to route to, and `thinking` only for a tone measured to emit chain-of-thought content.
 
 Claude Code discovers gateway models through this route, and it reads only the Anthropic format and only adds ids beginning with `claude` or `anthropic`. The Claude tones therefore keep such ids.
 

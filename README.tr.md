@@ -611,7 +611,7 @@ Tüm uç noktalar hataları OpenAI hata biçiminde döndürür. `type` istemcini
 {"error": {"message": "M365 rate limit reached for this chat request; retry after the interval in the Retry-After header", "type": "rate_limit_error", "code": "rate_limit_exceeded"}}
 ```
 
-`type` değeri `invalid_request_error`, `authentication_error`, `rate_limit_error` veya `server_error` olur. Proxy'nin kendi reddettiği istekler için `code`, durum kodunun slug hâlidir; örneğin `bad_request` veya `method_not_allowed`.
+`type` değeri `invalid_request_error`, `authentication_error`, `rate_limit_error` veya `server_error` olur. Proxy'nin kendi reddettiği istekler için `code`, durum kodunun slug hâlidir; örneğin `bad_request` veya `method_not_allowed`. Tek istisna 32 MiB'ı aşan gövdedir: kendi adıyla `413 request_too_large` döner, böylece istemci küçültmesi gereken isteği bozuk bir istekten ayırabilir.
 
 Başarısız bir backend isteği genel bir `500` yerine sınıflandırılır:
 
@@ -736,7 +736,7 @@ Route, OpenAI ve Anthropic istemcilerine aynı anda cevap verir, çünkü iki pr
 
 Listenin kendisi OpenAI için `object` ve `data`, Anthropic için `has_more`, `first_id` ve `last_id` taşır. Kayıt defterinin tamamı tek sayfaya sığdığı için `has_more` her zaman `false`'tur ve imleçler ilan edilen ilk ve son id'dir.
 
-`capabilities` alanı, düz OpenAI tarzı girdilerin yanında Anthropic'in yetenek ağacını da tutar: `batch`, `citations`, `code_execution`, `context_management`, `effort`, `image_input`, `pdf_input`, `structured_outputs` ve `thinking`, her biri `{"supported": bool}` yaprağı. Değerler proxy'nin gerçekte ne yaptığını bildirir, bu yüzden çoğu `false`'tur. `effort` yalnızca `-reasoning` varyantına yönlendirilebilen bir model için `true`'dur, `thinking` ise yalnızca chain-of-thought içeriği üreten reasoning tone'ları için.
+`capabilities` alanı, düz OpenAI tarzı girdilerin yanında Anthropic'in yetenek ağacını da tutar: `batch`, `citations`, `code_execution`, `context_management`, `effort`, `image_input`, `pdf_input`, `structured_outputs` ve `thinking`. Her düğüm bir `supported` boolean'ı taşır ve üçü onun altında bir seviye daha dallanır: `effort` kabul edilen her değeri adlandırır (`low`, `medium`, `high`, `xhigh`, `max`), `thinking` kendi `types` alanını adlandırır (`enabled`, `adaptive`), `context_management` ise tarihli her stratejiyi adlandırır. Değerler proxy'nin gerçekte ne yaptığını bildirir, bu yüzden çoğu `false`'tur. `effort` yalnızca `-reasoning` varyantına yönlendirilebilen bir model için `true`'dur, `thinking` ise yalnızca chain-of-thought içeriği ürettiği ölçülen tone'lar için.
 
 Claude Code gateway modellerini bu route üzerinden keşfeder; yalnızca Anthropic biçimini ayrıştırır ve yalnızca `claude` veya `anthropic` ile başlayan id'leri ekler. Claude tone'ları bu yüzden bu biçimde id taşır.
 
