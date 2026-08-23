@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ChatMessage } from '../types'
 import { useI18n } from '../i18n'
+import { Markdown } from './Markdown'
 
 interface Props {
   message: ChatMessage
@@ -33,8 +34,10 @@ export function MessageRow({ message, streaming }: Props) {
           {showThinking && <pre className="thinking-body">{message.thinking}</pre>}
         </div>
       )}
+      {/* Only an answer is markdown. What the user typed is shown exactly as
+          they typed it, because an asterisk in a question is an asterisk. */}
       <div className="body">
-        {message.content}
+        {message.role === 'assistant' ? <Markdown text={message.content} /> : message.content}
         {streaming && !message.content && <span className="cursor">▍</span>}
       </div>
     </div>
