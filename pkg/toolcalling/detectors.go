@@ -52,15 +52,10 @@ var sandboxHallucinationPatterns = []string{
 	"i can run that for you",
 	"running it now",
 
-	// A claimed execution environment.
-	"code interpreter",
-	"python sandbox",
+	// A claimed execution environment. Each of these claims the backend used
+	// one, through a possessive, a verb or a statement about what it provides,
+	// so none of them is the wording of an answer about the subject.
 	"my sandbox",
-	"/mnt/data",
-	"linux container",
-	"linux sandbox",
-	"cloud sandbox",
-	"sandbox environment",
 	"running in sandbox",
 	"executing in sandbox",
 	"execution environment has changed",
@@ -101,6 +96,29 @@ var sandboxHallucinationPatterns = []string{
 	"yürütme ortamım değişti",
 }
 
+// sandboxEnvironmentNames name an execution environment without claiming to
+// have used one. They are also the words an ordinary answer uses when the
+// question itself is about sandboxes, so on their own they say nothing about
+// which of the two a reply is.
+//
+// A reply short enough to be nothing but such a name is a claim about the
+// backend's own environment. A longer one is an answer about the subject the
+// caller asked about, and a long reply that really does claim to have run the
+// work says so through a pattern above, which carries no length bound.
+var sandboxEnvironmentNames = []string{
+	"code interpreter",
+	"python sandbox",
+	"cloud sandbox",
+	"sandbox environment",
+	"linux container",
+	"linux sandbox",
+	"/mnt/data",
+}
+
+// sandboxEnvironmentMaxLen bounds the reply length in which a bare environment
+// name still reads as a claim rather than as the subject of the answer.
+const sandboxEnvironmentMaxLen = 300
+
 // contentPolicyPatterns match M365's canned content refusal. It is a different
 // failure from a tool refusal: the backend declined the request itself, so no
 // re-ask or tool instruction can recover it.
@@ -134,7 +152,10 @@ func IsToolRefusal(text string) bool {
 // IsSandboxHallucination reports whether the reply claims to have run the work
 // itself instead of calling one of the caller's tools.
 func IsSandboxHallucination(text string) bool {
-	return matchesAny(text, sandboxHallucinationPatterns)
+	if matchesAny(text, sandboxHallucinationPatterns) {
+		return true
+	}
+	return len(text) <= sandboxEnvironmentMaxLen && matchesAny(text, sandboxEnvironmentNames)
 }
 
 // toolIntentPhrase matches a statement of intent to use a tool. Tool selection
