@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.4.6] - 2026-08-23
+
+### Added
+- Gate the browser interface with `M365_WEB_UI_PASSWORD`. An unset value leaves the interface open, as before. The password is one more credential the gateway accepts rather than a session of its own: the browser holds it in a cookie and sends it in the same `Authorization` header an API client sends its key in, so every credential stays on a header where a cross-site form cannot carry it
+- Answer `GET /v1/auth` with the gate the browser interface must show (`none`, `password` or `api_key`), and `POST /v1/auth/verify` with whether an offered credential is accepted. Both are public, because the page that asks for a credential is served without one and cannot otherwise learn what to ask for. Without the verify route a wrong password would look like a right one whenever no API key is configured, since every route answers 200 then
+
+### Changed
+- `M365_WEB_UI_PASSWORD` and `M365_API_KEYS` are separate switches. A password with no key gates the interface and leaves the API open, which is what an empty key list means everywhere else in this gateway
+
+### Fixed
+- Compare every secret in constant time. The API key check returned as soon as two bytes differed, which let a caller measure how much of a guess was right
+
 ## [1.4.5] - 2026-08-23
 
 ### Added
