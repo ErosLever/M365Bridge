@@ -247,6 +247,12 @@ body {
   max-width: 780px;
 }
 
+/* An answer often carries a comparison table, which a line length chosen for
+   prose squeezes into one word per cell. */
+.message.assistant {
+  max-width: 900px;
+}
+
 .message.user {
   align-self: flex-end;
   align-items: flex-end;
@@ -271,9 +277,13 @@ body {
 }
 
 /* Rendered markdown brings its own block spacing, so the literal line breaks
-   the surrounding bubble preserves would double every gap. */
+   the surrounding bubble preserves would double every gap.
+   The bubble also breaks inside a word to keep an unbroken URL from widening
+   the conversation. Rendered markdown has no bare URL left to widen anything,
+   and the same rule split a table cell's heading into "Lo/nd/on". */
 .markdown {
   white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .markdown > :first-child {
@@ -317,6 +327,12 @@ body {
 
 .markdown a {
   color: var(--accent);
+}
+
+/* An answer cites several sources in a row, and consecutive citation links
+   would otherwise read as one number. */
+.markdown a + a {
+  margin-left: 4px;
 }
 
 .markdown code {

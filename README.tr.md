@@ -12,6 +12,8 @@
 
 Microsoft 365 Copilot'un WebSocket arayüzünü OpenAI/Anthropic uyumlu HTTP API'sine dönüştüren bir Go uygulamasıdır.
 
+![Tarayıcı arayüzü, bir soruyu kaynak göstererek yanıtlıyor](docs/webui-tr.png)
+
 ## Mimari
 
 Uygulamanız -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Backend
@@ -41,7 +43,7 @@ Uygulamanız -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Bac
 - Tüm uç noktalarda max_tokens uygulaması (tiktoken BPE)
 - `/v1/quota` üzerinde sohbet kotası sayaçları
 - Etkileşimli kullanım için CLI arayüzü
-- Binary'ye gömülü tarayıcı arayüzü (konuşma listesi, akışlı sohbet, model seçimi)
+- Binary'ye gömülü tarayıcı arayüzü (konuşma listesi, akışlı sohbet, model seçimi, markdown cevaplar, İngilizce ve Türkçe)
 - Alt komut yönlendirmeli tek binary
 
 ## Kurulum
@@ -540,7 +542,9 @@ print(resp.choices[0].message.content)
 
 Sunucunun kök adresini tarayıcıda açın (varsayılan Docker kurulumunda `http://localhost:8230/`). Arayüz binary'ye gömülüdür, bu yüzden ayrı bir asset dizini ve çalıştırılacak ikinci bir süreç yoktur.
 
-Sol tarafta konuşmaları listeler, cevapları geldikçe akıtır, `GET /v1/models` listesinden model seçtirir, konuşma oluşturur, yeniden adlandırır ve siler.
+Sol tarafta konuşmaları listeler, cevapları geldikçe akıtır, `GET /v1/models` listesinden model seçtirir, konuşma oluşturur, yeniden adlandırır ve siler. Cevap markdown olarak çizilir, bu yüzden karşılaştırma tablosu tablodur ve kaynak, cümlenin ortasındaki bir URL değil bağlantıdır. Sizin yazdığınız metin ise aynen yazdığınız gibi gösterilir. Yeniden adlandırma ve silme, tarayıcının kendi diyalogları yerine sayfa içinde sorar.
+
+Sayfanın ihtiyaç duyduğu her şey binary'ye derlenmiştir. Başka bir yerden font, script veya stylesheet yüklemez; bu yüzden M365 backend'i dışında internete çıkışı olmayan bir makinede de çalışır.
 
 Sayfanın kendisi API anahtarı olmadan sunulur, çünkü anahtarı soran ekran anahtar isteyemez. Yaptığı tüm veri çağrıları diğer istemcilerle aynı `withAuth` middleware'inden geçer. Anahtar cookie'de saklanır ve `Authorization` başlığıyla gönderilir; tarayıcının kendiliğinden eklediği bir cookie olarak asla gitmez, bu yüzden siteler arası bir istek onu taşıyamaz.
 
@@ -549,6 +553,14 @@ Sayfanın kendisi API anahtarı olmadan sunulur, çünkü anahtarı soran ekran 
 İki kaynak birleştirilir. `GET /v1/conversations` isimleri verir ve M365 web cookie'leri gerektirir; `GET /v1/sessions` konuşmayı devam ettirilebilir kılan oturum ID'lerini verir. İkisinde de bulunan bir konuşma tek satırdır.
 
 Cookie yoksa ilk çağrı başarısız olur, sidebar yalnızca yerel eşlemelere düşer ve bunu yazar. Sadece M365'in bildiği bir konuşma işaretlenir ve açtığınız anda ona bir oturum ID'si bağlanır; başka bir istemcide başlamış bir konuşmayı burada devam ettirilebilir kılan budur.
+
+### Dil
+
+Arayüz İngilizce ve Türkçe olarak gelir; seçici, sidebar'da ismin yanındadır. Varsayılan İngilizcedir.
+
+Her dil, `web/src/locales` altında dil koduyla adlandırılmış tek bir JSON dosyasıdır ve kodda hiçbir yer bir dosyayı ismen saymaz: build dizinin tamamını derler. Dolayısıyla dil eklemek, `en.json` dosyasını kopyalayıp değerlerini çevirmek, örneğin `de.json` olarak kaydetmek ve `make ui` çalıştırmaktan ibarettir. `$label` girdisi dili kendi dilinde adlandırır ve seçicide görünen odur. Katalogun yalnızca bir kısmını çeviren bir dosya, geri kalanı için İngilizceye düşer; böylece eksik bir çeviri bozuk değil kullanılabilir olur.
+
+Seçilen dil `m365bridge_lang` cookie'sinde saklanır. Cookie'si olmayan bir tarayıcı ile bu build'in taşımadığı bir dili adlandıran cookie aynı durumdur: İngilizce, ve saklanan değerle gösterilen dil çelişmesin diye cookie geri yazılır.
 
 ### Transcript'ler
 
@@ -572,6 +584,8 @@ Kaynaklar `web/` altında, build çıktısı `pkg/webui/dist` altında commit'li
 make ui      # node container'ında derler ve çıktıyı pkg/webui/dist'e kopyalar
 make up      # imajı yeniden kurar ve container'ı yeniden başlatır
 ```
+
+Arayüz React, cevaplar için `remark-gfm` ile birlikte `react-markdown` ve diyaloglar için SweetAlert2 kullanır. Hepsi commit'li çıktının içine derlenir, bu yüzden sunulan sayfa çalışma zamanında hiçbir şey indirmez.
 
 ## API Uç Noktaları
 
@@ -1174,6 +1188,7 @@ pkg/
   webui/embed.go           # Derlenmiş arayüz, binary'ye gömülü
 go.mod                     # Modül: github.com/KilimcininKorOglu/M365Bridge, Go 1.26
 web/                       # Arayüzün Vite projesi; make ui bunu pkg/webui/dist'e derler
+docs/                      # README dosyalarının kullandığı ekran görüntüleri
 data/                      # Çalışma zamanı verisi (gitignore'lı): tokens/, setup.json, cache/, transcripts/
 ```
 

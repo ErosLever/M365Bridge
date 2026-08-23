@@ -12,6 +12,8 @@
 
 A Go implementation that converts Microsoft 365 Copilot's WebSocket interface to OpenAI/Anthropic compatible HTTP API.
 
+![The browser interface answering a question with sources](docs/webui-en.png)
+
 ## Architecture
 
 Your App -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Backend
@@ -41,7 +43,7 @@ Your App -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Backend
 - max_tokens enforcement across all endpoints (tiktoken BPE)
 - Conversation quota counters on `/v1/quota`
 - CLI interface for interactive use
-- Browser interface compiled into the binary (conversation list, streaming chat, model picker)
+- Browser interface compiled into the binary (conversation list, streaming chat, model picker, markdown answers, English and Turkish)
 - Single binary with subcommand routing
 
 ## Installation
@@ -540,7 +542,9 @@ print(resp.choices[0].message.content)
 
 Open the server's root URL in a browser (`http://localhost:8230/` under the shipped Docker setup). The interface is compiled into the binary, so there is no separate asset directory and no second process to run.
 
-It lists conversations in a sidebar, streams answers as they arrive, lets you pick a model from `GET /v1/models`, and creates, renames and deletes conversations.
+It lists conversations in a sidebar, streams answers as they arrive, lets you pick a model from `GET /v1/models`, and creates, renames and deletes conversations. An answer is rendered as markdown, so a comparison table is a table and a citation is a link rather than a URL in the middle of a sentence. What you typed is shown exactly as you typed it. Rename and delete ask in the page rather than through the browser's own dialogs.
+
+Everything the page needs is compiled into the binary. It loads no font, script or stylesheet from anywhere else, so it works on a machine with no route to the internet beyond the M365 backend itself.
 
 The page itself is served without an API key, because the screen that asks for the key cannot require one. Every data call it makes goes through the same `withAuth` middleware as any other client. The key is stored in a cookie and sent in the `Authorization` header, never as a cookie the browser attaches on its own, so no cross-site request can carry it.
 
@@ -549,6 +553,14 @@ The page itself is served without an API key, because the screen that asks for t
 Two sources are merged. `GET /v1/conversations` supplies the names and needs M365 web cookies; `GET /v1/sessions` supplies the session ids that make a conversation continuable. A conversation present in both is one row.
 
 Without cookies the first call fails, the sidebar falls back to the local mappings alone and says so. A conversation that only M365 knows is marked and gets a session id bound to it the moment you open it, which is what makes a conversation started on another client continuable here.
+
+### Language
+
+The interface ships in English and Turkish, and the picker sits next to the name in the sidebar. English is the default.
+
+Each language is one JSON file under `web/src/locales`, named by its language code, and nothing in the code names a file: the build compiles the directory in. Adding a language is therefore a matter of copying `en.json`, translating its values, saving it as, say, `de.json`, and running `make ui`. The `$label` entry names the language in its own language and is what the picker shows. A file that translates only part of the catalog falls through to English for the rest, so a partial translation is usable rather than broken.
+
+The chosen language is stored in the `m365bridge_lang` cookie. A browser with no cookie, and a cookie naming a language this build does not carry, are the same case: English, written back so the stored value and the shown language cannot disagree.
 
 ### Transcripts
 
@@ -572,6 +584,8 @@ The sources live in `web/` and the build output is committed at `pkg/webui/dist`
 make ui      # builds in a node container and copies the output into pkg/webui/dist
 make up      # rebuilds the image and restarts the container
 ```
+
+The interface uses React, `react-markdown` with `remark-gfm` for answers, and SweetAlert2 for its dialogs. All of them are bundled into the committed output, so the served page fetches nothing at runtime.
 
 ## API Endpoints
 
@@ -1174,6 +1188,7 @@ pkg/
   webui/embed.go           # The built interface, compiled into the binary
 go.mod                     # Module: github.com/KilimcininKorOglu/M365Bridge, Go 1.26
 web/                       # Vite project for the interface; make ui builds it into pkg/webui/dist
+docs/                      # Screenshots used by the READMEs
 data/                      # Runtime data (gitignored): tokens/, setup.json, cache/, transcripts/
 ```
 
