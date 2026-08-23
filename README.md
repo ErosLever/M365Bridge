@@ -542,7 +542,11 @@ print(resp.choices[0].message.content)
 
 Open the server's root URL in a browser (`http://localhost:8230/` under the shipped Docker setup). The interface is compiled into the binary, so there is no separate asset directory and no second process to run.
 
-It lists conversations in a sidebar, streams answers as they arrive, lets you pick a model from `GET /v1/models`, and creates, renames and deletes conversations. An answer is rendered as markdown, so a comparison table is a table and a citation is a link rather than a URL in the middle of a sentence. What you typed is shown exactly as you typed it. Rename and delete ask in the page rather than through the browser's own dialogs.
+It lists conversations in a sidebar, streams answers as they arrive, lets you pick a model from `GET /v1/models`, and creates, renames and deletes conversations. An answer is rendered as markdown, so a comparison table is a table and a citation is a link rather than a URL in the middle of a sentence. The reasoning block behind **Show the thinking** is rendered the same way, because the backend writes that in markdown too. What you typed is shown exactly as you typed it. Rename and delete ask in the page rather than through the browser's own dialogs.
+
+### Addresses
+
+Each conversation has its own address, `/c/{session id}`. Opening one writes it, so a conversation can be reloaded onto, linked to, or reached with the browser's back and forward buttons. An address naming a conversation this gateway no longer holds falls back to the empty pane.
 
 Everything the page needs is compiled into the binary. It loads no font, script or stylesheet from anywhere else, so it works on a machine with no route to the internet beyond the M365 backend itself.
 

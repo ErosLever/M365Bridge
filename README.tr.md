@@ -542,7 +542,11 @@ print(resp.choices[0].message.content)
 
 Sunucunun kök adresini tarayıcıda açın (varsayılan Docker kurulumunda `http://localhost:8230/`). Arayüz binary'ye gömülüdür, bu yüzden ayrı bir asset dizini ve çalıştırılacak ikinci bir süreç yoktur.
 
-Sol tarafta konuşmaları listeler, cevapları geldikçe akıtır, `GET /v1/models` listesinden model seçtirir, konuşma oluşturur, yeniden adlandırır ve siler. Cevap markdown olarak çizilir, bu yüzden karşılaştırma tablosu tablodur ve kaynak, cümlenin ortasındaki bir URL değil bağlantıdır. Sizin yazdığınız metin ise aynen yazdığınız gibi gösterilir. Yeniden adlandırma ve silme, tarayıcının kendi diyalogları yerine sayfa içinde sorar.
+Sol tarafta konuşmaları listeler, cevapları geldikçe akıtır, `GET /v1/models` listesinden model seçtirir, konuşma oluşturur, yeniden adlandırır ve siler. Cevap markdown olarak çizilir, bu yüzden karşılaştırma tablosu tablodur ve kaynak, cümlenin ortasındaki bir URL değil bağlantıdır. **Düşünceyi göster** altındaki akıl yürütme bloğu da aynı şekilde çizilir, çünkü backend onu da markdown olarak yazar. Sizin yazdığınız metin ise aynen yazdığınız gibi gösterilir. Yeniden adlandırma ve silme, tarayıcının kendi diyalogları yerine sayfa içinde sorar.
+
+### Adresler
+
+Her konuşmanın kendi adresi vardır: `/c/{session id}`. Bir konuşmayı açmak bu adresi yazar; böylece konuşma yeniden yüklenebilir, bağlantı olarak paylaşılabilir ve tarayıcının geri/ileri düğmeleriyle gezilebilir. Bu gateway'in artık tutmadığı bir konuşmayı adlandıran adres boş panele düşer.
 
 Sayfanın ihtiyaç duyduğu her şey binary'ye derlenmiştir. Başka bir yerden font, script veya stylesheet yüklemez; bu yüzden M365 backend'i dışında internete çıkışı olmayan bir makinede de çalışır.
 
