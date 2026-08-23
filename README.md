@@ -684,9 +684,11 @@ This is equivalent to setting `X-Session-Id: my-session-001` header or `session_
 
 ### External Model Names
 
-Clients that send model names not in the registry (e.g. `claude-sonnet-4-20250514`, `gpt-4o`, `o1`) will fall back to the `auto` model. The proxy accepts any model string — unknown names do not cause errors, they just use the default model.
+A model name this gateway does not serve is answered with `404 model_not_found`, never with another entry. An unknown name used to fall back to the default model, which meant a caller was answered by a tone it never asked for and a model removed from the registry appeared to keep working.
 
-A request that sends no model (empty `model` field, or only a `:session-id` suffix) defaults to `gpt5.5-reasoning`, the reasoning tone that is reliable for tool calling, rather than `auto`.
+The registry carries the vendor names agent clients send, so `claude-sonnet-4-20250514` resolves; `gpt-4o` and `o1` do not and return `404`. `GET /v1/models` lists every id that is served.
+
+A request that sends no model at all defaults to `gpt5.5-reasoning`, the reasoning tone that is reliable for tool calling, rather than `auto`. This covers an empty `model` field, a missing one, and a bare `:session-id` suffix.
 
 ### Advertised Context Window
 

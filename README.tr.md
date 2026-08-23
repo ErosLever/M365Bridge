@@ -684,9 +684,11 @@ Bu, `X-Session-Id: my-session-001` header'ı veya istek gövdesinde `session_id:
 
 ### Harici Model Adları
 
-Kayıtta olmayan model adları gönderen istemciler (ör. `claude-sonnet-4-20250514`, `gpt-4o`, `o1`) `auto` modeline düşer. Proxy herhangi bir model dizesini kabul eder — bilinmeyen adlar hata vermez, sadece varsayılan modeli kullanır.
+Bu gateway'in sunmadığı bir model adı `404 model_not_found` ile yanıtlanır, başka bir kayıtla asla karşılanmaz. Bilinmeyen bir ad eskiden varsayılan modele düşüyordu; bu, çağıranın hiç istemediği bir tone ile yanıtlanması ve registry'den kaldırılmış bir modelin çalışıyor görünmesi anlamına geliyordu.
 
-Hiç model göndermeyen bir istek (boş `model` alanı veya yalnızca `:session-id` eki) `auto` yerine, tool calling için güvenilir reasoning tone'u olan `gpt5.5-reasoning`'e düşer.
+Registry, agent istemcilerinin gönderdiği vendor adlarını taşır. Bu yüzden `claude-sonnet-4-20250514` çözümlenir; `gpt-4o` ve `o1` çözümlenmez ve `404` döner. Sunulan her id'yi `GET /v1/models` listeler.
+
+Hiç model göndermeyen bir istek `auto` yerine, tool calling için güvenilir reasoning tone'u olan `gpt5.5-reasoning`'e düşer. Bu; boş `model` alanını, hiç gönderilmemiş alanı ve yalnızca `:session-id` ekini kapsar.
 
 ### İlan Edilen Context Window
 
