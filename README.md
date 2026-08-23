@@ -450,6 +450,14 @@ The hash fallback allows standard OpenAI clients (like Claude Code) that cannot 
 
 `DELETE /v1/sessions/{id}` deletes the upstream M365 conversation and then clears the mapping, so the next turn on that session ID starts a fresh conversation. The mapping is kept when the upstream delete fails, so the request can be retried. Deleting the conversation needs the M365 web cookies in `data/tokens/m365_cookies.json`; add `?local_only=true` to clear only the mapping and leave the conversation in place, which is what a deployment without those cookies needs.
 
+### System Instructions
+
+The M365 backend keeps conversation history itself and receives only the latest turn, so an instruction sent in an earlier message would never reach it. Every `system` message in the request is therefore collected and prefixed to that turn, and kept out of the flattened history, where it would otherwise read as a past conversation line.
+
+`developer` is treated identically. OpenAI renamed the role for its reasoning models and both names remain valid, so a client that sends either reaches the model the same way.
+
+Anthropic's top-level `system` field is accepted as a string or as an array of text blocks, and becomes the same prefixed instruction.
+
 ### Python Client (OpenAI SDK)
 
 ```python
@@ -1156,7 +1164,10 @@ data/                    # Runtime data (gitignored): tokens/, setup.json, cache
 The proxy supports multimodal image input via OpenAI and Anthropic API formats:
 
 - **OpenAI**: `content` array with `{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}` blocks
+- **Responses**: `content` array with `{"type": "input_image", "image_url": "data:image/png;base64,..."}` blocks, where the url is a bare string
 - **Anthropic**: `content` array with `{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}}` blocks
+
+An `image_url` block accepts the bare string form as well, because clients send it under both block names. A `file_id` reference is not supported; this gateway serves no Files API to resolve one against.
 
 Images are uploaded to the M365 backend via `POST https://substrate.office.com/m365Copilot/UploadFile` and attached to the WebSocket message as `messageAnnotations`. Supported formats: PNG, JPEG, GIF, WebP.
 

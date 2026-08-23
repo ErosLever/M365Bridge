@@ -450,6 +450,14 @@ Hash yedeği, özel başlık gönderemeyen standart OpenAI istemcilerinin (Claud
 
 `DELETE /v1/sessions/{id}` önce upstream M365 sohbetini siler, sonra eşlemeyi temizler; böylece o oturum ID'si ile atılan bir sonraki tur yeni bir sohbet başlatır. Upstream silme başarısız olursa eşleme korunur, istek tekrarlanabilir. Sohbeti silmek `data/tokens/m365_cookies.json` içindeki M365 web cookie'lerini gerektirir; yalnızca eşlemeyi temizleyip sohbeti yerinde bırakmak için `?local_only=true` ekleyin. Bu cookie'leri olmayan bir kurulumun ihtiyaç duyduğu yol budur.
 
+### Sistem Talimatları
+
+M365 backend'i konuşma geçmişini kendisi tutar ve yalnızca en son turu alır; bu yüzden daha önceki bir mesajda gönderilen talimat ona hiç ulaşmaz. Bu nedenle istekteki her `system` mesajı toplanır ve o turun önüne eklenir. Aynı mesaj düzleştirilmiş geçmişin dışında tutulur, çünkü orada geçmiş bir konuşma satırı gibi okunurdu.
+
+`developer` rolü aynı şekilde ele alınır. OpenAI, reasoning modelleri için rolü yeniden adlandırdı ve iki ad da geçerli kaldı; bu yüzden hangisini gönderirse göndersin istemci modele aynı şekilde ulaşır.
+
+Anthropic'in üst düzey `system` alanı string veya metin bloğu dizisi olarak kabul edilir ve aynı ön ek talimatına dönüşür.
+
 ### Python İstemcisi (OpenAI SDK)
 
 ```python
@@ -1156,7 +1164,10 @@ data/                    # Çalışma zamanı verisi (gitignore'lı): tokens/, s
 Proxy, OpenAI ve Anthropic API formatları ile çok modlu görsel girdiyi destekler:
 
 - **OpenAI**: `{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}` blokları içeren `content` dizisi
+- **Responses**: url'i düz string olarak taşıyan `{"type": "input_image", "image_url": "data:image/png;base64,..."}` blokları içeren `content` dizisi
 - **Anthropic**: `{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}}` blokları içeren `content` dizisi
+
+Bir `image_url` bloğu düz string biçimini de kabul eder, çünkü istemciler bu biçimi her iki blok adı altında da gönderir. `file_id` referansı desteklenmez; bu gateway bir Files API sunmaz.
 
 Görseller, `POST https://substrate.office.com/m365Copilot/UploadFile` üzerinden M365 backend'ine yüklenir ve WebSocket mesajına `messageAnnotations` olarak eklenir. Desteklenen formatlar: PNG, JPEG, GIF, WebP.
 
