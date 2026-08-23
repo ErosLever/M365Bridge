@@ -49,15 +49,23 @@ func TestSessionsForRefusesABlankConversationID(t *testing.T) {
 
 // Deleting the conversation must clear the mapping on this side too, or the
 // two sides disagree about what exists.
-func TestDropSessionsForClearsTheMapping(t *testing.T) {
+//
+// Two sessions are bound to the same conversation because that is what deleting
+// through the session route relies on: it names one session, and the sibling
+// that shares its conversation has to go with it.
+func TestDropSessionsForClearsEverySessionOnThatConversation(t *testing.T) {
 	api := &APIServer{ctxCache: NewContextCache(t.TempDir())}
 	api.ctxCache.Set(sessionKeyPrefix+"bound", "conv-A")
+	api.ctxCache.Set(sessionKeyPrefix+"sibling", "conv-A")
 	api.ctxCache.Set(sessionKeyPrefix+"unrelated", "conv-B")
 
 	api.dropSessionsFor("conv-A")
 
 	if got := api.ctxCache.Get(sessionKeyPrefix + "bound"); got != "" {
-		t.Errorf("the bound session still maps to %q", got)
+		t.Errorf("the named session still maps to %q", got)
+	}
+	if got := api.ctxCache.Get(sessionKeyPrefix + "sibling"); got != "" {
+		t.Errorf("the sibling session still maps to %q, and its conversation is gone", got)
 	}
 	if got := api.ctxCache.Get(sessionKeyPrefix + "unrelated"); got != "conv-B" {
 		t.Errorf("an unrelated session was cleared; it maps to %q, want conv-B", got)

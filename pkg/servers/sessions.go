@@ -184,6 +184,10 @@ func (api *APIServer) deleteSession(w http.ResponseWriter, r *http.Request, sess
 			return
 		}
 		logging.Infof("Deleted upstream conversation for session %s", sessionID)
+		// More than one session can point at one conversation, and the
+		// conversation is gone now. Clearing only the named session would leave
+		// its siblings pointing at something that no longer exists.
+		api.dropSessionsFor(record.ConversationID)
 	}
 
 	api.ctxCache.Delete(sessionKeyPrefix + sessionID)
