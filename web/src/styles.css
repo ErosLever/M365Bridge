@@ -404,11 +404,11 @@ body {
   text-decoration: underline;
 }
 
+/* The reasoning is markdown as well, so it is rendered rather than shown as
+   its source; the box only sets it apart from the answer. */
 .thinking-body {
   margin: 6px 0 0;
   padding: 10px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
   font-size: 13px;
   color: var(--muted);
   background: var(--panel);

@@ -64,6 +64,24 @@ func TestWebUIFallsBackToTheDocumentForItsOwnRoutes(t *testing.T) {
 	}
 }
 
+// A session id comes from a caller and may contain a dot. The rule that reports
+// a missing file rather than the document reads a dot as an extension, so a
+// conversation route has to be decided before that rule runs.
+func TestWebUIServesAConversationWhoseSessionIDLooksLikeAFileName(t *testing.T) {
+	api := webUIServer(true)
+	for _, path := range []string{"/c/agent.v2.session", "/c/report.json"} {
+		rec := httptest.NewRecorder()
+		api.handleWebUI(rec, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200", path, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "<div id=\"root\"") {
+			t.Fatalf("%s: body is not the interface document", path)
+		}
+	}
+}
+
 // A missing script must be reported as missing. Serving the document in its
 // place would make the browser parse HTML as JavaScript and fail with a
 // message that points nowhere near the real cause.

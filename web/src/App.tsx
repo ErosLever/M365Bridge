@@ -19,6 +19,45 @@ const titleHydrationLimit = 30
  */
 type Notice = { key: string } | { text: string } | null
 
+/**
+ * The path prefix an open conversation takes in the address bar.
+ *
+ * The server knows this prefix too, in browserRoutes, so a reload or a pasted
+ * link on one of these paths is answered with the document rather than a 404.
+ */
+const routePrefix = '/c/'
+
+/** Returns the session the address bar names, or an empty string for none. */
+function sessionFromLocation(): string {
+  if (!location.pathname.startsWith(routePrefix)) {
+    return ''
+  }
+  try {
+    return decodeURIComponent(location.pathname.slice(routePrefix.length))
+  } catch {
+    // A hand-edited address can carry a percent sign that decodes to nothing.
+    return ''
+  }
+}
+
+/**
+ * Points the address bar at a session without reloading the page.
+ *
+ * A push that lands on the address already shown is skipped, so returning
+ * through the history does not add the entry it just left back onto the stack.
+ */
+function pushRoute(sessionID: string, replace = false): void {
+  const url = sessionID ? routePrefix + encodeURIComponent(sessionID) : '/'
+  if (url === location.pathname) {
+    return
+  }
+  if (replace) {
+    history.replaceState(null, '', url)
+    return
+  }
+  history.pushState(null, '', url)
+}
+
 function newSessionId(): string {
   return `ui-${crypto.randomUUID()}`
 }
@@ -40,6 +79,7 @@ export function App() {
   const [model, setModel] = useState(() => readCookie(modelCookie) || 'gpt-5.5-reasoning')
 
   const [rows, setRows] = useState<ConversationRow[]>([])
+  const [rowsLoaded, setRowsLoaded] = useState(false)
   const [activeId, setActiveId] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
 
@@ -54,6 +94,13 @@ export function App() {
   const [importing, setImporting] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
+  // The history listener reads the rows without re-subscribing every time they
+  // change, which would otherwise drop and re-add the listener on each refresh.
+  const rowsRef = useRef<ConversationRow[]>([])
+  rowsRef.current = rows
+  // The address bar is applied to the interface once, on the first load. After
+  // that the interface is what writes it.
+  const routeApplied = useRef(false)
 
   api.setApiKey(apiKey)
 
@@ -110,6 +157,9 @@ export function App() {
       sessions = await api.listSessions()
     } catch (err) {
       report(err)
+      // There is no sidebar to open the address bar's conversation from, and
+      // saying so beats leaving the interface waiting for rows that never come.
+      setRowsLoaded(true)
       return
     }
     const sessionByConversation = new Map(sessions.map((s) => [s.conversation_id, s]))
@@ -157,6 +207,7 @@ export function App() {
       const unsent = previous.filter((row) => !row.conversationId && !known.has(row.sessionId))
       return [...unsent, ...merged]
     })
+    setRowsLoaded(true)
     void hydrateTitles(merged)
     // t is a dependency because an unnamed conversation carries a translated
     // placeholder for a title: changing the language relabels those rows.
@@ -194,6 +245,7 @@ export function App() {
         )
       }
       setActiveId(sessionId)
+      pushRoute(sessionId)
 
       try {
         const stored = await api.loadMessages(sessionId)
@@ -260,6 +312,7 @@ export function App() {
       ...previous,
     ])
     setActiveId(sessionId)
+    pushRoute(sessionId)
     setMessages([])
     setNotice(null)
     setImportable(null)
@@ -288,6 +341,9 @@ export function App() {
       if (row.sessionId === activeId) {
         setActiveId('')
         setMessages([])
+        // The address named the conversation that was just deleted, and a
+        // reload on that address would look for something that is gone.
+        pushRoute('', true)
       }
       void refreshRows()
     },
@@ -323,6 +379,7 @@ export function App() {
           ...previous,
         ])
         setActiveId(sessionId)
+        pushRoute(sessionId)
       }
 
       setNotice(null)
@@ -379,6 +436,50 @@ export function App() {
   const stop = useCallback(() => {
     abortRef.current?.abort()
   }, [])
+
+  /** Clears the pane without naming another conversation. */
+  const closeConversation = useCallback(() => {
+    setActiveId('')
+    setMessages([])
+    setNotice(null)
+    setImportable(null)
+  }, [])
+
+  // Opens the conversation the address bar names, once the sidebar has rows to
+  // find it among. This is what makes a reload and a shared link land on the
+  // conversation rather than on an empty pane.
+  useEffect(() => {
+    if (!rowsLoaded || routeApplied.current) return
+    routeApplied.current = true
+
+    const wanted = sessionFromLocation()
+    if (!wanted) return
+
+    const row = rows.find((candidate) => candidate.sessionId === wanted)
+    if (row) {
+      void openRow(row)
+      return
+    }
+    // The address names a conversation this gateway no longer holds. Replacing
+    // rather than pushing keeps a dead address out of the history.
+    pushRoute('', true)
+  }, [openRow, rows, rowsLoaded])
+
+  // The back and forward buttons move between the conversations that were
+  // opened, so they change what the pane shows rather than leaving the page.
+  useEffect(() => {
+    function onPopState() {
+      const wanted = sessionFromLocation()
+      if (!wanted) {
+        closeConversation()
+        return
+      }
+      const row = rowsRef.current.find((candidate) => candidate.sessionId === wanted)
+      if (row) void openRow(row)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [closeConversation, openRow])
 
   const chooseModel = useCallback((next: string) => {
     setModel(next)

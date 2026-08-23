@@ -21,6 +21,14 @@ import (
 // happening.
 var apiNamespaces = []string{"/v1/", "/mcp", "/health"}
 
+// browserRoutes are the paths the interface routes itself, so a request under
+// one of them is always the document.
+//
+// The extension rule in lookupAsset cannot decide these. A conversation's path
+// carries a session id, the id comes from a caller, and one that contains a dot
+// would look like a file name and be reported as a missing file.
+var browserRoutes = []string{"/c/"}
+
 // webAsset is one embedded file with the validators computed once.
 type webAsset struct {
 	content     []byte
@@ -80,11 +88,22 @@ func lookupAsset(requestPath string) (webAsset, bool) {
 	if asset, ok := assetsByID[clean]; ok {
 		return asset, true
 	}
-	if path.Ext(clean) != "" {
+	if !isBrowserRoute(clean) && path.Ext(clean) != "" {
 		return webAsset{}, false
 	}
 	asset, ok := assetsByID["/index.html"]
 	return asset, ok
+}
+
+// isBrowserRoute reports whether a cleaned path belongs to the interface's own
+// routing rather than to a file.
+func isBrowserRoute(clean string) bool {
+	for _, route := range browserRoutes {
+		if clean == strings.TrimSuffix(route, "/") || strings.HasPrefix(clean, route) {
+			return true
+		}
+	}
+	return false
 }
 
 // cacheControlFor returns the caching rule for one path.

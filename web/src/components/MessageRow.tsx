@@ -31,7 +31,13 @@ export function MessageRow({ message, streaming }: Props) {
           <button className="thinking-toggle" onClick={() => setShowThinking((open) => !open)}>
             {showThinking ? t('message.hideThinking') : t('message.showThinking')}
           </button>
-          {showThinking && <pre className="thinking-body">{message.thinking}</pre>}
+          {/* The backend writes the reasoning in markdown too, so a step title
+              arrives as **bold** and reads as asterisks when shown raw. */}
+          {showThinking && (
+            <div className="thinking-body">
+              <Markdown text={message.thinking} />
+            </div>
+          )}
         </div>
       )}
       {/* Only an answer is markdown. What the user typed is shown exactly as
