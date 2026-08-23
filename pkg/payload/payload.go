@@ -143,6 +143,20 @@ type MessageAnnotation struct {
 	MessageAnnotationMetadata map[string]string `json:"messageAnnotationMetadata"`
 }
 
+// appendImageURL records one image the caller named by url. A data URL is
+// decoded here; a remote address is kept for the server layer to fetch, because
+// this package does no network I/O. Anything else names no image and is
+// ignored.
+func (m *Message) appendImageURL(url string) {
+	if img := parseDataURL(url); img != nil {
+		m.Images = append(m.Images, *img)
+		return
+	}
+	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
+		m.Images = append(m.Images, ImageData{RemoteURL: url})
+	}
+}
+
 // UnmarshalJSON implements custom JSON unmarshaling for Message to handle
 // both string content and multimodal content arrays (OpenAI/Anthropic format).
 // It also converts tool-related messages (tool role, tool_calls, tool_result,
@@ -232,23 +246,22 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 			// wraps it in. A file_id reference is not supported, because this
 			// gateway serves no Files API to resolve it against.
 			if url, ok := block["image_url"].(string); ok {
-				if img := parseDataURL(url); img != nil {
-					m.Images = append(m.Images, *img)
-				} else if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
-					m.Images = append(m.Images, ImageData{RemoteURL: url})
-				}
+				m.appendImageURL(url)
 			}
 		case "image_url":
 			// OpenAI format: {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
 			// The url may also be a remote https address, which the server
 			// layer fetches later because this package does no network I/O.
-			if imgURL, ok := block["image_url"].(map[string]any); ok {
+			//
+			// Clients also send the url bare under this type, the way the
+			// Responses input_image block carries it. Both shapes name the same
+			// image, so both are read rather than one being dropped.
+			switch imgURL := block["image_url"].(type) {
+			case string:
+				m.appendImageURL(imgURL)
+			case map[string]any:
 				if url, ok := imgURL["url"].(string); ok {
-					if img := parseDataURL(url); img != nil {
-						m.Images = append(m.Images, *img)
-					} else if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
-						m.Images = append(m.Images, ImageData{RemoteURL: url})
-					}
+					m.appendImageURL(url)
 				}
 			}
 		case "image":
