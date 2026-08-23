@@ -3805,7 +3805,7 @@ func jsonModeInstruction(format map[string]any) (string, bool) {
 // injectJSONMode injects JSON mode instructions into messages.
 func injectJSONMode(messages *[]payload.Message, instruction string) {
 	for i, msg := range *messages {
-		if msg.Role == "system" {
+		if payload.IsSystemRole(msg.Role) {
 			(*messages)[i].Content = msg.Content + "\n" + instruction
 			return
 		}

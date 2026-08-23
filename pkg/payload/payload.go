@@ -456,6 +456,18 @@ func BuildPayload(hexSID, uuidSID, text, tone, gptOverride string, enableFileUpl
 	return string(data), nil
 }
 
+// IsSystemRole reports whether a role carries instructions rather than
+// conversation. OpenAI renamed the system role to developer for its reasoning
+// models and both names remain valid, so every site that treats a system
+// message specially has to accept the newer name too.
+func IsSystemRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "system", "developer":
+		return true
+	}
+	return false
+}
+
 func conversationTextForM365(messages []Message, includeHistory bool) string {
 	if len(messages) == 0 {
 		return ""
@@ -469,7 +481,7 @@ func conversationTextForM365(messages []Message, includeHistory bool) string {
 	lastConversationIndex := -1
 	conversationCount := 0
 	for index, message := range messages {
-		if message.Role == "system" || strings.TrimSpace(message.Content) == "" {
+		if IsSystemRole(message.Role) || strings.TrimSpace(message.Content) == "" {
 			continue
 		}
 		lastConversationIndex = index
@@ -482,7 +494,7 @@ func conversationTextForM365(messages []Message, includeHistory bool) string {
 	var flattened strings.Builder
 	flattened.WriteString("CLIENT-PROVIDED CONVERSATION HISTORY\n")
 	for index, message := range messages {
-		if message.Role == "system" || strings.TrimSpace(message.Content) == "" {
+		if IsSystemRole(message.Role) || strings.TrimSpace(message.Content) == "" {
 			continue
 		}
 		if index == lastConversationIndex {
@@ -523,7 +535,7 @@ func BuildConversationPayload(hexSID, uuidSID string, messages []Message, includ
 	// Prepending them to the last message ensures they reach the model.
 	var systemParts []string
 	for _, msg := range messages {
-		if msg.Role == "system" && strings.TrimSpace(msg.Content) != "" {
+		if IsSystemRole(msg.Role) && strings.TrimSpace(msg.Content) != "" {
 			systemParts = append(systemParts, msg.Content)
 		}
 	}
