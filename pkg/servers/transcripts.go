@@ -261,3 +261,18 @@ func (api *APIServer) dropTranscript(sid string) {
 	}
 	api.transcripts.Delete(sid)
 }
+
+// dropSessionsFor clears every local session bound to a conversation that no
+// longer exists upstream.
+//
+// Deleting a conversation and deleting the session that points at it are the
+// same act to a caller. Without this the mapping survives its conversation, and
+// the session's next turn opens a new conversation under an id the caller
+// believed it had deleted.
+func (api *APIServer) dropSessionsFor(conversationID string) {
+	for _, sid := range api.ctxCache.SessionsFor(conversationID) {
+		api.ctxCache.Delete(sessionKeyPrefix + sid)
+		api.dropTranscript(sid)
+		logging.Infof("dropSessionsFor: cleared the session bound to a deleted conversation")
+	}
+}

@@ -589,13 +589,15 @@ make up      # imajı yeniden kurar ve container'ı yeniden başlatır
 | `GET /v1/conversations`          | M365 konuşmalarını listeler (M365 web cookies gerekir)  |
 | `POST /v1/conversations`         | İlk mesajla yeni bir konuşma oluşturur                  |
 | `PATCH /v1/conversations/{id}`   | Konuşmayı `{ "name": "..." }` ile yeniden adlandırır    |
-| `DELETE /v1/conversations/{id}`  | Konuşmayı kalıcı olarak siler                           |
+| `DELETE /v1/conversations/{id}`  | Konuşmayı siler ve session eşlemesini temizler          |
 | `GET /v1/conversations/{id}/messages` | Upstream'de duran bir konuşmanın turlarını okur    |
 | `GET /v1/models`                 | Model listesi                                           |
 | `GET /v1/quota`                  | Son gözlenen M365 konuşma mesaj kotası                  |
 | `GET /v1/sessions`               | Oturum-sohbet eşlemelerini listeler                     |
 | `GET /v1/sessions/{id}`          | Bir oturumun sohbet ID'sini okur                        |
-| `PUT /v1/sessions/{id}`          | Oturumu var olan bir sohbete bağlar                     |
+| Silme, hangi route'tan başlarsa başlasın konuşmayı iki taraftan da kaldırır. `DELETE /v1/conversations/{id}` o konuşmaya bağlı her session'ı ve transcript'ini temizler; `DELETE /v1/sessions/{id}` önce upstream konuşmayı siler ve eşlemeyi yalnızca bu başarısız olursa korur. Böylece çağıran, artık var olmayan bir konuşmayı gösteren bir session'la hiç karşılaşmaz.
+
+`PUT /v1/sessions/{id}`          | Oturumu var olan bir sohbete bağlar                     |
 | `GET /v1/sessions/{id}/messages` | Oturumun kayıtlı turlarını okur                         |
 | `DELETE /v1/sessions/{id}`       | Sohbeti siler ve eşlemeyi temizler                      |
 | `POST /mcp`                      | Model Context Protocol sunucusu (JSON-RPC 2.0)          |

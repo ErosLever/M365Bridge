@@ -589,7 +589,7 @@ make up      # rebuilds the image and restarts the container
 | `GET /v1/conversations`          | List M365 conversations (requires M365 web cookies)    |
 | `POST /v1/conversations`         | Create a conversation with an initial message          |
 | `PATCH /v1/conversations/{id}`   | Rename a conversation with `{ "name": "..." }`         |
-| `DELETE /v1/conversations/{id}`  | Permanently delete a conversation                      |
+| `DELETE /v1/conversations/{id}`  | Delete a conversation and clear its session mapping    |
 | `GET /v1/conversations/{id}/messages` | Read the turns of a conversation held upstream    |
 | `GET /v1/models`                 | Model list                                             |
 | `GET /v1/quota`                  | Last observed M365 conversation message quota          |
@@ -602,6 +602,8 @@ make up      # rebuilds the image and restarts the container
 | `GET /v1/health`                 | Reachability probe for Codex (no auth required)        |
 | `GET /health`                    | Health check (no auth required)                        |
 | `GET /`                          | Browser interface (no auth required for the page)      |
+
+A delete removes the conversation on both sides, whichever route starts it. `DELETE /v1/conversations/{id}` clears every session mapped to that conversation and its transcript; `DELETE /v1/sessions/{id}` deletes the upstream conversation first and keeps the mapping only when that fails. A caller therefore never sees a session pointing at a conversation that no longer exists.
 
 `PUT /v1/sessions/{id}` takes `{"conversation_id": "..."}` and points a session at a conversation that already exists. The chat path only ever resolves a session to a conversation, so without this a conversation started in the M365 web or mobile client could not be continued through the gateway. Rebinding an existing session is allowed.
 

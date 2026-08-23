@@ -222,6 +222,29 @@ func (cc *ContextCache) Lookup(sid string) (sessionRecord, bool) {
 	return record, true
 }
 
+// SessionsFor returns the session IDs mapped to one conversation.
+//
+// A session and the conversation it points at are one thing to a user, so
+// deleting either side must delete the other. Deleting the conversation alone
+// leaves a session pointing at a conversation that no longer exists, and its
+// next turn silently opens a new one under the old id.
+//
+// More than one session can name the same conversation, because `PUT
+// /v1/sessions/{id}` binds without requiring the conversation to be free.
+func (cc *ContextCache) SessionsFor(convID string) []string {
+	if strings.TrimSpace(convID) == "" {
+		return nil
+	}
+	records, _ := cc.List()
+	var sessions []string
+	for _, record := range records {
+		if record.ConversationID == convID {
+			sessions = append(sessions, record.SessionID)
+		}
+	}
+	return sessions
+}
+
 // Delete removes a conversation ID from memory and disk.
 func (cc *ContextCache) Delete(key string) {
 	cc.mu.Lock()
@@ -1051,6 +1074,7 @@ func (api *APIServer) handleConversation(w http.ResponseWriter, r *http.Request)
 			api.sendConversationError(w, err)
 			return
 		}
+		api.dropSessionsFor(conversationID)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		api.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
