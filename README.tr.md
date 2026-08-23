@@ -27,15 +27,19 @@ Uygulamanız -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Bac
 
 - Akışlı/akışsız çıktı ile metin sohbeti
 - Çok modlu görsel girdi (OpenAI `image_url` ve Anthropic `image` içerik blokları; PNG, JPEG, GIF, WebP)
-- Görsel üretimi (`/v1/images/generations`, `/v1/images/edits`), `url` ve `b64_json` yanıt formatları desteklenir
+- Microsoft Designer üzerinden görsel üretimi (`/v1/images/generations`, `/v1/images/edits`), `url` ve `b64_json` yanıt formatları desteklenir
 - ConversationId takibi ile çok turlu sohbet desteği
 - Oturum izolasyonu (oturum başına ayrı M365 sohbetleri)
 - Düşünme/akıl yürütme içeriği çıkarımı (OpenAI için `reasoning_content`, Anthropic için `thinking` blokları)
 - Simüle edilmiş tool calling (istemci tanımlı araçlar hem OpenAI hem Anthropic uç noktalarında, streaming ve non-streaming modlarda çalışır)
-- OpenAI uyumlu API uç noktaları
+- OpenAI uyumlu API uç noktaları, Responses API ve compaction route'u dahil
 - Anthropic uyumlu API uç noktaları (özel SSE işleyiciler)
+- `/mcp` üzerinde Model Context Protocol sunucusu (JSON-RPC 2.0)
+- Gateway'in yerelde çalıştırdığı yerleşik coding tool'lar; `M365_ENABLE_CODE_TOOLS` açmadıkça kapalı
+- Her sohbet uç noktasında stop sequence, cevap akarken kesilir
 - API anahtarı kimlik doğrulama (`M365_API_KEYS` / `M365_API_KEY`)
 - Tüm uç noktalarda max_tokens uygulaması (tiktoken BPE)
+- `/v1/quota` üzerinde sohbet kotası sayaçları
 - Etkileşimli kullanım için CLI arayüzü
 - Binary'ye gömülü tarayıcı arayüzü (konuşma listesi, akışlı sohbet, model seçimi)
 - Alt komut yönlendirmeli tek binary
@@ -796,7 +800,7 @@ Akışlı bir yanıt sonradan değil, üretilirken kesilir. Bir sequence iki ups
 | Tool | Argümanlar | Açıklama |
 |------|------------|----------|
 | `ask_copilot` | `prompt` (zorunlu), `model` | Metin döndüren tek, durumsuz Copilot turu |
-| `describe_image` | `image_url` (zorunlu, data URI), `prompt`, `model` | Copilot'a satır içi bir görsel hakkında soru sorar |
+| `describe_image` | `image_url` (zorunlu, data URI), `prompt` | Copilot'a satır içi bir görsel hakkında soru sorar |
 
 ```bash
 curl -s -X POST http://localhost:8000/mcp \
@@ -1216,7 +1220,7 @@ Anthropic `image` blokları base64 veriyi doğrudan taşır ve bu akıştan etki
 
 ## Görsel Üretimi
 
-Proxy, M365 Copilot'un  görsel üretimini OpenAI Images API uç noktaları olarak sunar:
+Proxy, M365 Copilot'un Microsoft Designer görsel üretimini OpenAI Images API uç noktaları olarak sunar:
 
 - `POST /v1/images/generations` (JSON body): Metin prompt'undan görsel üret (dosya yükleme yok)
 - `POST /v1/images/edits` (multipart/form-data): Mevcut görsel(ler)i metin prompt'u ile düzenle; tekrarlanan `image` form alanları ile 16'ya kadar görsel desteklenir

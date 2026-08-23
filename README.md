@@ -27,15 +27,19 @@ Your App -> M365Bridge -> substrate.office.com (SignalR) -> M365 Copilot Backend
 
 - Text chat with streaming/non-streaming output
 - Multimodal image input (OpenAI `image_url` and Anthropic `image` content blocks; PNG, JPEG, GIF, WebP)
-- Image generation via  (`/v1/images/generations`, `/v1/images/edits`) with `url` and `b64_json` response formats
+- Image generation through Microsoft Designer (`/v1/images/generations`, `/v1/images/edits`) with `url` and `b64_json` response formats
 - Multi-turn conversation support via ConversationId tracking
 - Session isolation (per-session M365 conversations)
 - Thinking/reasoning content extraction (`reasoning_content` for OpenAI, `thinking` blocks for Anthropic)
 - Simulated tool calling (client-defined tools work on both OpenAI and Anthropic endpoints, streaming and non-streaming)
-- OpenAI-compatible API endpoints
+- OpenAI-compatible API endpoints, including the Responses API and its compaction route
 - Anthropic-compatible API endpoints (dedicated SSE handlers)
+- Model Context Protocol server on `/mcp` (JSON-RPC 2.0)
+- Built-in coding tools the gateway runs locally, off unless `M365_ENABLE_CODE_TOOLS` turns them on
+- Stop sequences on every chat endpoint, cut as the answer streams
 - API key authentication (`M365_API_KEYS` / `M365_API_KEY`)
 - max_tokens enforcement across all endpoints (tiktoken BPE)
+- Conversation quota counters on `/v1/quota`
 - CLI interface for interactive use
 - Browser interface compiled into the binary (conversation list, streaming chat, model picker)
 - Single binary with subcommand routing
@@ -796,7 +800,7 @@ A streamed answer is cut as it is produced, not afterwards. A sequence can strad
 | Tool | Arguments | Description |
 |------|-----------|-------------|
 | `ask_copilot` | `prompt` (required), `model` | One stateless Copilot turn returning text |
-| `describe_image` | `image_url` (required, data URI), `prompt`, `model` | Asks Copilot about an inline image |
+| `describe_image` | `image_url` (required, data URI), `prompt` | Asks Copilot about an inline image |
 
 ```bash
 curl -s -X POST http://localhost:8000/mcp \
@@ -1216,7 +1220,7 @@ Anthropic `image` blocks carry base64 data directly and are unaffected.
 
 ## Image Generation
 
-The proxy exposes M365 Copilot's  image generation as OpenAI Images API endpoints:
+The proxy exposes M365 Copilot's Microsoft Designer image generation as OpenAI Images API endpoints:
 
 - `POST /v1/images/generations` (JSON body): Generate images from a text prompt (no file upload)
 - `POST /v1/images/edits` (multipart/form-data): Edit existing image(s) with a text prompt; supports up to 16 images via repeated `image` form fields
