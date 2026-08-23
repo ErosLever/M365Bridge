@@ -5002,18 +5002,43 @@ func responsesStreamWithEmptyRetry(
 	return output
 }
 
+// newResponsesIdentity mints the id and the creation time of one Responses
+// answer. The two travel together because every lifecycle event of that answer
+// reports the same pair; a time taken per event would let a client read two
+// different creation times for one response.
+func newResponsesIdentity() (string, int64) {
+	return fmt.Sprintf("resp_%s", uuid.New().String()), time.Now().Unix()
+}
+
+// responsesStatusObject builds the Response object a lifecycle event carries
+// before the answer exists. The format defines created_at on every Response
+// object, including the partial one on response.created, so a client that
+// reads the field from the first event finds it there.
+func responsesStatusObject(responseID, model, status string, createdAt int64) map[string]any {
+	return map[string]any{
+		"id":         responseID,
+		"object":     "response",
+		"created_at": createdAt,
+		"status":     status,
+		"model":      model,
+	}
+}
+
 func buildResponsesFailedEvent(
-	responseID, model, code, message string,
+	responseID string,
+	createdAt int64,
+	model, code, message string,
 	sequenceNumber int,
 ) map[string]any {
 	return map[string]any{
 		"type":            "response.failed",
 		"sequence_number": sequenceNumber,
 		"response": map[string]any{
-			"id":     responseID,
-			"object": "response",
-			"status": "failed",
-			"model":  model,
+			"id":         responseID,
+			"object":     "response",
+			"created_at": createdAt,
+			"status":     "failed",
+			"model":      model,
 			"error": map[string]any{
 				"message": message,
 				"type":    "server_error",
@@ -5023,11 +5048,17 @@ func buildResponsesFailedEvent(
 	}
 }
 
-func writeResponsesServerError(w http.ResponseWriter, stream bool, responseID, model, code, message string) {
+// writeResponsesServerError reports a failure before any answer exists. The
+// response identity is only read on the streaming branch, which carries it in
+// the failed event; the non-streaming branch answers with a plain error body.
+// A caller with no identity to give passes an empty id and a zero time, the
+// pair that means the same thing.
+func writeResponsesServerError(w http.ResponseWriter, stream bool, responseID string, createdAt int64, model, code, message string) {
 	if stream {
 		w.Header().Set("Content-Type", "text/event-stream")
 		event := buildResponsesFailedEvent(
 			responseID,
+			createdAt,
 			model,
 			code,
 			message,
@@ -5054,22 +5085,24 @@ func writeResponsesServerError(w http.ResponseWriter, stream bool, responseID, m
 	})
 }
 
-func writeResponsesSimulationError(w http.ResponseWriter, stream bool, responseID, model string, err error) {
+func writeResponsesSimulationError(w http.ResponseWriter, stream bool, responseID string, createdAt int64, model string, err error) {
 	writeResponsesServerError(
 		w,
 		stream,
 		responseID,
+		createdAt,
 		model,
 		simulatedToolCallRequiredCode,
 		err.Error(),
 	)
 }
 
-func writeResponsesUpstreamEmptyError(w http.ResponseWriter, stream bool, responseID, model string) {
+func writeResponsesUpstreamEmptyError(w http.ResponseWriter, stream bool, responseID string, createdAt int64, model string) {
 	writeResponsesServerError(
 		w,
 		stream,
 		responseID,
+		createdAt,
 		model,
 		upstreamEmptyResponseCode,
 		"M365 returned an empty response without a completion message",
@@ -5862,8 +5895,8 @@ func responsesInputIsEmpty(messages []payload.Message) bool {
 // writes a well-formed but empty Response, streaming or not, and touches no
 // session state.
 func (api *APIServer) respondResponsesProbe(w http.ResponseWriter, model string, stream bool) {
-	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
-	response := buildResponsesObject(responseID, model, "", "", nil, nil, false, "stop", 0, 0, 0)
+	responseID, createdAt := newResponsesIdentity()
+	response := buildResponsesObject(responseID, createdAt, model, "", "", nil, nil, false, "stop", 0, 0, 0)
 
 	if !stream {
 		w.Header().Set("Content-Type", "application/json")
@@ -5899,7 +5932,7 @@ func (api *APIServer) respondResponsesProbe(w http.ResponseWriter, model string,
 }
 
 // buildResponsesObject constructs the non-streaming Responses API response object.
-func buildResponsesObject(responseID, model, text, thinking string, toolCalls []client.ToolCall, toolTypes map[string]string, goalOpen bool, finishReason string, promptTok, completionTok, reasoningTok int) map[string]any {
+func buildResponsesObject(responseID string, createdAt int64, model, text, thinking string, toolCalls []client.ToolCall, toolTypes map[string]string, goalOpen bool, finishReason string, promptTok, completionTok, reasoningTok int) map[string]any {
 	status := "completed"
 	if finishReason == "length" {
 		status = "incomplete"
@@ -5959,7 +5992,7 @@ func buildResponsesObject(responseID, model, text, thinking string, toolCalls []
 	resp := map[string]any{
 		"id":          responseID,
 		"object":      "response",
-		"created_at":  time.Now().Unix(),
+		"created_at":  createdAt,
 		"status":      status,
 		"model":       model,
 		"output":      output,
@@ -5981,15 +6014,15 @@ func (api *APIServer) respondBufferedResponses(w http.ResponseWriter, result too
 			result.text, result.finishReason = truncated, "length"
 		}
 	}
-	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
-	response := buildResponsesObject(responseID, cfg.OpenAIID, result.text, result.thinking, result.toolCalls, toolTypes, goalOpen, result.finishReason, countPromptTokens(messages, tools, toolChoice), countTokens(result.text)+outputProtocolTokens, countTokens(result.thinking))
+	responseID, createdAt := newResponsesIdentity()
+	response := buildResponsesObject(responseID, createdAt, cfg.OpenAIID, result.text, result.thinking, result.toolCalls, toolTypes, goalOpen, result.finishReason, countPromptTokens(messages, tools, toolChoice), countTokens(result.text)+outputProtocolTokens, countTokens(result.thinking))
 	if !stream {
 		api.sendJSON(w, http.StatusOK, response)
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	for _, event := range []string{"response.created", "response.in_progress"} {
-		data, _ := json.Marshal(map[string]any{"type": event, "response": map[string]any{"id": responseID, "object": "response", "status": "in_progress", "model": cfg.OpenAIID}})
+		data, _ := json.Marshal(map[string]any{"type": event, "response": responsesStatusObject(responseID, cfg.OpenAIID, "in_progress", createdAt)})
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 	}
 	completed, _ := json.Marshal(map[string]any{"type": "response.completed", "response": response})
@@ -6169,6 +6202,7 @@ func (api *APIServer) nonStreamResponses(
 					w,
 					false,
 					"",
+					0,
 					cfg.OpenAIID,
 					parseErr,
 				)
@@ -6177,6 +6211,7 @@ func (api *APIServer) nonStreamResponses(
 					w,
 					false,
 					"",
+					0,
 					cfg.OpenAIID,
 					"upstream_error",
 					parseErr.Error(),
@@ -6213,6 +6248,7 @@ func (api *APIServer) nonStreamResponses(
 			w,
 			false,
 			"",
+			0,
 			cfg.OpenAIID,
 		)
 		return
@@ -6230,8 +6266,8 @@ func (api *APIServer) nonStreamResponses(
 	completionTok := countTokens(respText) + outputProtocolTokens
 	reasoningTok := countTokens(thinking)
 
-	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
-	response := buildResponsesObject(responseID, cfg.OpenAIID, respText, thinking, toolCalls, responsesToolTypes(toolPolicy.tools), goalOpen, finishReason, promptTok, completionTok, reasoningTok)
+	responseID, createdAt := newResponsesIdentity()
+	response := buildResponsesObject(responseID, createdAt, cfg.OpenAIID, respText, thinking, toolCalls, responsesToolTypes(toolPolicy.tools), goalOpen, finishReason, promptTok, completionTok, reasoningTok)
 
 	api.sendJSON(w, http.StatusOK, response)
 
@@ -6267,7 +6303,7 @@ func (api *APIServer) streamResponses(
 		return
 	}
 
-	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
+	responseID, createdAt := newResponsesIdentity()
 	openaiModel := cfg.OpenAIID
 
 	// Helper to send a Responses SSE event
@@ -6283,6 +6319,7 @@ func (api *APIServer) streamResponses(
 	sendFailed := func(code, message string) {
 		event := buildResponsesFailedEvent(
 			responseID,
+			createdAt,
 			openaiModel,
 			code,
 			message,
@@ -6297,22 +6334,12 @@ func (api *APIServer) streamResponses(
 
 	// Send response.created event
 	sendEvent("response.created", map[string]any{
-		"response": map[string]any{
-			"id":     responseID,
-			"object": "response",
-			"status": "in_progress",
-			"model":  openaiModel,
-		},
+		"response": responsesStatusObject(responseID, openaiModel, "in_progress", createdAt),
 	})
 
 	// Send response.in_progress event
 	sendEvent("response.in_progress", map[string]any{
-		"response": map[string]any{
-			"id":     responseID,
-			"object": "response",
-			"status": "in_progress",
-			"model":  openaiModel,
-		},
+		"response": responsesStatusObject(responseID, openaiModel, "in_progress", createdAt),
 	})
 
 	ch := responsesStreamWithEmptyRetry(
@@ -6918,7 +6945,7 @@ func (api *APIServer) streamResponses(
 	reasoningText := thinkingText.String()
 	reasoningTok := countTokens(reasoningText)
 
-	finalResponse := buildResponsesObject(responseID, openaiModel, fullText, reasoningText, toolCalls, responsesToolTypes(toolPolicy.tools), goalOpen, finishReason, promptTok, completionTok, reasoningTok)
+	finalResponse := buildResponsesObject(responseID, createdAt, openaiModel, fullText, reasoningText, toolCalls, responsesToolTypes(toolPolicy.tools), goalOpen, finishReason, promptTok, completionTok, reasoningTok)
 	finalResponse["status"] = status
 
 	sendEvent("response.completed", map[string]any{
@@ -7057,7 +7084,7 @@ func (api *APIServer) handleResponsesCompact(w http.ResponseWriter, r *http.Requ
 // buildCompactionResponseObject constructs the non-streaming compact response.
 // The output contains exactly one compaction item with encrypted_content set
 // to the M365 summary text.
-func buildCompactionResponseObject(responseID, model, summaryText string, promptTok, completionTok int) map[string]any {
+func buildCompactionResponseObject(responseID string, createdAt int64, model, summaryText string, promptTok, completionTok int) map[string]any {
 	compactionID := fmt.Sprintf("cmp_%s", responseID)
 	output := []map[string]any{
 		{
@@ -7070,7 +7097,7 @@ func buildCompactionResponseObject(responseID, model, summaryText string, prompt
 	return map[string]any{
 		"id":         responseID,
 		"object":     "response",
-		"created_at": time.Now().Unix(),
+		"created_at": createdAt,
 		"status":     "completed",
 		"model":      model,
 		"output":     output,
@@ -7116,8 +7143,8 @@ func (api *APIServer) nonStreamResponsesCompact(w http.ResponseWriter, messages 
 	promptTok := countPromptTokens(messages, nil, "")
 	completionTok := countTokens(respText) + outputProtocolTokens
 
-	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
-	response := buildCompactionResponseObject(responseID, cfg.OpenAIID, respText, promptTok, completionTok)
+	responseID, createdAt := newResponsesIdentity()
+	response := buildCompactionResponseObject(responseID, createdAt, cfg.OpenAIID, respText, promptTok, completionTok)
 
 	api.sendJSON(w, http.StatusOK, response)
 
@@ -7141,7 +7168,7 @@ func (api *APIServer) streamResponsesCompact(ctx context.Context, w http.Respons
 		return
 	}
 
-	responseID := fmt.Sprintf("resp_%s", uuid.New().String())
+	responseID, createdAt := newResponsesIdentity()
 	openaiModel := cfg.OpenAIID
 	compactionID := fmt.Sprintf("cmp_%s", responseID)
 
@@ -7154,22 +7181,12 @@ func (api *APIServer) streamResponsesCompact(ctx context.Context, w http.Respons
 
 	// Send response.created event
 	sendEvent("response.created", map[string]any{
-		"response": map[string]any{
-			"id":     responseID,
-			"object": "response",
-			"status": "in_progress",
-			"model":  openaiModel,
-		},
+		"response": responsesStatusObject(responseID, openaiModel, "in_progress", createdAt),
 	})
 
 	// Send response.in_progress event
 	sendEvent("response.in_progress", map[string]any{
-		"response": map[string]any{
-			"id":     responseID,
-			"object": "response",
-			"status": "in_progress",
-			"model":  openaiModel,
-		},
+		"response": responsesStatusObject(responseID, openaiModel, "in_progress", createdAt),
 	})
 
 	ch := api.m365Client.ChatConversationStreamGenContext(ctx, messages, cfg.Tone, cfg.Override, convID, api.config.UserOID, api.config.TenantID, hasTools)
@@ -7189,15 +7206,9 @@ func (api *APIServer) streamResponsesCompact(ctx context.Context, w http.Respons
 			if sid != "" {
 				api.ctxCache.Delete(sessionKeyPrefix + sid)
 			}
-			sendEvent("response.failed", map[string]any{
-				"response": map[string]any{
-					"id":     responseID,
-					"object": "response",
-					"status": "failed",
-					"model":  openaiModel,
-					"error":  map[string]any{"message": chunk.Error.Error()},
-				},
-			})
+			failed := responsesStatusObject(responseID, openaiModel, "failed", createdAt)
+			failed["error"] = map[string]any{"message": chunk.Error.Error()}
+			sendEvent("response.failed", map[string]any{"response": failed})
 			_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
 			return
@@ -7253,7 +7264,7 @@ func (api *APIServer) streamResponsesCompact(ctx context.Context, w http.Respons
 	promptTok := countPromptTokens(messages, nil, "")
 	completionTok := countTokens(fullText) + outputProtocolTokens
 
-	finalResponse := buildCompactionResponseObject(responseID, openaiModel, fullText, promptTok, completionTok)
+	finalResponse := buildCompactionResponseObject(responseID, createdAt, openaiModel, fullText, promptTok, completionTok)
 
 	sendEvent("response.completed", map[string]any{
 		"response": finalResponse,
