@@ -450,7 +450,7 @@ Each session maps to a unique M365 conversation. Session ID is resolved in prior
 6. `X-Claude-Code-Session-Id` header (Claude Code) or `session-id` header (Codex)
 7. `hash(api_key + first_user_message)` (when auth is on) or `hash(first_user_message)` (when auth is off)
 
-Every endpoint resolves the session through this one order. `/v1/completions`, `/v1/messages` and `/v1/complete` used to run a shorter chain that read neither `session_id` nor `user` from the body and never reached the hash, so a request to them named no session at all and each turn opened a new conversation.
+Every endpoint resolves the session through this one order.
 
 Claude Code and Codex each stamp their own session on every request of a session, under a header name neither can be told to change. Step 4 reads those two names, so both clients keep one conversation per session without any configuration. It ranks below the fields above because a client writes that header without being asked, while everything above it is a value the caller set deliberately.
 
@@ -688,7 +688,7 @@ This is equivalent to setting `X-Session-Id: my-session-001` header or `session_
 
 ### External Model Names
 
-A model name this gateway does not serve is answered with `404 model_not_found`, never with another entry. An unknown name used to fall back to the default model, which meant a caller was answered by a tone it never asked for and a model removed from the registry appeared to keep working.
+A model name this gateway does not serve is answered with `404 model_not_found`, never with another entry, so a caller is never answered by a tone it did not ask for.
 
 The registry carries the vendor names agent clients send, so `claude-sonnet-4-20250514` resolves; `gpt-4o` and `o1` do not and return `404`. `GET /v1/models` lists every id that is served.
 

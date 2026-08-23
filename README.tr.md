@@ -450,7 +450,7 @@ Her oturum benzersiz bir M365 sohbetine eşlenir. Oturum ID'si öncelik sırası
 6. `X-Claude-Code-Session-Id` başlığı (Claude Code) veya `session-id` başlığı (Codex)
 7. `hash(api_key + ilk_kullanıcı_mesajı)` (kimlik doğrulama açıkken) veya `hash(ilk_kullanıcı_mesajı)` (kimlik doğrulama kapalıyken)
 
-Her endpoint session'ı bu tek sıraya göre çözümler. `/v1/completions`, `/v1/messages` ve `/v1/complete` eskiden daha kısa bir zincir çalıştırıyordu: gövdeden ne `session_id` ne `user` okunuyordu ve hash'e hiç ulaşılmıyordu. Bu yüzden o üç endpoint'e giden bir istek hiçbir session adlandırmıyor ve her tur yeni bir konuşma açıyordu.
+Her endpoint session'ı bu tek sıraya göre çözümler.
 
 Claude Code ve Codex, bir oturumun her isteğine kendi oturumunu damgalar. Başlık adı sabittir, hiçbiri değiştirilmek üzere ayarlanamaz. 4. adım bu iki adı okur, böylece her iki istemci de hiçbir yapılandırma olmadan oturum başına tek sohbet tutar. Üstündeki alanların altında yer alır, çünkü istemci o başlığı kendiliğinden yazar; üstündeki her değeri ise çağıran bilerek koyar.
 
@@ -688,7 +688,7 @@ Bu, `X-Session-Id: my-session-001` header'ı veya istek gövdesinde `session_id:
 
 ### Harici Model Adları
 
-Bu gateway'in sunmadığı bir model adı `404 model_not_found` ile yanıtlanır, başka bir kayıtla asla karşılanmaz. Bilinmeyen bir ad eskiden varsayılan modele düşüyordu; bu, çağıranın hiç istemediği bir tone ile yanıtlanması ve registry'den kaldırılmış bir modelin çalışıyor görünmesi anlamına geliyordu.
+Bu gateway'in sunmadığı bir model adı `404 model_not_found` ile yanıtlanır, başka bir kayıtla asla karşılanmaz. Böylece çağıran hiç istemediği bir tone ile yanıtlanmaz.
 
 Registry, agent istemcilerinin gönderdiği vendor adlarını taşır. Bu yüzden `claude-sonnet-4-20250514` çözümlenir; `gpt-4o` ve `o1` çözümlenmez ve `404` döner. Sunulan her id'yi `GET /v1/models` listeler.
 
