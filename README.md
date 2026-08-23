@@ -437,7 +437,7 @@ When you start the server for the first time:
 1. The server reads `data/.env` from the current working directory
 2. It loads the encrypted refresh token from `data/tokens/rt_90day.txt`
 3. It performs a token refresh (exchanges refresh token for an access token). This takes 1-2 seconds
-4. On success, you will see: `Starting API server on port 8000`
+4. On success, you will see `Starting API server on port 8000 (no API key required)`, or `(API key required, N key(s) configured)` when keys are set
 5. The first request may take slightly longer as it opens a WebSocket connection to `substrate.office.com`
 
 If the refresh token is missing or expired, the server will attempt SSO cookie re-authentication if `data/tokens/sso_cookies.json` exists. If SSO cookies are also missing or expired, the server will fail to start with a token refresh error. Re-run `./bin/m365-bridge setup-wizard` to extract fresh tokens and cookies.
@@ -496,7 +496,7 @@ print(resp.choices[0].message.content)
 from anthropic import Anthropic
 
 client = Anthropic(
-    base_url="http://127.0.0.1:8000/v1",
+    base_url="http://127.0.0.1:8000",
     api_key="your-api-key",  # required if M365_API_KEYS is set
 )
 resp = client.messages.create(
@@ -506,6 +506,8 @@ resp = client.messages.create(
 )
 print(resp.content[0].text)
 ```
+
+The Anthropic SDK appends `/v1/messages` itself, so the base URL stops at the host.
 
 ### Image Input Example
 

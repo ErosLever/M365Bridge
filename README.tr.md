@@ -437,7 +437,7 @@ Sunucuyu ilk kez başlattığınızda:
 1. Sunucu geçerli çalışma dizininden `data/.env` dosyasını okur
 2. `data/tokens/rt_90day.txt` dosyasından şifrelenmiş refresh token'ı yükler
 3. Token yenileme gerçekleştirir (refresh token'ı access token'a değiştirir). Bu 1-2 saniye sürer
-4. Başarı durumunda şunu görürsünüz: `Starting API server on port 8000`
+4. Başarı durumunda `Starting API server on port 8000 (no API key required)` görürsünüz; anahtar tanımlıysa `(API key required, N key(s) configured)` yazar
 5. İlk istek, `substrate.office.com`'a WebSocket bağlantısı açtığı için biraz daha uzun sürebilir
 
 Refresh token eksik veya süresi dolmuşsa, sunucu `data/tokens/sso_cookies.json` dosyası mevcutsa SSO cookie ile yeniden kimlik doğrulamayı dener. SSO cookie'leri de yoksa veya süresi dolmuşsa, sunucu token yenileme hatası ile başlayamaz. Taze token ve cookie çıkarmak için `./bin/m365-bridge setup-wizard` komutunu tekrar çalıştırın.
@@ -496,7 +496,7 @@ print(resp.choices[0].message.content)
 from anthropic import Anthropic
 
 client = Anthropic(
-    base_url="http://127.0.0.1:8000/v1",
+    base_url="http://127.0.0.1:8000",
     api_key="your-api-key",  # M365_API_KEYS ayarlıysa zorunlu
 )
 resp = client.messages.create(
@@ -506,6 +506,8 @@ resp = client.messages.create(
 )
 print(resp.content[0].text)
 ```
+
+Anthropic SDK `/v1/messages` yolunu kendisi ekler, bu yüzden base URL host'ta biter.
 
 ### Görsel Girdi Örneği
 
@@ -740,7 +742,7 @@ Route, OpenAI ve Anthropic istemcilerine aynı anda cevap verir, çünkü iki pr
 
 Listenin kendisi OpenAI için `object` ve `data`, Anthropic için `has_more`, `first_id` ve `last_id` taşır. Kayıt defterinin tamamı tek sayfaya sığdığı için `has_more` her zaman `false`'tur ve imleçler ilan edilen ilk ve son id'dir.
 
-`capabilities` alanı, düz OpenAI tarzı girdilerin yanında Anthropic'in yetenek ağacını da tutar: `batch`, `citations`, `code_execution`, `context_management`, `effort`, `image_input`, `pdf_input`, `structured_outputs` ve `thinking`. Her düğüm bir `supported` boolean'ı taşır ve üçü onun altında bir seviye daha dallanır: `effort` kabul edilen her değeri adlandırır (`low`, `medium`, `high`, `xhigh`, `max`), `thinking` kendi `types` alanını adlandırır (`enabled`, `adaptive`), `context_management` ise tarihli her stratejiyi adlandırır. Değerler proxy'nin gerçekte ne yaptığını bildirir, bu yüzden çoğu `false`'tur. `effort` yalnızca `-reasoning` varyantına yönlendirilebilen bir model için `true`'dur, `thinking` ise yalnızca chain-of-thought içeriği ürettiği ölçülen tone'lar için.
+`capabilities` alanı, düz OpenAI tarzı girdilerin yanında Anthropic'in yetenek ağacını da tutar: `batch`, `citations`, `code_execution`, `context_management`, `effort`, `image_input`, `pdf_input`, `structured_outputs` ve `thinking`. Her node bir `supported` boolean'ı taşır ve üçü onun altında bir seviye daha dallanır: `effort` kabul edilen her değeri adlandırır (`low`, `medium`, `high`, `xhigh`, `max`), `thinking` kendi `types` alanını adlandırır (`enabled`, `adaptive`), `context_management` ise tarihli her stratejiyi adlandırır. Değerler proxy'nin gerçekte ne yaptığını bildirir, bu yüzden çoğu `false`'tur. `effort` yalnızca `-reasoning` varyantına yönlendirilebilen bir model için `true`'dur, `thinking` ise yalnızca chain-of-thought içeriği ürettiği ölçülen tone'lar için.
 
 Claude Code gateway modellerini bu route üzerinden keşfeder; yalnızca Anthropic biçimini ayrıştırır ve yalnızca `claude` veya `anthropic` ile başlayan id'leri ekler. Claude tone'ları bu yüzden bu biçimde id taşır.
 
@@ -808,7 +810,7 @@ curl -s -X POST http://localhost:8000/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask_copilot","arguments":{"prompt":"CAP teoremini özetle"}}}'
 ```
 
-Copilot, MCP rolünde bilinçli olarak yaprak düğümdür. `/v1` endpoint'lerinin kullandığı simulated tool calling MCP üzerinden **sunulmaz**: bir MCP istemcisinin zaten gerçek, şema ile zorlanan bir tool mekanizması vardır ve prompt tabanlı emülasyonu onun içine yerleştirmek birbiriyle yarışan iki tool loop'u oluşturur. Her MCP çağrısı, konuşma sürekliliği olmayan bağımsız bir turdur.
+Copilot, MCP rolünde bilinçli olarak leaf node'dur. `/v1` endpoint'lerinin kullandığı simulated tool calling MCP üzerinden **sunulmaz**: bir MCP istemcisinin zaten gerçek, şema ile zorlanan bir tool mekanizması vardır ve prompt tabanlı emülasyonu onun içine yerleştirmek birbiriyle yarışan iki tool loop'u oluşturur. Her MCP çağrısı, konuşma sürekliliği olmayan bağımsız bir turdur.
 
 ## Tool Calling (Araç Çağırma)
 
