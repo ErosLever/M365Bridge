@@ -445,9 +445,14 @@ Her oturum benzersiz bir M365 sohbetine eşlenir. Oturum ID'si öncelik sırası
 1. İstek gövdesinde `session_id` alanı
 2. İstek gövdesinde `user` alanı
 3. `X-Session-Id` başlığı
-4. `hash(api_key + ilk_kullanıcı_mesajı)` (kimlik doğrulama açıkken) veya `hash(ilk_kullanıcı_mesajı)` (kimlik doğrulama kapalıyken)
+4. `X-Claude-Code-Session-Id` başlığı (Claude Code) veya `session-id` başlığı (Codex)
+5. `hash(api_key + ilk_kullanıcı_mesajı)` (kimlik doğrulama açıkken) veya `hash(ilk_kullanıcı_mesajı)` (kimlik doğrulama kapalıyken)
 
-Hash yedeği, özel başlık gönderemeyen standart OpenAI istemcilerinin (Claude Code gibi) ilk kullanıcı mesajları farklı olduğu sürece otomatik olarak ayrı sohbetlere sahip olmasını sağlar.
+Claude Code ve Codex, bir oturumun her isteğine kendi oturumunu damgalar. Başlık adı sabittir, hiçbiri değiştirilmek üzere ayarlanamaz. 4. adım bu iki adı okur, böylece her iki istemci de hiçbir yapılandırma olmadan oturum başına tek sohbet tutar. Üstündeki alanların altında yer alır, çünkü istemci o başlığı kendiliğinden yazar; üstündeki her değeri ise çağıran bilerek koyar.
+
+Codex ayrıca `session-id` ile aynı değeri taşıyan `thread-id` başlığını gönderir. Onu okumak yalnızca `session-id` zaten taşıyan bir istek için cevap verirdi. `x-codex-turn-metadata` başlığı hiç okunmaz: içindeki `installation_id` bir makinedeki her oturum boyunca aynı kalır, bir sohbeti ona bağlamak ilgisiz oturumları tek sohbette birleştirirdi.
+
+Hash yedeği diğer istemcileri kapsar, ilk kullanıcı mesajları farklı olduğu sürece.
 
 `GET /v1/sessions` eşlemeleri en yeniden eskiye listeler. Eşlemenin kendi oturum ID'sini taşımasından önce yazılmış kayıtlar listelenemez, çünkü cache dosya adı anahtarın hash'idir; bunlar `legacy_entries` sayısı olarak bildirilir ve bir sonraki tur onları yeniden yazdığında listede görünür.
 
@@ -669,7 +674,7 @@ Bir reasoning modeli, modelin düşünme sürecini içeren `reasoning_content` �
 
 ### Model Adında Session ID
 
-Model adında `:` ayırıcısı ile session ID gömebilirsiniz. Bu, özel header gönderemeyen istemciler (Claude Code, Codex gibi) için kullanışlıdır:
+Model adında `:` ayırıcısı ile session ID gömebilirsiniz. Claude Code ve Codex zaten "Oturum İzolasyonu" bölümünün 4. adımıyla karşılanır; bu yola session'ı kendiniz adlandırmak istediğinizde veya hiç oturum başlığı göndermeyen bir istemci için başvurun:
 
 ```
 model: "gpt5.5-reasoning:my-session-001"

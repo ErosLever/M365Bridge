@@ -1123,12 +1123,37 @@ func (api *APIServer) sendConversationError(w http.ResponseWriter, err error) {
 func (api *APIServer) handleCORS(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-Id")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-Id, X-Claude-Code-Session-Id, Session-Id")
 	w.WriteHeader(http.StatusOK)
 }
 
+// clientSessionHeaders name the header each agent client stamps its own session
+// on. Claude Code sends X-Claude-Code-Session-Id on every request of a session,
+// and Codex sends a bare session-id. Neither client can be told to send
+// X-Session-Id, so without these names both fall through to the message hash.
+//
+// Codex also sends thread-id carrying the same value, which is why it is absent
+// here: it could only ever answer for a request that already carries session-id.
+//
+// Deliberately not read: Codex's x-codex-turn-metadata. It carries an
+// installation_id that stays the same across every session on one machine, so
+// keying a conversation on it would merge unrelated sessions into one.
+var clientSessionHeaders = []string{"X-Claude-Code-Session-Id", "Session-Id"}
+
+// clientStampedSessionID returns the session a client stamped on the request
+// itself. It ranks below every field the caller sets deliberately, because the
+// client writes this header without being asked.
+func clientStampedSessionID(r *http.Request) string {
+	for _, name := range clientSessionHeaders {
+		if v := strings.TrimSpace(r.Header.Get(name)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // getSessionID extracts session ID from headers or request body.
-// Priority: X-Session-Id header > session_id body field > user body field > hash(api_key + first_user_message)
+// Priority: X-Session-Id header > session_id body field > user body field > client-stamped header > hash(api_key + first_user_message)
 func (api *APIServer) getSessionID(r *http.Request, reqBody map[string]any) string {
 	sid := r.Header.Get("X-Session-Id")
 	if sid == "" {
@@ -1140,6 +1165,9 @@ func (api *APIServer) getSessionID(r *http.Request, reqBody map[string]any) stri
 		if v, ok := reqBody["user"].(string); ok {
 			sid = v
 		}
+	}
+	if sid == "" {
+		sid = clientStampedSessionID(r)
 	}
 	if sid == "" {
 		sid = api.hashSessionID(r, reqBody)
@@ -1544,7 +1572,7 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Resolve session ID and conversation ID
-	// Priority: model-name session ID > request body session_id > request body user > X-Session-Id header > hash(api_key + first_user_message)
+	// Priority: model-name session ID > request body session_id > request body user > X-Session-Id header > client-stamped header > hash(api_key + first_user_message)
 	sid := modelSessionID
 	if sid == "" {
 		sid = req.SessionID
@@ -1554,6 +1582,9 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	}
 	if sid == "" {
 		sid = r.Header.Get("X-Session-Id")
+	}
+	if sid == "" {
+		sid = clientStampedSessionID(r)
 	}
 	if sid == "" {
 		sid = api.hashSessionIDFromMessages(r, req.Messages)
@@ -5481,6 +5512,9 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 		sid = r.Header.Get("X-Session-Id")
 	}
 	if sid == "" {
+		sid = clientStampedSessionID(r)
+	}
+	if sid == "" {
 		sid = api.hashSessionIDFromMessages(r, messages)
 	}
 
@@ -7060,6 +7094,9 @@ func (api *APIServer) handleResponsesCompact(w http.ResponseWriter, r *http.Requ
 		sid = r.Header.Get("X-Session-Id")
 	}
 	if sid == "" {
+		sid = clientStampedSessionID(r)
+	}
+	if sid == "" {
 		sid = api.hashSessionIDFromMessages(r, messages)
 	}
 
@@ -7481,6 +7518,9 @@ func (api *APIServer) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	}
 	if sid == "" {
 		sid = r.Header.Get("X-Session-Id")
+	}
+	if sid == "" {
+		sid = clientStampedSessionID(r)
 	}
 	if sid == "" {
 		sid = "img-edit-" + uuid.New().String()[:8]

@@ -445,9 +445,14 @@ Each session maps to a unique M365 conversation. Session ID is resolved in prior
 1. `session_id` field in request body
 2. `user` field in request body
 3. `X-Session-Id` header
-4. `hash(api_key + first_user_message)` (when auth is on) or `hash(first_user_message)` (when auth is off)
+4. `X-Claude-Code-Session-Id` header (Claude Code) or `session-id` header (Codex)
+5. `hash(api_key + first_user_message)` (when auth is on) or `hash(first_user_message)` (when auth is off)
 
-The hash fallback allows standard OpenAI clients (like Claude Code) that cannot send custom headers to have separate conversations automatically, as long as their first user message differs.
+Claude Code and Codex each stamp their own session on every request of a session, under a header name neither can be told to change. Step 4 reads those two names, so both clients keep one conversation per session without any configuration. It ranks below the fields above because a client writes that header without being asked, while everything above it is a value the caller set deliberately.
+
+Codex also sends `thread-id` carrying the same value as `session-id`, so reading it would answer only for a request that already carries `session-id`. Its `x-codex-turn-metadata` header is never read: the `installation_id` inside stays the same across every session on one machine, so keying a conversation on it would merge unrelated sessions into one.
+
+The hash fallback covers any other client, as long as its first user message differs.
 
 `GET /v1/sessions` lists the mappings, newest first. Entries written before the mapping carried its session ID cannot be listed, because the cache file name is a hash of the key; they are reported as a `legacy_entries` count and appear in the list after their next turn rewrites them.
 
@@ -669,7 +674,7 @@ A reasoning model produces `reasoning_content` output containing the model's thi
 
 ### Session ID in Model Name
 
-You can embed a session ID directly in the model name using the `:` separator. This is useful for clients (like Claude Code, Codex) that cannot send custom headers:
+You can embed a session ID directly in the model name using the `:` separator. Claude Code and Codex are already handled by step 4 of [Session Isolation](#session-isolation), so reach for this when you want to name the session yourself, or for a client that sends no session header at all:
 
 ```
 model: "gpt5.5-reasoning:my-session-001"
