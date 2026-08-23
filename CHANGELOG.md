@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.4.5] - 2026-08-23
+
+### Added
+- Translate the browser interface from JSON catalogs. Every file under `web/src/locales` is a language, so a fork adds one by dropping a file there and running `make ui`. The choice is stored in the `m365bridge_lang` cookie, English is the default, and a language the build does not carry resolves to English and rewrites the cookie
+- Render an answer and its reasoning block as markdown, so a comparison table is a table and a citation is a link rather than a bare URL in the middle of a sentence. A user message stays literal
+- Give every conversation its own address, `/c/{session id}`, so it can be reloaded onto, linked to, and reached with the browser's back and forward buttons
+- Ask for a rename or a delete inside the page instead of through the browser's own dialogs
+- Read the session id an agent client stamps on its request: `X-Claude-Code-Session-Id` from Claude Code and `Session-Id` from Codex, both below any session the caller names explicitly
+- Accept `stop` on `/v1/chat/completions` and `/v1/completions`, and `stop_sequences` on `/v1/messages` and `/v1/complete`, on both the streaming and the non-streaming paths
+- Report the stop sequence that ended a completion, as `null` rather than an empty string when the answer ended on its own
+- Honour `parallel_tool_calls: false` and `disable_parallel_tool_use` by returning a single tool call
+
+### Fixed
+- Store a session's conversation before writing the end of a response, never after. A client that read the terminator and asked about its session at once was told the session does not exist, which made the browser interface show one conversation as two rows
+- Delete a conversation on both sides whichever side starts, and clear every session bound to it, because more than one session can point at one conversation
+- Keep each column's scrollbar inside its own column in the browser interface; a long conversation used to scroll the whole page and the sidebar list never scrolled on its own
+- Report `created_at` on every Responses lifecycle event
+- Read a bare url under an `image_url` or `input_image` block, which is the form several clients send
+- Carry a `developer` message as instructions, the role OpenAI's reasoning models use in place of `system`
+- Honour a `json_schema` response format
+- End a completion at its stop sequence, including a sequence split across two upstream chunks
+- Stop reading an answer that discusses sandboxes as a refusal
+- Bound the request body every handler reads and every upstream response body this proxy reads
+- Replace every state file in one step instead of truncating it, so a failed write cannot leave a half-written credential store
+- Cut text on a rune boundary wherever a byte cap applies
+- Report a response body that failed to encode instead of sending a truncated one
+
+### Changed
+- Resolve every request's session through one order, so `/v1/completions`, `/v1/messages` and `/v1/complete` read `session_id` and `user` from the body like the other endpoints
+- Cut text on a character boundary from one place rather than at each call site
+- Drop the unused scoped token exchange from the authentication layer
+- Remove the dependabot configuration
+- Rewrite both READMEs against the running service: the Go floor, the package list, the Anthropic SDK base URL, the capability tree shape, the MCP tool arguments, the image backend name, `413 request_too_large`, and what an unserved model name returns
+
 ## [1.4.4] - 2026-08-20
 
 ### Added
