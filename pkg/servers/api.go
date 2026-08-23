@@ -1152,86 +1152,55 @@ func clientStampedSessionID(r *http.Request) string {
 	return ""
 }
 
-// getSessionID extracts session ID from headers or request body.
-// Priority: X-Session-Id header > session_id body field > user body field > client-stamped header > hash(api_key + first_user_message)
-func (api *APIServer) getSessionID(r *http.Request, reqBody map[string]any) string {
-	sid := r.Header.Get("X-Session-Id")
-	if sid == "" {
-		if v, ok := reqBody["session_id"].(string); ok {
-			sid = v
-		}
-	}
-	if sid == "" {
-		if v, ok := reqBody["user"].(string); ok {
-			sid = v
-		}
-	}
-	if sid == "" {
-		sid = clientStampedSessionID(r)
-	}
-	if sid == "" {
-		sid = api.hashSessionID(r, reqBody)
-	}
-	return sid
+// sessionSources carries the places a request can name its own session, other
+// than the headers, which resolveSessionID reads from the request itself.
+type sessionSources struct {
+	// ModelSuffix is the part after the colon in "modelKey:sessionID".
+	ModelSuffix string
+	// PreviousResponseID chains one Responses call to the last; the other
+	// endpoints leave it empty.
+	PreviousResponseID string
+	BodySessionID      string
+	BodyUser           string
 }
 
-// hashSessionID derives a session ID from the API key and the first user message.
-// When auth is enabled, the hash includes the API key so that different keys
-// produce different sessions even with the same first message.
-// When auth is disabled, only the first user message is hashed.
-func (api *APIServer) hashSessionID(r *http.Request, reqBody map[string]any) string {
-	firstMsg := extractFirstUserMessage(reqBody)
-	if firstMsg == "" {
-		return ""
-	}
-	apiKey := api.extractAPIKey(r)
-	// The digest derives a stable session id from the caller's first message;
-	// it protects nothing and is never compared against a supplied value.
-	// #nosec G401
-	h := md5.Sum([]byte(apiKey + "\x00" + firstMsg))
-	return "h:" + hex.EncodeToString(h[:])
-}
-
-// extractFirstUserMessage scans the messages array and returns the first user message content.
-func extractFirstUserMessage(reqBody map[string]any) string {
-	msgs, ok := reqBody["messages"].([]any)
-	if !ok || len(msgs) == 0 {
-		return ""
-	}
-	for _, m := range msgs {
-		msg, ok := m.(map[string]any)
-		if !ok {
-			continue
-		}
-		role, _ := msg["role"].(string)
-		if role != "user" {
-			continue
-		}
-		// Content can be a string or an array of content blocks
-		switch c := msg["content"].(type) {
-		case string:
-			if c != "" {
-				return c
-			}
-		case []any:
-			for _, block := range c {
-				bm, ok := block.(map[string]any)
-				if !ok {
-					continue
-				}
-				if t, _ := bm["type"].(string); t == "text" {
-					if txt, _ := bm["text"].(string); txt != "" {
-						return txt
-					}
-				}
-			}
+// resolveSessionID picks the session a request belongs to.
+//
+// Every endpoint calls this, so the order is decided once. It used to live
+// inline at each call site, and the copies disagreed: three endpoints ranked
+// the X-Session-Id header above the body fields while the rest ranked the body
+// first, so the same request produced different sessions on different routes.
+//
+// The order runs from what the caller chose most deliberately to what it never
+// chose at all. A header a client stamps by itself therefore ranks last, and
+// the caller's own values always win over it.
+//
+// An empty result means the request named no session; the caller decides what
+// to fall back to, because a chat hashes its first message while an image edit
+// mints a fresh id.
+func resolveSessionID(r *http.Request, src sessionSources) string {
+	for _, candidate := range []string{
+		src.ModelSuffix,
+		src.PreviousResponseID,
+		src.BodySessionID,
+		src.BodyUser,
+		r.Header.Get("X-Session-Id"),
+		clientStampedSessionID(r),
+	} {
+		if v := strings.TrimSpace(candidate); v != "" {
+			return v
 		}
 	}
 	return ""
 }
 
-// hashSessionIDFromMessages derives a session ID from the API key and the first user message
-// in a typed Message slice. Used by handleChatCompletions which decodes into a struct.
+// hashSessionIDFromMessages derives a session ID from the API key and the first
+// user message, for a request that named no session of its own.
+//
+// When auth is enabled the API key is hashed in, so two keys sending the same
+// first message get separate conversations. The digest is stable for one first
+// message, which is what gives an unconfigured client continuity across the
+// turns of a conversation.
 func (api *APIServer) hashSessionIDFromMessages(r *http.Request, messages []payload.Message) string {
 	firstMsg := ""
 	for _, m := range messages {
@@ -1572,20 +1541,11 @@ func (api *APIServer) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Resolve session ID and conversation ID
-	// Priority: model-name session ID > request body session_id > request body user > X-Session-Id header > client-stamped header > hash(api_key + first_user_message)
-	sid := modelSessionID
-	if sid == "" {
-		sid = req.SessionID
-	}
-	if sid == "" {
-		sid = req.User
-	}
-	if sid == "" {
-		sid = r.Header.Get("X-Session-Id")
-	}
-	if sid == "" {
-		sid = clientStampedSessionID(r)
-	}
+	sid := resolveSessionID(r, sessionSources{
+		ModelSuffix:   modelSessionID,
+		BodySessionID: req.SessionID,
+		BodyUser:      req.User,
+	})
 	if sid == "" {
 		sid = api.hashSessionIDFromMessages(r, req.Messages)
 	}
@@ -1653,7 +1613,9 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 		ToolChoice    any                   `json:"tool_choice"`
 		StreamOptions *streamOptions        `json:"stream_options"`
 		// Either a single string or an array of them, so it arrives untyped.
-		Stop any `json:"stop"`
+		Stop      any    `json:"stop"`
+		SessionID string `json:"session_id"`
+		User      string `json:"user"`
 	}
 
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -1678,9 +1640,13 @@ func (api *APIServer) handleCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Resolve session ID and conversation ID
-	sid := modelSessionID
+	sid := resolveSessionID(r, sessionSources{
+		ModelSuffix:   modelSessionID,
+		BodySessionID: req.SessionID,
+		BodyUser:      req.User,
+	})
 	if sid == "" {
-		sid = api.getSessionID(r, nil)
+		sid = api.hashSessionIDFromMessages(r, messages)
 	}
 	var convID string
 	if sid != "" {
@@ -1800,6 +1766,8 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 		// Anthropic declares stop_sequences as an array of strings, unlike
 		// OpenAI's stop, which is also a bare string.
 		StopSequences []string `json:"stop_sequences"`
+		SessionID     string   `json:"session_id"`
+		User          string   `json:"user"`
 	}
 
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -1851,9 +1819,13 @@ func (api *APIServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 	}
 
 	// Resolve session ID and conversation ID
-	sid := modelSessionID
+	sid := resolveSessionID(r, sessionSources{
+		ModelSuffix:   modelSessionID,
+		BodySessionID: req.SessionID,
+		BodyUser:      req.User,
+	})
 	if sid == "" {
-		sid = api.getSessionID(r, nil)
+		sid = api.hashSessionIDFromMessages(r, chatMessages)
 	}
 	var convID string
 	if sid != "" {
@@ -1901,6 +1873,8 @@ func (api *APIServer) handleAnthropicComplete(w http.ResponseWriter, r *http.Req
 		MaxTokensToSample int      `json:"max_tokens_to_sample"`
 		Stream            bool     `json:"stream"`
 		StopSequences     []string `json:"stop_sequences"`
+		SessionID         string   `json:"session_id"`
+		User              string   `json:"user"`
 	}
 
 	limitRequestBody(w, r, requestBodyMax)
@@ -1919,9 +1893,13 @@ func (api *APIServer) handleAnthropicComplete(w http.ResponseWriter, r *http.Req
 	messages := api.fimToChat(req.Prompt, "")
 
 	// Resolve session ID and conversation ID
-	sid := modelSessionID
+	sid := resolveSessionID(r, sessionSources{
+		ModelSuffix:   modelSessionID,
+		BodySessionID: req.SessionID,
+		BodyUser:      req.User,
+	})
 	if sid == "" {
-		sid = api.getSessionID(r, nil)
+		sid = api.hashSessionIDFromMessages(r, messages)
 	}
 	var convID string
 	if sid != "" {
@@ -5496,24 +5474,12 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 		injectSimulatedPromptResponses(&messages, requestJSON, toolPolicy.promptChoice, toolPolicy.ledger.EvidenceNote())
 	}
 
-	// Resolve session ID
-	// Priority: model-name session > previous_response_id > body session_id > body user > header > hash
-	sid := modelSessionID
-	if sid == "" {
-		sid = req.PreviousResponseID
-	}
-	if sid == "" {
-		sid = req.SessionID
-	}
-	if sid == "" {
-		sid = req.User
-	}
-	if sid == "" {
-		sid = r.Header.Get("X-Session-Id")
-	}
-	if sid == "" {
-		sid = clientStampedSessionID(r)
-	}
+	sid := resolveSessionID(r, sessionSources{
+		ModelSuffix:        modelSessionID,
+		PreviousResponseID: req.PreviousResponseID,
+		BodySessionID:      req.SessionID,
+		BodyUser:           req.User,
+	})
 	if sid == "" {
 		sid = api.hashSessionIDFromMessages(r, messages)
 	}
@@ -7079,23 +7045,12 @@ func (api *APIServer) handleResponsesCompact(w http.ResponseWriter, r *http.Requ
 		{Role: "user", Content: conversationText.String()},
 	}
 
-	// Resolve session ID (same priority as handleResponses)
-	sid := modelSessionID
-	if sid == "" {
-		sid = req.PreviousResponseID
-	}
-	if sid == "" {
-		sid = req.SessionID
-	}
-	if sid == "" {
-		sid = req.User
-	}
-	if sid == "" {
-		sid = r.Header.Get("X-Session-Id")
-	}
-	if sid == "" {
-		sid = clientStampedSessionID(r)
-	}
+	sid := resolveSessionID(r, sessionSources{
+		ModelSuffix:        modelSessionID,
+		PreviousResponseID: req.PreviousResponseID,
+		BodySessionID:      req.SessionID,
+		BodyUser:           req.User,
+	})
 	if sid == "" {
 		sid = api.hashSessionIDFromMessages(r, messages)
 	}
@@ -7509,20 +7464,14 @@ func (api *APIServer) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve session ID
-	sid := modelSessionID
+	sid := resolveSessionID(r, sessionSources{
+		ModelSuffix:   modelSessionID,
+		BodySessionID: r.FormValue("session_id"),
+		BodyUser:      r.FormValue("user"),
+	})
 	if sid == "" {
-		sid = r.FormValue("session_id")
-	}
-	if sid == "" {
-		sid = r.FormValue("user")
-	}
-	if sid == "" {
-		sid = r.Header.Get("X-Session-Id")
-	}
-	if sid == "" {
-		sid = clientStampedSessionID(r)
-	}
-	if sid == "" {
+		// An edit carries no message to hash, so an unnamed one gets a fresh
+		// session rather than joining another request's conversation.
 		sid = "img-edit-" + uuid.New().String()[:8]
 	}
 

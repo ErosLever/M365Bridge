@@ -442,11 +442,15 @@ Refresh token eksik veya süresi dolmuşsa, sunucu `data/tokens/sso_cookies.json
 
 Her oturum benzersiz bir M365 sohbetine eşlenir. Oturum ID'si öncelik sırasına göre çözümlenir:
 
-1. İstek gövdesinde `session_id` alanı
-2. İstek gövdesinde `user` alanı
-3. `X-Session-Id` başlığı
-4. `X-Claude-Code-Session-Id` başlığı (Claude Code) veya `session-id` başlığı (Codex)
-5. `hash(api_key + ilk_kullanıcı_mesajı)` (kimlik doğrulama açıkken) veya `hash(ilk_kullanıcı_mesajı)` (kimlik doğrulama kapalıyken)
+1. Model adında iki nokta üst üsteden sonraki `sessionID` (`model:sessionID`)
+2. İstek gövdesinde `previous_response_id` alanı (yalnızca `/v1/responses`)
+3. İstek gövdesinde `session_id` alanı
+4. İstek gövdesinde `user` alanı
+5. `X-Session-Id` başlığı
+6. `X-Claude-Code-Session-Id` başlığı (Claude Code) veya `session-id` başlığı (Codex)
+7. `hash(api_key + ilk_kullanıcı_mesajı)` (kimlik doğrulama açıkken) veya `hash(ilk_kullanıcı_mesajı)` (kimlik doğrulama kapalıyken)
+
+Her endpoint session'ı bu tek sıraya göre çözümler. `/v1/completions`, `/v1/messages` ve `/v1/complete` eskiden daha kısa bir zincir çalıştırıyordu: gövdeden ne `session_id` ne `user` okunuyordu ve hash'e hiç ulaşılmıyordu. Bu yüzden o üç endpoint'e giden bir istek hiçbir session adlandırmıyor ve her tur yeni bir konuşma açıyordu.
 
 Claude Code ve Codex, bir oturumun her isteğine kendi oturumunu damgalar. Başlık adı sabittir, hiçbiri değiştirilmek üzere ayarlanamaz. 4. adım bu iki adı okur, böylece her iki istemci de hiçbir yapılandırma olmadan oturum başına tek sohbet tutar. Üstündeki alanların altında yer alır, çünkü istemci o başlığı kendiliğinden yazar; üstündeki her değeri ise çağıran bilerek koyar.
 

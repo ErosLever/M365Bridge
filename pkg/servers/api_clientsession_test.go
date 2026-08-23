@@ -60,44 +60,78 @@ func TestClientStampedSessionIDIgnoresTheRedundantAndTheMachineStableHeaders(t *
 	}
 }
 
-// The client writes its header without being asked, so anything the caller set
-// deliberately outranks it.
-func TestDeliberateSessionOutranksTheClientStamp(t *testing.T) {
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	r.Header.Set("X-Claude-Code-Session-Id", "stamped")
-	r.Header.Set("X-Session-Id", "chosen")
+// Every source in the chain, each one outranked by the one above it. The order
+// runs from what the caller chose most deliberately to what it never chose.
+func TestResolveSessionIDRanksEverySourceInOneOrder(t *testing.T) {
+	// Each row removes the previous winner, so the next source must answer.
+	// The rank of a source is exactly the row where it first wins.
+	for _, step := range []struct {
+		name   string
+		src    sessionSources
+		header string
+		stamp  string
+		want   string
+	}{
+		{"model suffix wins", sessionSources{"from-model", "from-previous", "from-body", "from-user"}, "from-header", "from-stamp", "from-model"},
+		{"then previous_response_id", sessionSources{"", "from-previous", "from-body", "from-user"}, "from-header", "from-stamp", "from-previous"},
+		{"then body session_id", sessionSources{"", "", "from-body", "from-user"}, "from-header", "from-stamp", "from-body"},
+		{"then body user", sessionSources{"", "", "", "from-user"}, "from-header", "from-stamp", "from-user"},
+		{"then X-Session-Id", sessionSources{}, "from-header", "from-stamp", "from-header"},
+		{"then the client stamp", sessionSources{}, "", "from-stamp", "from-stamp"},
+		{"nothing left", sessionSources{}, "", "", ""},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			if step.header != "" {
+				r.Header.Set("X-Session-Id", step.header)
+			}
+			if step.stamp != "" {
+				r.Header.Set("X-Claude-Code-Session-Id", step.stamp)
+			}
 
-	api := &APIServer{}
-	if got := api.getSessionID(r, nil); got != "chosen" {
-		t.Errorf("session = %q, want the deliberately set X-Session-Id", got)
+			if got := resolveSessionID(r, step.src); got != step.want {
+				t.Errorf("session = %q, want %q", got, step.want)
+			}
+		})
 	}
 }
 
-func TestBodyFieldsOutrankTheClientStamp(t *testing.T) {
-	for field, want := range map[string]string{"session_id": "from-body", "user": "from-user"} {
-		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-		r.Header.Set("X-Claude-Code-Session-Id", "stamped")
-
-		api := &APIServer{}
-		if got := api.getSessionID(r, map[string]any{field: want}); got != want {
-			t.Errorf("with %s set, session = %q, want %q", field, got, want)
-		}
-	}
-}
-
-// The stamp is what the change buys: it must win over the hash, which is the
-// only thing that answered for these clients before.
-func TestTheClientStampOutranksTheMessageHash(t *testing.T) {
+// The model suffix wins outright, whatever else the request carries.
+func TestModelSuffixOutranksEveryOtherSource(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	r.Header.Set("X-Claude-Code-Session-Id", "stamped")
+	r.Header.Set("X-Session-Id", "from-header")
+	r.Header.Set("X-Claude-Code-Session-Id", "from-stamp")
 
-	api := &APIServer{}
-	got := api.getSessionID(r, map[string]any{
-		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	got := resolveSessionID(r, sessionSources{
+		ModelSuffix:   "from-model",
+		BodySessionID: "from-body",
+		BodyUser:      "from-user",
 	})
 
-	if got != "stamped" {
-		t.Errorf("session = %q, want the client stamp rather than a hash", got)
+	if got != "from-model" {
+		t.Errorf("session = %q, want the model suffix", got)
+	}
+}
+
+// A whitespace-only value names no session, so the next source must answer.
+func TestResolveSessionIDSkipsABlankSource(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	r.Header.Set("X-Session-Id", "  ")
+
+	got := resolveSessionID(r, sessionSources{ModelSuffix: "   ", BodySessionID: " kept "})
+
+	if got != "kept" {
+		t.Errorf("session = %q, want the trimmed non-blank source", got)
+	}
+}
+
+// Nothing named means nothing returned, so each caller reaches its own
+// fallback rather than sharing one empty session.
+func TestResolveSessionIDReportsNothingWhenTheRequestNamesNoSession(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	if got := resolveSessionID(r, sessionSources{}); got != "" {
+		t.Errorf("session = %q, want empty", got)
 	}
 }
 

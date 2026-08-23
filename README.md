@@ -442,11 +442,15 @@ If the refresh token is missing or expired, the server will attempt SSO cookie r
 
 Each session maps to a unique M365 conversation. Session ID is resolved in priority order:
 
-1. `session_id` field in request body
-2. `user` field in request body
-3. `X-Session-Id` header
-4. `X-Claude-Code-Session-Id` header (Claude Code) or `session-id` header (Codex)
-5. `hash(api_key + first_user_message)` (when auth is on) or `hash(first_user_message)` (when auth is off)
+1. `sessionID` after the colon in the model name (`model:sessionID`)
+2. `previous_response_id` field in request body (`/v1/responses` only)
+3. `session_id` field in request body
+4. `user` field in request body
+5. `X-Session-Id` header
+6. `X-Claude-Code-Session-Id` header (Claude Code) or `session-id` header (Codex)
+7. `hash(api_key + first_user_message)` (when auth is on) or `hash(first_user_message)` (when auth is off)
+
+Every endpoint resolves the session through this one order. `/v1/completions`, `/v1/messages` and `/v1/complete` used to run a shorter chain that read neither `session_id` nor `user` from the body and never reached the hash, so a request to them named no session at all and each turn opened a new conversation.
 
 Claude Code and Codex each stamp their own session on every request of a session, under a header name neither can be told to change. Step 4 reads those two names, so both clients keep one conversation per session without any configuration. It ranks below the fields above because a client writes that header without being asked, while everything above it is a value the caller set deliberately.
 
