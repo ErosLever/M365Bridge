@@ -757,12 +757,12 @@ Counters the proxy does not recognize are returned under `extra` instead of bein
 Prompt and completion token counts are estimates produced locally; the M365 backend reports no usage. The encoder is `o200k_base`, the encoding of the GPT-5 class models the backend serves, with `cl100k_base` as the fallback and a character-based estimate when neither vocabulary can be fetched. Every `usage` object names which one produced the numbers:
 
 ```json
-{"prompt_tokens": 42, "completion_tokens": 17, "total_tokens": 59, "usage_source": "tiktoken_o200k_base_estimate"}
+{"prompt_tokens": 42, "completion_tokens": 17, "reasoning_tokens": 6, "total_tokens": 59, "usage_source": "tiktoken_o200k_base_estimate"}
 ```
 
-`usage_source` is a non-standard field; the standard fields keep their meaning and position. Every endpoint reports usage, streaming and non-streaming alike, including `/v1/complete`, whose own format defines no usage object.
+`usage_source` and `reasoning_tokens` are non-standard fields; the standard fields keep their meaning and position. `reasoning_tokens` counts the thinking content and reads `0` for a tone that emits none. Every endpoint reports usage, streaming and non-streaming alike, including `/v1/complete`, whose own format defines no usage object.
 
-The Anthropic endpoints report the same counts under their own field names, plus two fields the Anthropic format does not define:
+The Anthropic endpoints report the same counts under their own field names, and carry the same two extra fields:
 
 ```json
 {"input_tokens": 42, "output_tokens": 17, "reasoning_tokens": 6, "usage_source": "tiktoken_o200k_base_estimate"}
@@ -1134,30 +1134,49 @@ Streaming mode emits the same SSE event sequence as `/v1/responses` (`response.c
 ## Project Structure
 
 ```
-cmd/cli/main.go          # Single entry point, subcommand router
+cmd/cli/main.go            # Single entry point, subcommand router
 pkg/
-  auth/auth.go           # TokenManager, token refresh, AES-encrypted refresh token storage
-  auth/sso.go            # SSO cookie-based re-authentication (fallback for 24h token expiry)
-  client/client.go       # M365Client, WebSocket (SignalR) communication
-  crypto/crypto.go       # AES-256-GCM encryption for refresh tokens
-  models/models.go       # Version, ModelRegistry, Config, LoadConfig, LookupModel
-  payload/payload.go     # Request payload builders, URL builder, locale/timezone helpers
+  atomicfile/              # Write-and-rename, so a crash cannot leave a half-written credential
+  auth/auth.go             # TokenManager, token refresh, AES-encrypted refresh token storage
+  auth/sso.go              # SSO cookie re-authentication and the designer broker token flow
+  client/client.go         # M365Client, one SignalR WebSocket per request
+  client/conversations.go  # ConversationClient: list, rename and delete web conversations
+  client/history.go        # Reads the turns of a conversation from its rendered page
+  client/citations.go      # Citation resolution in streamed answer text
+  client/errors.go         # UpstreamError, carrying the status of a failed dial or upload
+  codingtools/             # Built-in local tools, gated by M365_ENABLE_CODE_TOOLS
+  crypto/crypto.go         # AES-256-GCM encryption for refresh tokens
+  logging/                 # Application logging
+  models/models.go         # Version, ModelRegistry, Config, LoadConfig, FindModel
+  payload/payload.go       # Request payload builders, URL builder, locale/timezone helpers
   servers/
-    api.go               # HTTP API server, all endpoints, max_tokens, token counting, session isolation
-    cli.go               # CLI server, interactive mode
-  setup/wizard.go        # Browser-based setup wizard (JS snippet, token verify, data/.env save)
-go.mod                   # Module: github.com/KilimcininKorOglu/M365Bridge, Go 1.22
-data/                    # Runtime data (gitignored): tokens/, setup.json, cache/
+    api.go                 # HTTP adaptation: every endpoint, token counting, session isolation
+    cli.go                 # CLI server, interactive mode
+    errors.go              # The one error shape every route reports
+    mcp.go                 # JSON-RPC 2.0 Model Context Protocol server
+    sessions.go            # The session to conversation mapping routes
+    stopsequence.go        # Stop sequence cutting, including the streaming writer
+    transcripts.go         # The only place message content reaches disk
+    webui.go               # Serves the embedded browser interface
+  setup/wizard.go          # Browser-based setup wizard (JS snippet, token verify, data/.env save)
+  textcut/                 # Rune-boundary-safe cutting
+  toolcalling/             # Simulated caller-defined tool calling, its parsers and detectors
+  webui/embed.go           # The built interface, compiled into the binary
+go.mod                     # Module: github.com/KilimcininKorOglu/M365Bridge, Go 1.26
+web/                       # Vite project for the interface; make ui builds it into pkg/webui/dist
+data/                      # Runtime data (gitignored): tokens/, setup.json, cache/, transcripts/
 ```
 
 ## Dependencies
+
+Three direct dependencies, and one they pull in.
 
 | Dependency                      | Purpose                                                               |
 |---------------------------------|-----------------------------------------------------------------------|
 | `github.com/google/uuid`        | UUID generation for SIDs and request IDs                              |
 | `github.com/gorilla/websocket`  | WebSocket client for SignalR                                          |
 | `github.com/pkoukk/tiktoken-go` | BPE token counting (o200k_base, cl100k_base fallback) for usage and max_tokens enforcement |
-| `golang.org/x/net`              | publicsuffix list for SSO cookie jar                                  |
+| `github.com/dlclark/regexp2`    | Indirect; the regex engine tiktoken-go splits text with              |
 
 ## Security
 

@@ -757,12 +757,12 @@ Proxy'nin tanımadığı sayaçlar atılmaz, `extra` altında döndürülür. Bi
 Prompt ve completion token sayıları yerel olarak üretilen tahminlerdir; M365 backend'i kullanım bildirmez. Encoder, backend'in sunduğu GPT-5 sınıfı modellerin encoding'i olan `o200k_base`'dir; yedeği `cl100k_base`, iki sözlük de indirilemezse karakter tabanlı tahmindir. Her `usage` nesnesi sayıları hangisinin ürettiğini bildirir:
 
 ```json
-{"prompt_tokens": 42, "completion_tokens": 17, "total_tokens": 59, "usage_source": "tiktoken_o200k_base_estimate"}
+{"prompt_tokens": 42, "completion_tokens": 17, "reasoning_tokens": 6, "total_tokens": 59, "usage_source": "tiktoken_o200k_base_estimate"}
 ```
 
-`usage_source` standart dışı bir alandır; standart alanlar anlamını ve yerini korur. Akışlı veya akışsız, her uç nokta usage bildirir; kendi formatında usage nesnesi tanımlı olmayan `/v1/complete` dahil.
+`usage_source` ve `reasoning_tokens` standart dışı alanlardır; standart alanlar anlamını ve yerini korur. `reasoning_tokens` düşünme içeriğini sayar ve hiç üretmeyen bir tone için `0` okur. Akışlı veya akışsız, her uç nokta usage bildirir; kendi formatında usage nesnesi tanımlı olmayan `/v1/complete` dahil.
 
-Anthropic uç noktaları aynı sayıları kendi alan adlarıyla bildirir, artı Anthropic formatının tanımlamadığı iki alan:
+Anthropic uç noktaları aynı sayıları kendi alan adlarıyla bildirir ve aynı iki ek alanı taşır:
 
 ```json
 {"input_tokens": 42, "output_tokens": 17, "reasoning_tokens": 6, "usage_source": "tiktoken_o200k_base_estimate"}
@@ -1134,30 +1134,49 @@ Akışlı mod, `/v1/responses` ile aynı SSE event dizisini yayar (`response.cre
 ## Proje Yapısı
 
 ```
-cmd/cli/main.go          # Tek giriş noktası, alt komut yönlendirici
+cmd/cli/main.go            # Tek giriş noktası, alt komut yönlendirici
 pkg/
-  auth/auth.go           # TokenManager, token yenileme, AES şifreli refresh token depolama
-  auth/sso.go            # SSO cookie tabanlı yeniden kimlik doğrulama (24h token süresi için yedek)
-  client/client.go       # M365Client, WebSocket (SignalR) iletişimi
-  crypto/crypto.go       # Refresh token'lar için AES-256-GCM şifreleme
-  models/models.go       # Version, ModelRegistry, Config, LoadConfig, LookupModel
-  payload/payload.go     # İstek payload oluşturucuları, URL oluşturucu, locale/timezone yardımcıları
+  atomicfile/              # Yaz-ve-adlandır; çökme yarım yazılmış bir kimlik bilgisi bırakamaz
+  auth/auth.go             # TokenManager, token yenileme, AES şifreli refresh token depolama
+  auth/sso.go              # SSO cookie ile yeniden kimlik doğrulama ve designer broker token akışı
+  client/client.go         # M365Client, istek başına tek SignalR WebSocket
+  client/conversations.go  # ConversationClient: web sohbetlerini listeleme, yeniden adlandırma, silme
+  client/history.go        # Bir sohbetin turlarını render edilmiş sayfasından okur
+  client/citations.go      # Akan cevap metnindeki alıntı çözümlemesi
+  client/errors.go         # UpstreamError; başarısız dial veya upload'ın durum kodunu taşır
+  codingtools/             # Yerleşik yerel araçlar, M365_ENABLE_CODE_TOOLS ile açılır
+  crypto/crypto.go         # Refresh token'lar için AES-256-GCM şifreleme
+  logging/                 # Uygulama loglaması
+  models/models.go         # Version, ModelRegistry, Config, LoadConfig, FindModel
+  payload/payload.go       # İstek payload oluşturucuları, URL oluşturucu, locale/timezone yardımcıları
   servers/
-    api.go               # HTTP API sunucusu, tüm uç noktalar, max_tokens, token sayımı, oturum izolasyonu
-    cli.go               # CLI sunucusu, etkileşimli mod
-  setup/wizard.go        # Tarayıcı tabanlı kurulum sihirbazı (JS kod parçacığı, token doğrulama, data/.env kaydı)
-go.mod                   # Modül: github.com/KilimcininKorOglu/M365Bridge, Go 1.22
-data/                    # Çalışma zamanı verisi (gitignore'lı): tokens/, setup.json, cache/
+    api.go                 # HTTP uyarlaması: her uç nokta, token sayımı, oturum izolasyonu
+    cli.go                 # CLI sunucusu, etkileşimli mod
+    errors.go              # Her route'un bildirdiği tek hata biçimi
+    mcp.go                 # JSON-RPC 2.0 Model Context Protocol sunucusu
+    sessions.go            # Oturumdan sohbete eşleme route'ları
+    stopsequence.go        # Stop sequence kesme, akış yazıcısı dahil
+    transcripts.go         # Mesaj içeriğinin diske ulaştığı tek yer
+    webui.go               # Gömülü tarayıcı arayüzünü sunar
+  setup/wizard.go          # Tarayıcı tabanlı kurulum sihirbazı (JS kod parçacığı, token doğrulama, data/.env kaydı)
+  textcut/                 # Rune sınırına saygılı kesme
+  toolcalling/             # Simüle edilmiş tool calling, ayrıştırıcıları ve dedektörleri
+  webui/embed.go           # Derlenmiş arayüz, binary'ye gömülü
+go.mod                     # Modül: github.com/KilimcininKorOglu/M365Bridge, Go 1.26
+web/                       # Arayüzün Vite projesi; make ui bunu pkg/webui/dist'e derler
+data/                      # Çalışma zamanı verisi (gitignore'lı): tokens/, setup.json, cache/, transcripts/
 ```
 
 ## Bağımlılıklar
+
+Üç doğrudan bağımlılık ve onların getirdiği bir tanesi.
 
 | Bağımlılık                      | Amaç                                                                  |
 |---------------------------------|-----------------------------------------------------------------------|
 | `github.com/google/uuid`        | SID'ler ve istek ID'leri için UUID oluşturma                          |
 | `github.com/gorilla/websocket`  | SignalR için WebSocket istemcisi                                      |
 | `github.com/pkoukk/tiktoken-go` | Kullanım ve max_tokens uygulaması için BPE token sayımı (o200k_base, yedek cl100k_base) |
-| `golang.org/x/net`              | SSO cookie jar için publicsuffix listesi                              |
+| `github.com/dlclark/regexp2`    | Dolaylı; tiktoken-go'nun metni böldüğü regex motoru                   |
 
 ## Güvenlik
 
