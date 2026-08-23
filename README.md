@@ -901,7 +901,7 @@ Response:
 {
   "content": [{
     "type": "tool_use",
-    "id": "toolu_001",
+    "id": "call_0e46d749-f182-419e-865f-abcb9c200de9",
     "name": "bash",
     "input": {"command": "echo hello"}
   }],
@@ -1067,8 +1067,10 @@ The streaming endpoint emits typed SSE events:
 | `response.output_text.done`              | Text complete                                                |
 | `response.content_part.done`             | Content part complete                                        |
 | `response.output_item.done`              | Output item complete                                         |
+| `response.reasoning_summary_part.added`  | Reasoning part opened                                        |
 | `response.reasoning_summary_text.delta`  | Reasoning/thinking delta                                     |
 | `response.reasoning_summary_text.done`   | Reasoning complete                                           |
+| `response.reasoning_summary_part.done`   | Reasoning part closed                                        |
 | `response.function_call_arguments.delta` | Tool call arguments delta                                    |
 | `response.function_call_arguments.done`  | Tool call arguments complete                                 |
 | `response.completed`                     | Full response object (status: completed)                     |
@@ -1233,11 +1235,12 @@ Both endpoints accept the following parameters:
 |-------------------|--------|-------------|---------------------------------------------------------------------------------------------------|
 | `prompt`          | string | (required)  | The text prompt for image generation/editing                                                      |
 | `n`               | int    | 1           | Number of images to generate (M365 generates one per request)                                     |
-| `size`            | string | `1024x1024` | Image size hint (appended to prompt as natural language)                                          |
+| `size`            | string | `1024x1024` | Size hint (appended to prompt as natural language; `1024x1024` is skipped)                        |
 | `quality`         | string | `standard`  | Quality hint (appended to prompt; `standard` is skipped)                                          |
 | `style`           | string | `natural`   | Style hint (appended to prompt; `natural` is skipped)                                             |
 | `response_format` | string | `url`       | Response format: `url` returns a data URL (base64), `b64_json` returns base64 in a separate field |
 | `session_id`      | string | (optional)  | Session ID for conversation continuity                                                            |
+| `user`            | string | (optional)  | Read as the session ID when `session_id` is absent                                                |
 
 ### Response Format
 

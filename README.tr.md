@@ -901,7 +901,7 @@ Yanıt:
 {
   "content": [{
     "type": "tool_use",
-    "id": "toolu_001",
+    "id": "call_0e46d749-f182-419e-865f-abcb9c200de9",
     "name": "bash",
     "input": {"command": "echo hello"}
   }],
@@ -1067,8 +1067,10 @@ Streaming uç noktası tipli SSE olayları yayınlar:
 | `response.output_text.done`              | Metin tamamlandı                                                  |
 | `response.content_part.done`             | İçerik parçası tamamlandı                                         |
 | `response.output_item.done`              | Output öğesi tamamlandı                                           |
+| `response.reasoning_summary_part.added`  | Reasoning parçası açıldı                                          |
 | `response.reasoning_summary_text.delta`  | Reasoning/düşünme deltası                                         |
 | `response.reasoning_summary_text.done`   | Reasoning tamamlandı                                              |
+| `response.reasoning_summary_part.done`   | Reasoning parçası kapandı                                         |
 | `response.function_call_arguments.delta` | Tool call argüman deltası                                         |
 | `response.function_call_arguments.done`  | Tool call argümanları tamamlandı                                  |
 | `response.completed`                     | Tam response nesnesi (status: completed)                          |
@@ -1233,11 +1235,12 @@ Her iki uç nokta aşağıdaki parametreleri kabul eder:
 |-------------------|--------|-------------|-------------------------------------------------------------------------------------------|
 | `prompt`          | string | (zorunlu)   | Görsel üretimi/düzenleme için metin prompt'u                                              |
 | `n`               | int    | 1           | Üretilecek görsel sayısı (M365 her istek için bir tane üretir)                            |
-| `size`            | string | `1024x1024` | Görsel boyut ipucu (prompt'a doğal dil olarak eklenir)                                    |
+| `size`            | string | `1024x1024` | Boyut ipucu (prompt'a doğal dil olarak eklenir; `1024x1024` atlanır)                      |
 | `quality`         | string | `standard`  | Kalite ipucu (prompt'a eklenir; `standard` atlanır)                                       |
 | `style`           | string | `natural`   | Stil ipucu (prompt'a eklenir; `natural` atlanır)                                          |
 | `response_format` | string | `url`       | Yanıt formatı: `url` data URL (base64) döndürür, `b64_json` base64'ü ayrı alanda döndürür |
 | `session_id`      | string | (opsiyonel) | Konuşma sürekliliği için session ID                                                       |
+| `user`            | string | (opsiyonel) | `session_id` yoksa session ID olarak okunur                                               |
 
 ### Yanıt Formatı
 
