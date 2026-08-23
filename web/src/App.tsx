@@ -3,12 +3,21 @@ import * as api from './api'
 import { ApiError } from './types'
 import type { ChatMessage, ConversationRow, ModelEntry } from './types'
 import { apiKeyCookie, modelCookie, readCookie, writeCookie } from './cookies'
+import { useI18n } from './i18n'
 import { ApiKeyGate } from './components/ApiKeyGate'
 import { ChatPane } from './components/ChatPane'
 import { Sidebar } from './components/Sidebar'
 
 /** How many session-only rows get a title fetched from their transcript. */
 const titleHydrationLimit = 30
+
+/**
+ * A message for the user, held as the catalog key it came from rather than as
+ * finished text. A notice raised before a language change would otherwise stay
+ * on screen in the language it was raised in. An upstream failure has no key,
+ * so it carries its text instead.
+ */
+type Notice = { key: string } | { text: string } | null
 
 function newSessionId(): string {
   return `ui-${crypto.randomUUID()}`
@@ -20,6 +29,7 @@ function firstLine(text: string): string {
 }
 
 export function App() {
+  const { t } = useI18n()
   const [apiKey, setApiKeyState] = useState(() => readCookie(apiKeyCookie))
   const [authRequired, setAuthRequired] = useState(false)
 
@@ -35,7 +45,7 @@ export function App() {
 
   const [remoteListFailed, setRemoteListFailed] = useState(false)
   const [transcriptsOff, setTranscriptsOff] = useState(false)
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<Notice>(null)
   const [sending, setSending] = useState(false)
   // Set when the open conversation exists upstream but has no transcript here.
   // Reading it costs a page download and a walk of a serialization this project
@@ -51,14 +61,14 @@ export function App() {
     if (err instanceof ApiError) {
       if (err.status === 401) {
         setAuthRequired(true)
-        setNotice('Bu gateway bir API anahtarı istiyor.')
+        setNotice({ key: 'notice.authRequired' })
         return
       }
-      setNotice(`${err.code}: ${err.message}`)
+      setNotice({ text: `${err.code}: ${err.message}` })
       return
     }
     if (err instanceof DOMException && err.name === 'AbortError') return
-    setNotice(String(err))
+    setNotice({ text: String(err) })
   }, [])
 
   /**
@@ -116,7 +126,7 @@ export function App() {
           return {
             sessionId: session?.id ?? '',
             conversationId: c.conversationId,
-            title: c.chatName?.trim() || 'Adsız konuşma',
+            title: c.chatName?.trim() || t('conversation.unnamed'),
             updatedAt: c.updateTimeUtc ?? session?.updated_at ?? 0,
             remoteOnly: !session,
           }
@@ -148,7 +158,9 @@ export function App() {
       return [...unsent, ...merged]
     })
     void hydrateTitles(merged)
-  }, [hydrateTitles, report])
+    // t is a dependency because an unnamed conversation carries a translated
+    // placeholder for a title: changing the language relabels those rows.
+  }, [hydrateTitles, report, t])
 
   useEffect(() => {
     api.listModels().then(setModels).catch(report)
@@ -160,7 +172,7 @@ export function App() {
 
   const openRow = useCallback(
     async (row: ConversationRow) => {
-      setNotice('')
+      setNotice(null)
       setImportable(null)
       let sessionId = row.sessionId
       if (!sessionId) {
@@ -196,9 +208,7 @@ export function App() {
         )
         if (stored.length === 0 && row.conversationId) {
           setImportable({ sessionId, conversationId: row.conversationId })
-          setNotice(
-            'Bu konuşma bu gateway dışında başlamış. Buradan devam edebilirsin, ya da geçmişini M365 sayfasından yükleyebilirsin.',
-          )
+          setNotice({ key: 'notice.foreignConversation' })
         }
       } catch (err) {
         if (err instanceof ApiError && err.code === 'transcripts_disabled') {
@@ -216,7 +226,7 @@ export function App() {
   const importHistory = useCallback(async () => {
     if (!importable || importing) return
     setImporting(true)
-    setNotice('')
+    setNotice(null)
     try {
       const stored = await api.importHistory(importable.conversationId, importable.sessionId)
       setMessages(
@@ -240,14 +250,20 @@ export function App() {
   const startNew = useCallback(() => {
     const sessionId = newSessionId()
     setRows((previous) => [
-      { sessionId, conversationId: '', title: 'Yeni konuşma', updatedAt: Date.now() / 1000, remoteOnly: false },
+      {
+        sessionId,
+        conversationId: '',
+        title: t('conversation.new'),
+        updatedAt: Date.now() / 1000,
+        remoteOnly: false,
+      },
       ...previous,
     ])
     setActiveId(sessionId)
     setMessages([])
-    setNotice('')
+    setNotice(null)
     setImportable(null)
-  }, [])
+  }, [t])
 
   const removeRow = useCallback(
     async (row: ConversationRow) => {
@@ -281,7 +297,7 @@ export function App() {
   const renameRow = useCallback(
     async (row: ConversationRow, name: string) => {
       if (!row.conversationId) {
-        setNotice('Bu konuşma henüz gönderilmedi, adlandırmak için önce bir mesaj yaz.')
+        setNotice({ key: 'notice.renameBeforeSend' })
         return
       }
       try {
@@ -309,7 +325,7 @@ export function App() {
         setActiveId(sessionId)
       }
 
-      setNotice('')
+      setNotice(null)
       setSending(true)
       setMessages((previous) => [
         ...previous,
@@ -374,7 +390,7 @@ export function App() {
     api.setApiKey(key)
     writeCookie(apiKeyCookie, key)
     setAuthRequired(false)
-    setNotice('')
+    setNotice(null)
   }, [])
 
   // Shown whenever the gateway refused the credential, including the case where
@@ -388,6 +404,8 @@ export function App() {
   // id, so an empty activeId would match the first such row and title the pane
   // after a conversation the user never opened.
   const activeRow = activeId ? rows.find((row) => row.sessionId === activeId) : undefined
+
+  const noticeText = notice === null ? '' : 'key' in notice ? t(notice.key) : notice.text
 
   return (
     <div className="layout">
@@ -405,7 +423,7 @@ export function App() {
         models={models}
         model={model}
         sending={sending}
-        notice={notice}
+        notice={noticeText}
         transcriptsOff={transcriptsOff}
         title={activeRow?.title ?? ''}
         canImportHistory={importable !== null}

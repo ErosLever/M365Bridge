@@ -1,0 +1,41 @@
+{
+  "$label": "English",
+
+  "sidebar.language": "Language",
+  "sidebar.newConversation": "New conversation",
+  "sidebar.rename": "Rename",
+  "sidebar.renamePrompt": "New name",
+  "sidebar.delete": "Delete",
+  "sidebar.deleteConfirm": "Delete \"{title}\"?",
+  "sidebar.empty": "No conversations yet.",
+  "sidebar.remoteListFailed": "The M365 conversation list could not be read, so only the conversations opened through this gateway are shown. The full list needs M365 web cookies.",
+
+  "conversation.new": "New conversation",
+  "conversation.unnamed": "Unnamed conversation",
+  "conversation.untitled": "Untitled",
+
+  "chat.transcriptsOff": "Transcript recording is off ({code}), so past messages cannot be redrawn.",
+  "chat.empty": "Write a message to start.",
+  "chat.placeholder": "Write a message. Enter sends, Shift+Enter adds a line.",
+  "chat.send": "Send",
+  "chat.stop": "Stop",
+  "chat.importHistory": "Load the history",
+  "chat.importing": "Loading…",
+
+  "message.you": "you",
+  "message.assistant": "assistant",
+  "message.error": "error",
+  "message.showThinking": "Show the thinking",
+  "message.hideThinking": "Hide the thinking",
+
+  "model.unknown": "{model} (not in the list)",
+  "model.thinks": " · thinks",
+
+  "gate.title": "API key",
+  "gate.body": "This gateway is configured with {keys}. The key is stored in a cookie in this browser and sent in the {header} header on every request.",
+  "gate.save": "Save",
+
+  "notice.authRequired": "This gateway requires an API key.",
+  "notice.foreignConversation": "This conversation started outside this gateway. You can continue it here, or load its history from the M365 page.",
+  "notice.renameBeforeSend": "This conversation has not been sent yet. Write a message before naming it."
+}

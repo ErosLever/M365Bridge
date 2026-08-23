@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { ChatMessage } from '../types'
+import { useI18n } from '../i18n'
 
 interface Props {
   message: ChatMessage
@@ -7,12 +8,13 @@ interface Props {
 }
 
 export function MessageRow({ message, streaming }: Props) {
+  const { t } = useI18n()
   const [showThinking, setShowThinking] = useState(false)
 
   if (message.error) {
     return (
       <div className="message error">
-        <span className="who">hata</span>
+        <span className="who">{t('message.error')}</span>
         <div className="body">{message.error}</div>
       </div>
     )
@@ -20,11 +22,13 @@ export function MessageRow({ message, streaming }: Props) {
 
   return (
     <div className={`message ${message.role}`}>
-      <span className="who">{message.role === 'user' ? 'sen' : message.model || 'asistan'}</span>
+      <span className="who">
+        {message.role === 'user' ? t('message.you') : message.model || t('message.assistant')}
+      </span>
       {message.thinking && (
         <div className="thinking">
           <button className="thinking-toggle" onClick={() => setShowThinking((open) => !open)}>
-            {showThinking ? 'Düşünceyi gizle' : 'Düşünceyi göster'}
+            {showThinking ? t('message.hideThinking') : t('message.showThinking')}
           </button>
           {showThinking && <pre className="thinking-body">{message.thinking}</pre>}
         </div>

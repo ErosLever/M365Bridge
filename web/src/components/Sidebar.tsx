@@ -1,4 +1,6 @@
 import type { ConversationRow } from '../types'
+import { useI18n } from '../i18n'
+import { LanguagePicker } from './LanguagePicker'
 
 interface Props {
   rows: ConversationRow[]
@@ -11,56 +13,59 @@ interface Props {
 }
 
 export function Sidebar({ rows, activeId, remoteListFailed, onOpen, onNew, onDelete, onRename }: Props) {
+  const { t } = useI18n()
+
   return (
     <aside className="sidebar">
       <div className="sidebar-head">
-        <span className="brand">M365Bridge</span>
+        <div className="sidebar-top">
+          <span className="brand">M365Bridge</span>
+          <LanguagePicker />
+        </div>
         <button className="primary" onClick={onNew}>
-          Yeni konuşma
+          {t('sidebar.newConversation')}
         </button>
       </div>
 
-      {remoteListFailed && (
-        <p className="sidebar-note">
-          M365 konuşma listesi okunamadı, bu yüzden yalnızca bu gateway üzerinden açılan konuşmalar
-          görünüyor. Listenin tamamı için M365 web cookie&apos;leri gerekiyor.
-        </p>
-      )}
+      {remoteListFailed && <p className="sidebar-note">{t('sidebar.remoteListFailed')}</p>}
 
       <ul className="conversations">
-        {rows.map((row) => (
-          <li
-            key={row.sessionId || row.conversationId}
-            className={row.sessionId && row.sessionId === activeId ? 'row active' : 'row'}
-          >
-            <button className="row-open" onClick={() => onOpen(row)} title={row.title || 'Başlıksız'}>
-              <span className="row-title">{row.title || 'Başlıksız'}</span>
-              {row.remoteOnly && <span className="row-badge">M365</span>}
-            </button>
-            <span className="row-actions">
-              <button
-                className="icon"
-                title="Yeniden adlandır"
-                onClick={() => {
-                  const name = window.prompt('Yeni ad', row.title)
-                  if (name && name.trim()) onRename(row, name.trim())
-                }}
-              >
-                ✎
+        {rows.map((row) => {
+          const title = row.title || t('conversation.untitled')
+          return (
+            <li
+              key={row.sessionId || row.conversationId}
+              className={row.sessionId && row.sessionId === activeId ? 'row active' : 'row'}
+            >
+              <button className="row-open" onClick={() => onOpen(row)} title={title}>
+                <span className="row-title">{title}</span>
+                {row.remoteOnly && <span className="row-badge">M365</span>}
               </button>
-              <button
-                className="icon danger"
-                title="Sil"
-                onClick={() => {
-                  if (window.confirm(`"${row.title || 'Başlıksız'}" silinsin mi?`)) onDelete(row)
-                }}
-              >
-                ×
-              </button>
-            </span>
-          </li>
-        ))}
-        {rows.length === 0 && <li className="empty">Henüz konuşma yok.</li>}
+              <span className="row-actions">
+                <button
+                  className="icon"
+                  title={t('sidebar.rename')}
+                  onClick={() => {
+                    const name = window.prompt(t('sidebar.renamePrompt'), row.title)
+                    if (name && name.trim()) onRename(row, name.trim())
+                  }}
+                >
+                  ✎
+                </button>
+                <button
+                  className="icon danger"
+                  title={t('sidebar.delete')}
+                  onClick={() => {
+                    if (window.confirm(t('sidebar.deleteConfirm', { title }))) onDelete(row)
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            </li>
+          )
+        })}
+        {rows.length === 0 && <li className="empty">{t('sidebar.empty')}</li>}
       </ul>
     </aside>
   )

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatMessage, ModelEntry } from '../types'
+import { Formatted, useI18n } from '../i18n'
 import { ModelPicker } from './ModelPicker'
 import { MessageRow } from './MessageRow'
 
@@ -34,6 +35,7 @@ export function ChatPane({
   onSend,
   onStop,
 }: Props) {
+  const { t } = useI18n()
   const [draft, setDraft] = useState('')
   const bottom = useRef<HTMLDivElement | null>(null)
 
@@ -51,13 +53,15 @@ export function ChatPane({
   return (
     <main className="chat">
       <header className="chat-head">
-        <h1 className="chat-title">{title || 'Yeni konuşma'}</h1>
+        <h1 className="chat-title">{title || t('conversation.new')}</h1>
       </header>
 
       {transcriptsOff && (
         <p className="banner">
-          Transcript kaydı kapalı (<code>M365_ENABLE_WEB_UI=false</code>), bu yüzden geçmiş mesajlar
-          yeniden çizilemiyor.
+          <Formatted
+            text={t('chat.transcriptsOff')}
+            parts={{ code: <code>M365_ENABLE_WEB_UI=false</code> }}
+          />
         </p>
       )}
       {notice && (
@@ -65,16 +69,14 @@ export function ChatPane({
           {notice}
           {canImportHistory && (
             <button className="banner-action" onClick={onImportHistory} disabled={importing}>
-              {importing ? 'Yükleniyor…' : 'Geçmişi yükle'}
+              {importing ? t('chat.importing') : t('chat.importHistory')}
             </button>
           )}
         </p>
       )}
 
       <div className="messages">
-        {messages.length === 0 && !sending && (
-          <p className="empty">Bir mesaj yazarak başla.</p>
-        )}
+        {messages.length === 0 && !sending && <p className="empty">{t('chat.empty')}</p>}
         {messages.map((message, index) => (
           <MessageRow key={index} message={message} streaming={sending && index === messages.length - 1} />
         ))}
@@ -84,7 +86,7 @@ export function ChatPane({
       <div className="composer">
         <textarea
           value={draft}
-          placeholder="Mesaj yaz. Enter gönderir, Shift+Enter satır ekler."
+          placeholder={t('chat.placeholder')}
           rows={3}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
@@ -98,11 +100,11 @@ export function ChatPane({
           <ModelPicker models={models} value={model} onChange={onModel} />
           {sending ? (
             <button className="danger" onClick={onStop}>
-              Durdur
+              {t('chat.stop')}
             </button>
           ) : (
             <button className="primary" onClick={submit} disabled={!draft.trim()}>
-              Gönder
+              {t('chat.send')}
             </button>
           )}
         </div>

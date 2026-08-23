@@ -27,3 +27,4 @@ export function clearCookie(name: string): void {
 
 export const apiKeyCookie = 'm365bridge_api_key'
 export const modelCookie = 'm365bridge_model'
+export const langCookie = 'm365bridge_lang'

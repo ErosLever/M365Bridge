@@ -71,9 +71,26 @@ body {
   gap: 10px;
 }
 
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .brand {
   font-weight: 600;
   letter-spacing: 0.2px;
+}
+
+.language {
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 4px;
 }
 
 .sidebar-note {
@@ -396,6 +413,13 @@ button.icon.danger {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
+}
+
+.gate-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .gate-card h1 {

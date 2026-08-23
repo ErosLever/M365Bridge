@@ -1,10 +1,13 @@
 import { useState } from 'react'
+import { Formatted, useI18n } from '../i18n'
+import { LanguagePicker } from './LanguagePicker'
 
 interface Props {
   onSubmit: (key: string) => void
 }
 
 export function ApiKeyGate({ onSubmit }: Props) {
+  const { t } = useI18n()
   const [value, setValue] = useState('')
 
   return (
@@ -16,10 +19,17 @@ export function ApiKeyGate({ onSubmit }: Props) {
           if (value.trim()) onSubmit(value.trim())
         }}
       >
-        <h1>API anahtarı</h1>
+        <div className="gate-head">
+          <h1>{t('gate.title')}</h1>
+          {/* The gate replaces the whole interface, so the language has to be
+              changeable from here too. */}
+          <LanguagePicker />
+        </div>
         <p>
-          Bu gateway <code>M365_API_KEYS</code> ile yapılandırılmış. Anahtar bu tarayıcıda bir
-          cookie&apos;de saklanır ve her istekte <code>Authorization</code> başlığıyla gönderilir.
+          <Formatted
+            text={t('gate.body')}
+            parts={{ keys: <code>M365_API_KEYS</code>, header: <code>Authorization</code> }}
+          />
         </p>
         <input
           type="password"
@@ -29,7 +39,7 @@ export function ApiKeyGate({ onSubmit }: Props) {
           onChange={(event) => setValue(event.target.value)}
         />
         <button className="primary" type="submit">
-          Kaydet
+          {t('gate.save')}
         </button>
       </form>
     </div>
