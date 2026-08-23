@@ -1977,14 +1977,8 @@ func (api *APIServer) nonStreamAnthropicComplete(w http.ResponseWriter, messages
 		"usage":  anthropicUsage(messages, nil, "", respText, thinking),
 	}
 
+	api.storeSessionMapping(sid, finalConvID)
 	api.sendJSON(w, http.StatusOK, response)
-
-	// Cache conversation ID for session continuity
-	if sid != "" {
-		if finalConvID != "" {
-			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
-		}
-	}
 }
 
 // streamAnthropicComplete streams Anthropic complete (FIM) responses.
@@ -2117,16 +2111,11 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 		// so a caller reads the same counts here as on every other endpoint.
 		"usage": anthropicUsage(messages, nil, "", fullText, thinkingText.String()),
 	}
+	api.storeSessionMapping(sid, finalConvID)
+
 	finalJSON, _ := json.Marshal(finalData)
 	_, _ = fmt.Fprintf(w, "event: completion\ndata: %s\n\n", finalJSON)
 	flusher.Flush()
-
-	// Cache conversation ID for session continuity
-	if sid != "" {
-		if finalConvID != "" {
-			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
-		}
-	}
 }
 
 // streamChatCompletions streams chat completion responses in OpenAI format.
@@ -2384,10 +2373,23 @@ func (api *APIServer) streamChatCompletions(ctx context.Context, w http.Response
 		}
 	}
 
+	api.updateChatStreamSession(sid, cfg.OpenAIID, finalConvID, fullText, thinkingText.String(), toolCalls)
+
 	api.sendSSEDone(w, chunkID, openaiModel, finishReason, usage)
 	flusher.Flush()
+}
 
-	api.updateChatStreamSession(sid, cfg.OpenAIID, finalConvID, fullText, thinkingText.String(), toolCalls)
+// storeSessionMapping records the conversation a session now points at.
+//
+// Every responder calls this before it writes the end of its response, never
+// after. A client that reads the terminator and immediately asks about its
+// session would otherwise be told the session does not exist, and would treat
+// the turn it just completed as one that started no conversation.
+func (api *APIServer) storeSessionMapping(sid, finalConvID string) {
+	if sid == "" || finalConvID == "" {
+		return
+	}
+	api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
 }
 
 func (api *APIServer) updateChatStreamSession(sid, model, finalConvID, fullText, thinkingText string, toolCalls []client.ToolCall) {
@@ -2405,9 +2407,7 @@ func (api *APIServer) updateChatStreamSession(sid, model, finalConvID, fullText,
 		return
 	}
 
-	if finalConvID != "" {
-		api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
-	}
+	api.storeSessionMapping(sid, finalConvID)
 	api.recordAssistantTurn(sid, model, fullText, thinkingText)
 }
 
@@ -2571,15 +2571,9 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 		},
 	}
 
+	api.storeSessionMapping(sid, finalConvID)
+	api.recordAssistantTurn(sid, cfg.OpenAIID, respText, thinking)
 	api.sendJSON(w, http.StatusOK, response)
-
-	// Cache conversation ID for session continuity
-	if sid != "" {
-		if finalConvID != "" {
-			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
-		}
-		api.recordAssistantTurn(sid, cfg.OpenAIID, respText, thinking)
-	}
 }
 
 // streamAnthropicMessages streams messages in Anthropic SSE format.
@@ -2929,17 +2923,12 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 	api.sendAnthropicSSE(w, "message_delta", msgDelta)
 	flusher.Flush()
 
+	api.storeSessionMapping(sid, finalConvID)
+
 	// Send message_stop event
 	msgStop := map[string]any{"type": "message_stop"}
 	api.sendAnthropicSSE(w, "message_stop", msgStop)
 	flusher.Flush()
-
-	// Cache conversation ID for session continuity
-	if sid != "" {
-		if finalConvID != "" {
-			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
-		}
-	}
 }
 
 func (api *APIServer) respondBufferedAnthropic(w http.ResponseWriter, result toolLoopResult, messages []payload.Message, model, sid string, maxTokens int, stream bool, tools []toolcalling.ToolDef, toolChoice string, stopSequences []string) {
@@ -3127,14 +3116,8 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 		},
 	}
 
+	api.storeSessionMapping(sid, finalConvID)
 	api.sendJSON(w, http.StatusOK, response)
-
-	// Cache conversation ID for session continuity
-	if sid != "" {
-		if finalConvID != "" {
-			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
-		}
-	}
 }
 
 // streamCompletions streams text completion responses in OpenAI text_completion format.
@@ -3353,17 +3336,12 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 			"usage_source":      usageSource(),
 		}
 	}
+	api.storeSessionMapping(sid, finalConvID)
+
 	jsonData, _ := json.Marshal(doneChunk)
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", jsonData)
 	_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
-
-	// Cache conversation ID for session continuity
-	if sid != "" {
-		if finalConvID != "" {
-			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
-		}
-	}
 }
 
 // nonStreamCompletions handles non-streaming text completion.
@@ -3474,14 +3452,8 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 		response["tool_calls"] = openaiToolCalls
 	}
 
+	api.storeSessionMapping(sid, finalConvID)
 	api.sendJSON(w, http.StatusOK, response)
-
-	// Cache conversation ID for session continuity
-	if sid != "" {
-		if finalConvID != "" {
-			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
-		}
-	}
 }
 
 // sendJSON sends a JSON response.
@@ -6293,16 +6265,15 @@ func (api *APIServer) nonStreamResponses(
 	responseID, createdAt := newResponsesIdentity()
 	response := buildResponsesObject(responseID, createdAt, cfg.OpenAIID, respText, thinking, toolCalls, responsesToolTypes(toolPolicy.tools), goalOpen, finishReason, promptTok, completionTok, reasoningTok)
 
-	api.sendJSON(w, http.StatusOK, response)
-
-	// Cache conversation ID for session continuity
 	if sid != "" {
 		if shouldResetResponsesSession(respText, toolCalls, nil) {
 			api.ctxCache.Delete(sessionKeyPrefix + sid)
-		} else if finalConvID != "" {
-			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
+		} else {
+			api.storeSessionMapping(sid, finalConvID)
 		}
 	}
+
+	api.sendJSON(w, http.StatusOK, response)
 }
 
 // streamResponses handles streaming Responses API requests.
@@ -6972,21 +6943,20 @@ func (api *APIServer) streamResponses(
 	finalResponse := buildResponsesObject(responseID, createdAt, openaiModel, fullText, reasoningText, toolCalls, responsesToolTypes(toolPolicy.tools), goalOpen, finishReason, promptTok, completionTok, reasoningTok)
 	finalResponse["status"] = status
 
+	if sid != "" {
+		if shouldResetResponsesSession(fullText, toolCalls, nil) {
+			api.ctxCache.Delete(sessionKeyPrefix + sid)
+		} else {
+			api.storeSessionMapping(sid, finalConvID)
+		}
+	}
+
 	sendEvent("response.completed", map[string]any{
 		"response": finalResponse,
 	})
 
 	_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
-
-	// Cache conversation ID for session continuity
-	if sid != "" {
-		if shouldResetResponsesSession(fullText, toolCalls, nil) {
-			api.ctxCache.Delete(sessionKeyPrefix + sid)
-		} else if finalConvID != "" {
-			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
-		}
-	}
 }
 
 // ===================================================================
@@ -7529,12 +7499,7 @@ func (api *APIServer) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cache conversation ID
-	if sid != "" {
-		if finalConvID != "" {
-			api.ctxCache.Set(sessionKeyPrefix+sid, finalConvID)
-		}
-	}
+	api.storeSessionMapping(sid, finalConvID)
 
 	// Extract image URLs from response
 	dataItems := api.buildOpenAIImageData(respText, n, prompt, responseFormat)
