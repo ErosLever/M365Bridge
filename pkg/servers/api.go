@@ -4,6 +4,7 @@ package servers
 
 import (
 	"cmp"
+	"bytes"
 	"context"
 	// md5 is used only to derive cache file names and session ids, never as a
 	// security primitive.
@@ -5437,6 +5438,13 @@ func (api *APIServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if responsesInputHasCompactionTrigger(req.Input) {
+		logging.Infof("handleResponses: detected compaction_trigger; routing to /v1/responses/compact")
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		api.handleResponsesCompact(w, r)
+		return
+	}
+
 	// Parse model (may contain session ID suffix: "gpt5.5:my-session")
 	modelKey, modelSessionID := parseModelSessionID(req.Model)
 	cfg, ok := api.resolveModel(w, modelKey)
@@ -5599,6 +5607,9 @@ func responsesInputToMessages(input any) []payload.Message {
 		}
 
 		itemType, _ := m["type"].(string)
+		if itemType == "compaction_trigger" {
+			continue
+		}
 
 		// Handle function_call_output items (tool results). A custom tool
 		// reports its result the same way, only under its own item type and
@@ -5750,6 +5761,23 @@ func responsesInputToMessages(input any) []payload.Message {
 		return []payload.Message{{Role: "user", Content: ""}}
 	}
 	return messages
+}
+
+func responsesInputHasCompactionTrigger(input any) bool {
+	arr, ok := input.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if itemType, _ := m["type"].(string); itemType == "compaction_trigger" {
+			return true
+		}
+	}
+	return false
 }
 
 // responsesExtractContent extracts text from a content field that may be a
