@@ -5,8 +5,8 @@
 [![Version](https://img.shields.io/github/v/release/KilimcininKorOglu/M365Bridge)](https://github.com/KilimcininKorOglu/M365Bridge/releases)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/KilimcininKorOglu/M365Bridge/pkgs/container/m365bridge)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
-[![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-412991)](#api-uç-noktaları)
-[![Anthropic Compatible](https://img.shields.io/badge/API-Anthropic%20Compatible-D97757?logo=anthropic&logoColor=white)](#api-uç-noktaları)
+[![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-412991)](#api-endpointleri)
+[![Anthropic Compatible](https://img.shields.io/badge/API-Anthropic%20Compatible-D97757?logo=anthropic&logoColor=white)](#api-endpointleri)
 
 **[English](README.md)** | **Türkçe**
 
@@ -20,7 +20,7 @@ M365Bridge, Microsoft 365 Copilot aboneliğinizi OpenAI ve Anthropic uyumlu bir 
 İstemciniz  ->  M365Bridge  ->  substrate.office.com (SignalR)  ->  M365 Copilot
 ```
 
-Copilot'un herkese açık bir API'si yok. Kendi web istemcisiyle bir SignalR WebSocket üzerinden konuşuyor. M365Bridge sizin hesabınızla oturum açar, yukarı yönde bu WebSocket protokolünü konuşur, aşağı yönde ise alıştığınız HTTP endpoint'lerini sunar. Her şey tek bir binary içinde gelir: API sunucusu, tarayıcı arayüzü, etkileşimli CLI ve kurulum sihirbazı.
+Copilot'un herkese açık bir API'si yok. Kendi web istemcisiyle bir SignalR WebSocket üzerinden konuşuyor. M365Bridge sizin hesabınızla oturum açar, upstream tarafta bu WebSocket protokolünü konuşur, downstream tarafta ise alıştığınız HTTP endpoint'lerini sunar. Her şey tek bir binary içinde gelir: API sunucusu, tarayıcı arayüzü, etkileşimli CLI ve kurulum sihirbazı.
 
 ## Gereksinimler
 
@@ -382,17 +382,17 @@ Login cookie'leri de bir gün dolar; tenant politikası veya parola değişikli�
 ./m365-bridge serve --port 8000
 ```
 
-Bütün bayraklar isteğe bağlıdır. Hiçbiri verilmezse `serve` 8000 portunu dinler, `setup-wizard` ise `data/setup.json` dosyasını okur.
+Bütün flag'ler isteğe bağlıdır. Hiçbiri verilmezse `serve` 8000 portunu dinler, `setup-wizard` ise `data/setup.json` dosyasını okur.
 
-| Bayrak          | Tip    | Varsayılan | Açıklama                                                     |
+| Flag            | Tip    | Varsayılan | Açıklama                                                     |
 |-----------------|--------|------------|--------------------------------------------------------------|
 | `-i`            | bool   | false      | Etkileşimli mod, çok turlu                                   |
-| `--model`       | string | `auto`     | Model anahtarı; bkz. [Modeller](#modeller)                   |
+| `--model`       | string | `auto`     | Model key'i; bkz. [Modeller](#modeller)                      |
 | `--reasoning`   | bool   | false      | Reasoning varyantını kullan                                  |
 | `--no-stream`   | bool   | false      | Cevabın tamamını tek seferde yazdır                          |
 | `--list-models` | bool   | false      | Modelleri listele ve çık                                     |
 | `--version`     | bool   | false      | Sürümü yazdır ve çık                                         |
-| `--help`        | bool   | false      | Bütün bayrakları ve ortam değişkenlerini yazdır, sonra çık   |
+| `--help`        | bool   | false      | Bütün flag'leri ve ortam değişkenlerini yazdır, sonra çık    |
 
 Komut satırında artan metin sorunun kendisidir.
 
@@ -499,12 +499,12 @@ Yapılandırma `data/.env` dosyasından okunur. Process ortamında tanımlı bir
 |------------------|----------------------------------------|----------------------------------------------------------------------------------|
 | `M365_TENANT_ID` | zorunlu                                | Directory (tenant) ID. Servis bu olmadan kapanır.                               |
 | `M365_USER_OID`  | zorunlu                                | Oturum açmış kullanıcının Object ID'si. Servis bu olmadan kapanır.              |
-| `M365_CLIENT_ID` | `4765445b-32c6-49b0-83e6-1d93765276ca` | Access token'ların düzenlendiği OAuth client'ı. Yalnızca varsayılanı engelleyen bir tenant için değiştirin. |
+| `M365_CLIENT_ID` | `4765445b-32c6-49b0-83e6-1d93765276ca` | Access token'ların verildiği OAuth client'ı. Yalnızca varsayılanı engelleyen bir tenant için değiştirin. |
 | `M365_API_KEYS`  | tanımsız                               | İstemcinin sunması gereken, virgülle ayrılmış key'ler. Tanımsızken her `/v1/*` route'u ve `/mcp` açıktır. |
 | `M365_API_KEY`   | tanımsız                               | Tek bir key; yalnızca `M365_API_KEYS` tanımsızken okunur.                       |
 | `TZ`             | sistem saat dilimi                     | Her turla gönderilen saat dilimi. Yoksa `/etc/localtime`, o da yoksa UTC.       |
 
-Kalan değişkenler, etkiledikleri davranışı anlatan bölümlerde belgelenmiştir: [tarayıcı arayüzü](#tarayıcı-arayüzü), [ilan edilen context window](#ilan-edilen-context-window), [tool loop'lar](#istemci-sürücülü-tool-looplar), [built-in coding tools](#built-in-coding-tools-opt-in) ve [görsel üretimi](#görsel-üretimi).
+Kalan değişkenler, etkiledikleri davranışı anlatan bölümlerde belgelenmiştir: [tarayıcı arayüzü](#tarayıcı-arayüzü), [bildirilen context window](#bildirilen-context-window), [tool loop'ları](#tool-loopunu-istemci-yürüttüğünde), [built-in coding tools](#built-in-coding-tools-opt-in) ve [görsel üretimi](#görsel-üretimi).
 
 ## Tarayıcı arayüzü
 
@@ -560,9 +560,9 @@ Sayfanın kendisi kimlik bilgisi olmadan sunulduğu için, arayüzün ne soraca�
 | `GET /v1/auth`         | Arayüzün ne isteyeceğini bildirir: `{"mode": "none" \| "password" \| "api_key"}` |
 | `POST /v1/auth/verify` | İstek header'ındaki kimlik bilgisinin kabul edilip edilmediğini söyler       |
 
-İkisi de bir sır döndürmez. Kimlik bilgisi gövdede değil header'da taşındığı için payload kaydeden hiçbir yere düşmez; log yalnızca bir kimlik bilgisinin reddedildiğini kaydeder.
+İkisi de bir secret döndürmez. Kimlik bilgisi gövdede değil header'da taşındığı için payload kaydeden hiçbir yere düşmez; log yalnızca bir kimlik bilgisinin reddedildiğini kaydeder.
 
-`M365_WEB_UI_PASSWORD` ve `M365_API_KEYS` ayrı anahtarlardır:
+`M365_WEB_UI_PASSWORD` ve `M365_API_KEYS` birbirinden bağımsız iki ayardır:
 
 - **İkisi de tanımsız**: arayüz girişsiz açılır, her route açıktır.
 - **Yalnızca parola**: arayüz parolayı sorar. API açık kalır, çünkü boş bir key listesi bu gateway'in her yerinde "açık" anlamına gelir. API de kapalı olacaksa `M365_API_KEYS` değerini de ayarlayın.
@@ -616,7 +616,7 @@ Oturum id'sini model adının içine iki nokta üst üste ile gömebilirsiniz:
 model: "gpt5.5-reasoning:oturumum-001"
 ```
 
-Bu, `X-Session-Id: oturumum-001` header'ını ya da gövdedeki `session_id` alanını göndermekle aynı işi yapar. Model anahtarı iki noktadan önce, oturum id'si sonra okunur. Claude Code ve Codex zaten 6. kural kapsamındadır; bu yolu oturumu kendiniz adlandırmak istediğinizde ya da hiç oturum header'ı göndermeyen bir istemci için kullanın.
+Bu, `X-Session-Id: oturumum-001` header'ını ya da gövdedeki `session_id` alanını göndermekle aynı işi yapar. Model key'i iki noktadan önce, oturum id'si sonra okunur. Claude Code ve Codex zaten 6. kural kapsamındadır; bu yolu oturumu kendiniz adlandırmak istediğinizde ya da hiç oturum header'ı göndermeyen bir istemci için kullanın.
 
 ### Oturumları yönetmek
 
@@ -636,7 +636,7 @@ M365 backend'i konuşma geçmişini kendisi tutar ve yalnızca son turu alır. B
 
 Anthropic'in üst seviye `system` alanı hem string hem de metin bloğu dizisi olarak kabul edilir ve aynı öne eklenmiş talimata dönüşür.
 
-## API uç noktaları
+## API endpoint'leri
 
 | Endpoint                              | Açıklama                                                       |
 |---------------------------------------|-----------------------------------------------------------------|
@@ -705,9 +705,9 @@ Bir stream açıldıktan sonra durum kodu çoktan gönderilmiştir, bu yüzden a
 
 ## Modeller
 
-Model seçimi, M365 backend'inin okuduğu `tone` alanında taşınır. GPT-5.x anahtarları GPT-5 backend'ine gider. Claude tone'ları Claude cevabı döndürür, ancak M365 SignalR metadata'sında alttaki modelin kimliğini açıklamaz.
+Model seçimi, M365 backend'inin okuduğu `tone` alanında taşınır. GPT-5.x key'leri GPT-5 backend'ine gider. Claude tone'ları Claude cevabı döndürür, ancak M365 SignalR metadata'sında altta çalışan modelin kimliğini açıklamaz.
 
-| Anahtar                    | Tone              | OpenAI ID         | Thinking | Backend |
+| Key                        | Tone              | OpenAI ID         | Thinking | Backend |
 |----------------------------|-------------------|-------------------|----------|---------|
 | `auto`                     | Magic             | gpt-4-auto        | Hayır    | GPT-5   |
 | `quick`                    | Chat              | gpt-4-quick       | Hayır    | GPT-5   |
@@ -747,7 +747,7 @@ Registry, agent istemcilerinin gönderdiği üretici adlarını taşır; bu yüz
 
 Model belirtmeyen bir istek `auto` yerine `gpt5.5-reasoning` modeline düşer; tool calling için güvenilir olan reasoning tone'u budur. Bu kural boş `model` alanını, hiç gönderilmemiş bir alanı ve tek başına `:oturum-id` ekini kapsar.
 
-### İlan edilen context window
+### Bildirilen context window
 
 `GET /v1/models` içindeki her kayıt `context_window` ve `max_output_tokens` değerlerini ilan eder, böylece istemci tarafındaki harness'lar prompt'u ya da çıktıyı önceden kırpmaz. Bunlar yalnızca istemci için ipucudur; M365 kendi sınırlarını her hâlükârda uygular.
 
@@ -781,11 +781,11 @@ Bu route OpenAI ve Anthropic istemcilerine aynı anda cevap verir, çünkü iki 
 | `object`        | OpenAI    | Her zaman `model`.                                  |
 | `created`       | OpenAI    | Unix saniyesi.                                      |
 | `owned_by`      | OpenAI    | Tone'un arkasındaki üretici.                        |
-| `shutdown_date` | OpenAI    | Her zaman `null`; emekliye ayrılacak model yok.     |
+| `shutdown_date` | OpenAI    | Her zaman `null`; kullanımdan kaldırılacak model yok. |
 | `type`          | Anthropic | Her zaman `model`.                                  |
 | `display_name`  | Anthropic | Okunabilir ad, örneğin `Claude Sonnet 4.6`.         |
 | `created_at`    | Anthropic | `created` ile aynı an, RFC 3339 biçiminde.          |
-| `max_tokens`    | Anthropic | Çıktı tavanı; `max_output_tokens` ile aynı.         |
+| `max_tokens`    | Anthropic | Çıktı üst sınırı; `max_output_tokens` ile aynı.     |
 
 Listenin kendisi OpenAI için `object` ve `data`, Anthropic için `has_more`, `first_id` ve `last_id` taşır. Registry'nin tamamı tek sayfaya sığar, dolayısıyla `has_more` her zaman `false`'tur ve cursor'lar ilan edilen ilk ve son id'dir.
 
@@ -795,7 +795,7 @@ Claude Code gateway modellerini bu route üzerinden keşfeder. Yalnızca Anthrop
 
 ### Konuşma kotası
 
-M365, konuşma başına bir mesaj tavanı uygular ve sayaçları update frame'lerinde bildirir. Her tur bunları loglar, örneğin `ConvStream throttling: used=8 max=600 headroom=592`.
+M365, konuşma başına bir mesaj üst sınırı uygular ve sayaçları update frame'lerinde bildirir. Her tur bunları loglar, örneğin `ConvStream throttling: used=8 max=600 headroom=592`.
 
 `GET /v1/quota` son görülen sayaçları döndürür. Backend bunları yalnızca bir tur devam ederken gönderir, dolayısıyla değerler canlı bir sorgulamayı değil en son chat isteğini yansıtır ve o isteği üreten konuşmaya aittir:
 
@@ -803,7 +803,7 @@ M365, konuşma başına bir mesaj tavanı uygular ve sayaçları update frame'le
 {"object":"quota","available":true,"exhausted":false,"used":8,"max":600,"headroom":592}
 ```
 
-Proxy'nin tanımadığı sayaçlar atılmak yerine `extra` altında döndürülür. Bir istek boş upstream yanıtı ürettiğinde ve son sayaçlar tavana ulaşıldığını gösterdiğinde, proxy genel bir boş yanıt hatası yerine `429` ve `upstream_throttled` döndürür. Devam etmek için yeni bir oturum başlatın.
+Proxy'nin tanımadığı sayaçlar atılmak yerine `extra` altında döndürülür. Bir istek boş upstream yanıtı ürettiğinde ve son sayaçlar üst sınıra ulaşıldığını gösterdiğinde, proxy genel bir boş yanıt hatası yerine `429` ve `upstream_throttled` döndürür. Devam etmek için yeni bir oturum başlatın.
 
 ### Token kullanımı
 
@@ -823,7 +823,7 @@ Anthropic endpoint'leri aynı sayıları kendi alan adları altında, aynı iki 
 
 Streaming bir `/v1/messages` turu bu nesneyi Anthropic wire formatının yaptığı gibi böler: girdi tarafını `message_start`, çıktı tarafını `message_delta` taşır ve ikisi de kaynağını adlandırır. Streaming bir `/v1/complete` turu kullanımı son `completion` event'inde bildirir, çünkü önceki event'ler delta taşır.
 
-`/v1/chat/completions` ve `/v1/completions`, OpenAI'nin `stream_options` nesnesini kabul eder. `{"include_usage": false}` streaming bir turdan usage nesnesini çeker. `stream_options` hiç gönderilmezse usage kalır; bu, OpenAI'nin kendi `false` varsayılanından farklıdır: bu proxy her streaming turda kullanım bildirdi ve buradaki istemciler onu okuyor. Prompt token'ları mesaj rollerinden ve içeriklerinden, serialize edilmiş tool tanımlarından ve `tool_choice` değerinden, ayrıca mesaj ve tool başına eklenen sabit bir paydan sayılır. `tool_choice` payı yalnızca istek tool tanımladığında uygulanır, böylece aynı tur her endpoint'te aynı maliyeti çıkarır.
+`/v1/chat/completions` ve `/v1/completions`, OpenAI'nin `stream_options` nesnesini kabul eder. `{"include_usage": false}` streaming bir turda usage nesnesini geri çeker. `stream_options` hiç gönderilmezse usage kalır; bu, OpenAI'nin kendi `false` varsayılanından farklıdır: bu proxy her streaming turda kullanım bildirdi ve buradaki istemciler onu okuyor. Prompt token'ları mesaj rollerinden ve içeriklerinden, serialize edilmiş tool tanımlarından ve `tool_choice` değerinden, ayrıca mesaj ve tool başına eklenen sabit bir paydan sayılır. `tool_choice` payı yalnızca istek tool tanımladığında uygulanır, böylece aynı tur her endpoint'te aynı maliyeti çıkarır.
 
 ### Stop sequence'ler
 
@@ -840,7 +840,7 @@ Cevap, içinde görünen en erken sequence'ten hemen önce kesilir ve sequence'i
 
 OpenAI endpoint'leri, cevabın kendiliğinden bitmesiyle aynı olan sıradan `finish_reason: "stop"` değerini bildirir. Anthropic endpoint'leri `stop_reason: "stop_sequence"` bildirir ve devreye giren sequence'i adlandırır: `/v1/messages` bunu `stop_sequence` alanında, `/v1/complete` ise `stop` alanında yapar. Cevap kendiliğinden bittiğinde iki alan da `null` kalır, böylece null kontrolü yapan bir istemci boş bir string ile yanılmaz. `max_tokens` önce dolduğunda o kazanır ve bildirilen sebep `max_tokens` olur.
 
-Streaming bir cevap sonradan değil, üretilirken kesilir. Bir sequence iki upstream chunk'a bölünebildiği için delta'lar, bir sequence'i tamamlayabilecek kuyruğu geride tutan bir writer'dan geçer ve o kuyruk karakter sınırında serbest bırakılır. Hiç stop sequence göndermeyen bir istek hiçbir şeyi geride tutmaz ve her chunk'ı geldiği gibi alır.
+Streaming bir cevap sonradan değil, üretilirken kesilir. Bir sequence iki upstream chunk'a bölünebildiği için delta'lar, bir sequence'i tamamlayabilecek son baytları geride tutan bir writer'dan geçer; bu baytlar karakter sınırında serbest bırakılır. Hiç stop sequence göndermeyen bir istek hiçbir şeyi geride tutmaz ve her chunk'ı geldiği gibi alır.
 
 ## MCP sunucusu
 
@@ -857,7 +857,7 @@ curl -s -X POST http://localhost:8000/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask_copilot","arguments":{"prompt":"CAP teoremini özetle"}}}'
 ```
 
-Copilot MCP tarafında yalnızca tool sağlar, kendisi tool çağırmaz. Bu bilinçli bir tercihtir. `/v1` endpoint'lerinin kullandığı simulated tool calling MCP üzerinden **sunulmaz**: bir MCP istemcisinin zaten gerçek, şema denetimli bir tool mekanizması vardır ve prompt tabanlı öykünmeyi onun içine yerleştirmek birbiriyle yarışan iki tool loop üretirdi. Her MCP çağrısı, konuşma sürekliliği olmayan bağımsız bir turdur.
+Copilot MCP tarafında yalnızca tool sağlar, kendisi tool çağırmaz. Bu bilinçli bir tercihtir. `/v1` endpoint'lerinin kullandığı simulated tool calling MCP üzerinden **sunulmaz**: bir MCP istemcisinin zaten gerçek, şema denetimli bir tool mekanizması vardır ve prompt tabanlı emülasyonu onun içine yerleştirmek birbiriyle yarışan iki tool loop üretirdi. Her MCP çağrısı, konuşma sürekliliği olmayan bağımsız bir turdur.
 
 ## Tool calling
 
@@ -956,29 +956,29 @@ curl http://127.0.0.1:8000/v1/messages \
 - Her tool call id'si yeni bir `call_<uuid>` değeridir. Backend'in kendi id'leri turlar arasında tekrar eder ve istemciler bunları kopya sayıp reddeder.
 - `tool_call_id` (OpenAI), `tool_use_id` (Anthropic) veya `call_id` (Responses) alanı eksik olan, ya da aynı isteğin hiç tanımlamadığı bir çağrıyı adlandıran bir tool sonucu HTTP 400 ile reddedilir. Hiç tool call tanımlamayan bir istek id kontrolünü atlar, böylece geçmişini kırpmış bir istemci engellenmez.
 
-### Zor cevaplar nasıl ele alınır
+### Sorunlu cevaplar nasıl ele alınır
 
 - Backend bir tool isteğine, araçların var olmadığını söyleyen, işi kendi sandbox'ında yaptığını iddia eden ya da çağıranın makinesine erişemediğini belirten bir düzyazıyla cevap verirse, proxy açık bir talimatla bir kez yeniden sorar. Bu ifadeler İngilizce, Çince ve Türkçe olarak tanınır. Sıradan bir metin cevabı hiç dokunulmadan geçer.
 - Copilot web araması ya da code interpreter gibi kendi sunucu tarafı araçlarını çalıştırıp simulated JSON payload yerine düz metin döndürdüğünde, yanıt `finish_reason: "stop"` ile normal bir completion olarak döner.
 - M365 kendi built-in araçlarından biri (`search`, `code_interpreter`, `trigger_plugin`, `invoke_action`) için bir tool call ürettiğinde o çağrı düşürülür ve tur `stop` ile biter. Bu, istek hiç tool tanımlamasa bile geçerlidir: istemci o adları hiç tanımlamadı ve çalıştıramaz, üstelik cevap arama sonuçlarını zaten satır içinde taşıyor.
-- Parse edilemeyen bir tool calling zarfı, asistan mesajı olarak iletilmek yerine geri tutulur. Zarftan ibaret bir cevap kısa bir bildirime dönüşür.
+- Parse edilemeyen bir tool calling envelope'u, asistan mesajı olarak iletilmek yerine geri tutulur. Yalnızca envelope'tan ibaret bir cevap kısa bir bildirime dönüşür.
 - M365 isteği cevaplamak yerine kendisi geri çevirdiğinde, streaming olmayan endpoint'ler `502 upstream_content_blocked` döndürür; böylece ret bir cevap sanılmaz. Streaming bir tur yanıtını zaten açmıştır, o yüzden bu durum loglanır.
 - Geçmişteki `tool_result` mesajları (OpenAI) ve `tool_use` / `tool_result` blokları (Anthropic), M365'e gönderilmeden önce düz metne çevrilir; M365 tool rollerini anlamaz.
-- Streaming endpoint'leri tool call'ları parse etmeden önce yanıtın tamamını buffer'lar, çünkü JSON birden fazla chunk'a yayılabilir. Tampon dolarken stream, bağlantının ölü görünmemesi için boşta geçen her on saniyede bir keepalive frame'i yazar.
+- Streaming endpoint'leri tool call'ları parse etmeden önce yanıtın tamamını buffer'lar, çünkü JSON birden fazla chunk'a yayılabilir. Buffer dolarken stream, bağlantının ölü görünmemesi için boşta geçen her on saniyede bir keepalive frame'i yazar.
 
-### İstemci sürücülü tool loop'lar
+### Tool loop'unu istemci yürüttüğünde
 
-Claude Code ve Codex gibi agent istemcileri tool loop'unu kendileri sürer ve her istekte bütün çağrı ve sonuç geçmişini yeniden gönderir. Proxy bu istekler arasında hiçbir durum tutmaz, bu yüzden mevcut turun kanıtını gelen geçmişten yeniden kurar. Bir tur, tool sonucu taşımayan son kullanıcı mesajından başlar; bu, her sonucun kullanıcı mesajı olarak geldiği Anthropic biçiminin yeni bir tur gibi görünmesini engeller.
+Claude Code ve Codex gibi agent istemcileri tool loop'unu kendileri yürütür ve her istekte bütün çağrı ve sonuç geçmişini yeniden gönderir. Proxy bu istekler arasında hiçbir durum tutmaz, bu yüzden mevcut turun kanıtını gelen geçmişten yeniden kurar. Bir tur, tool sonucu taşımayan son kullanıcı mesajından başlar; bu, her sonucun kullanıcı mesajı olarak geldiği Anthropic biçiminin yeni bir tur gibi görünmesini engeller.
 
 | Değişken                 | Varsayılan | Açıklama                                                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------------------------------------|
-| `M365_MAX_TOOL_ROUNDS`   | `32`       | Bir kullanıcı turunun HTTP 409'dan önce sürebileceği tool round sayısı. Tavanı `512`.                 |
+| `M365_MAX_TOOL_ROUNDS`   | `32`       | Bir kullanıcı turunun HTTP 409'dan önce sürebileceği tool round sayısı. Üst sınırı `512`.            |
 | `M365_ENABLE_WEB_SEARCH` | `1`        | Her turda M365'in `BingWebSearch` built-in'ini tanımlar. `0`, `false`, `off` veya `no` bunu geri çeker. |
 
-- Tavanı aşmak `409 tool_round_limit` döndürür ve round sayısını bildirir. HTTP 409, Anthropic SDK'sının beklediği bir durum değildir; ancak istemci bir round daha isterken sonsuza kadar cevap vermektense açık bir ret daha iyidir.
+- Üst sınırı aşmak `409 tool_round_limit` döndürür ve round sayısını bildirir. HTTP 409, Anthropic SDK'sının beklediği bir durum değildir; ancak istemci bir round daha isterken sonsuza kadar cevap vermektense açık bir ret daha iyidir.
 - Tamamlanan çağrılar ve sonuçları prompt'ta nihai kanıt olarak yeniden yazılır, böylece model elindeki bir sonucu tekrar istemek yerine ondan cevap verir. Aynı çağrı aynı şekilde birden fazla kez başarısız olduysa prompt ayrıca yaklaşım değiştirmesini ister.
 - Sonucu turda zaten bulunan bir ad ve argüman çiftini tekrarlayan tool call, üçüncü aynı denemede düşürülür. İlk tekrar geçer, çünkü bir dosyayı yazdıktan sonra geri okumak ya da bir değişiklikten sonra testleri yeniden çalıştırmak sıradan işlerdir. `tool_choice` ile talep edilen bir çağrı her zaman iletilir ve bir düşürme asla düzeltici yeniden sormayı tetiklemez, çünkü yeniden sormak aynı çağrıyı yeniden üretirdi.
-- Yeniden yazılan her sonuç, kaldırılan boyutu adlandıran bir işaretin etrafında baş ve kuyruk olarak sıkıştırılır; böylece uzun bir build logu loop'un her round'unda prompt'u büyütmez.
+- Yeniden yazılan her sonuçtan yalnızca başı ve sonu bırakılır; aradaki bölüm, kaldırılan boyutu adlandıran bir işaretle değiştirilir. Böylece uzun bir build logu loop'un her round'unda prompt'u büyütmez.
 - İki kez tanımlanan ya da iki kez cevaplanan bir tool call id'si HTTP 400 ile reddedilir: sonraki bir sonucun hangi çağrıya ait olduğunu hiçbir şey söyleyemez.
 - Yalnızca hangi aracı kullanacağını duyuran, tanımlı bir aracı kod bloğu olmadan kısa bir cümlede adlandıran bir cevap bir kez yeniden sorulur. Yeniden deneme de duyuru olarak kalırsa cevap metni değiştirilir, böylece istemci hiç gelmeyecek bir çağrıyı beklemekte kalmaz.
 - `function_call_progress` input öğesi, uzun süren bir istemci aracının ara durum bildirmesini sağlar. Modele bağlam olarak ulaşır ama bekleyen çağrıyı asla cevaplamaz ve yeni bir tur başlatmaz.
@@ -988,7 +988,7 @@ Claude Code ve Codex gibi agent istemcileri tool loop'unu kendileri sürer ve he
 
 ## Built-in coding tools (opt-in)
 
-M365Bridge, sunucu üzerinde sınırlı bir yerel kodlama işlemi kümesi çalıştırabilir. Bu özellik **varsayılan olarak kapalıdır**; ana anahtarı `M365_ENABLE_CODE_TOOLS=1` değeridir. `/v1/chat/completions`, `/v1/messages` ve `/v1/responses` üzerinde kullanılabilir.
+M365Bridge, sunucu üzerinde sınırlı bir yerel kodlama işlemi kümesi çalıştırabilir. Bu özellik **varsayılan olarak kapalıdır**; onu `M365_ENABLE_CODE_TOOLS=1` açar. `/v1/chat/completions`, `/v1/messages` ve `/v1/responses` üzerinde kullanılabilir.
 
 Açıldığında, istekte açıkça yer alan araçlar tanınır ve yerelde çalıştırılır. `M365_AUTO_EXPOSE_TOOLS=1` ayrıca bütün built-in araçları isteklere kendiliğinden ekler; istemcilerin araçları açıkça seçmesini istiyorsanız bunu `0` bırakın. Sunucu yerel sonuçları modele geri gönderir ve model nihai bir cevap verene, çağıranın tanımladığı bir tool call üretene ya da iterasyon sınırına ulaşana kadar devam eder. Çağrılar ve ara sonuçlar önce toplanmak zorunda olduğu için, built-in araç kullanan bir istek `stream: true` olsa bile model yanıtının tamamını buffer'lar, ardından protokole uygun streaming yanıtını üretir.
 
@@ -996,10 +996,10 @@ Açıldığında, istekte açıkça yer alan araçlar tanınır ve yerelde çal�
 
 | Değişken                        | Varsayılan | Açıklama                                                                                       |
 |---------------------------------|------------|--------------------------------------------------------------------------------------------------|
-| `M365_ENABLE_CODE_TOOLS`        | `0`        | Ana anahtar. Yerel araç çalıştırmayı açmak için `1` yapın.                                       |
+| `M365_ENABLE_CODE_TOOLS`        | `0`        | Özelliğin ana ayarı. Yerel araç çalıştırmak için `1` yapın.                                     |
 | `M365_AUTO_EXPOSE_TOOLS`        | `0`        | İstemci vermediğinde bütün built-in tool schema'larını enjekte etmek için `1` yapın.             |
 | `M365_WORKSPACE_DIR`            | `.`        | Dosya ve Git işlemlerini sınırlayan, var olan bir dizin.                                         |
-| `M365_CODE_TOOL_TIMEOUT`        | `30s`      | Her komut veya test çalıştırması için zaman aşımı. `10s` ya da `2m` gibi Go duration söz dizimi. |
+| `M365_CODE_TOOL_TIMEOUT`        | `30s`      | Her komut veya test çalıştırması için timeout. `10s` ya da `2m` gibi bir Go duration değeri.      |
 | `M365_CODE_TOOL_MAX_OUTPUT`     | `1048576`  | Yakalanan azami komut çıktısı, bayt olarak. Uzun çıktı kırpılır.                                |
 | `M365_CODE_TOOL_MAX_READ_BYTES` | `1048576`  | Bir dosya okumasının döndüreceği azami bayt sayısı.                                              |
 | `M365_CODE_TOOL_MAX_ITERATIONS` | `10`       | İstek başına azami model ve araç loop iterasyonu.                                                |
@@ -1019,7 +1019,7 @@ Bunları `data/.env` içinde tanımlayın. Docker'da `M365_WORKSPACE_DIR`, conta
 | `git_log`       | Son workspace Git geçmişini gösterir.                              |
 | `shell_command` | Çalışma dizini workspace olan bir shell komutu çalıştırır.         |
 | `apply_patch`   | Workspace içinde bir unified patch uygular.                        |
-| `run_tests`     | Yapılandırılmış zaman aşımı ve çıktı sınırıyla test komutu çalıştırır. |
+| `run_tests`     | Yapılandırılmış timeout ve çıktı sınırıyla test komutu çalıştırır. |
 
 ### Açmadan önce
 
@@ -1028,8 +1028,8 @@ Bu araçları açmak API'yi uzaktan kod çalıştırma ve dosya erişimi yüzeyi
 - **Bozuk erişim denetimi**: eksik, sızmış ya da paylaşılmış bir API key, yetkisiz çağıranların mount edilmiş workspace içinde okuma, değiştirme ya da çalıştırma yapmasına izin verir. Benzersiz ve düzenli olarak değiştirilen key'ler kullanın, yetkilendirmeyi ayrıca güvenilir bir reverse proxy üzerinde de uygulayın.
 - **Command injection**: `shell_command` ve `run_tests` modelin seçtiği komut metinlerini çalıştırır. Prompt'ları, repo içeriğini, patch'leri ve tool argümanlarını güvenilmez girdi sayın. Process'i izole edin ve production kimlik bilgilerini asla vermeyin.
 - **Path traversal**: dosya araçları çözülen yolları `M365_WORKSPACE_DIR` içiyle sınırlar, ancak fazla geniş bir workspace ya da güvensiz bir mount yine de hassas dosyaları açar. Yalnızca ihtiyacınız olan proje dizinini mount edin, symlink'leri ve izinleri gözden geçirin.
-- **Hassas veri sızması**: araç çıktısı ve dosya içerikleri çağırana döndürülür ve M365 backend'ine gönderilir. Sırları, token'ları, `.env` dosyalarını, SSH anahtarlarını, bulut kimlik bilgilerini ve müşteri verisini workspace dışında tutun.
-- **Kaynak tüketimi**: komutlar, özyinelemeli aramalar, büyük dosyalar, büyük çıktı ve tekrarlanan tool loop'ları CPU, bellek, disk ve process kapasitesi tüketir. Zaman aşımı, çıktı, okuma ve iterasyon sınırlarını dar tutun; container ya da işletim sistemi kotalarını uygulayın.
+- **Hassas veri sızması**: araç çıktısı ve dosya içerikleri çağırana döndürülür ve M365 backend'ine gönderilir. Secret'ları, token'ları, `.env` dosyalarını, SSH key'lerini, bulut kimlik bilgilerini ve müşteri verisini workspace dışında tutun.
+- **Kaynak tüketimi**: komutlar, özyinelemeli aramalar, büyük dosyalar, büyük çıktı ve tekrarlanan tool loop'ları CPU, bellek, disk ve process kapasitesi tüketir. Timeout, çıktı, okuma ve iterasyon sınırlarını dar tutun; container ya da işletim sistemi kotalarını uygulayın.
 
 ## Responses API
 
@@ -1039,7 +1039,7 @@ Bu araçları açmak API'yi uzaktan kod çalıştırma ve dosya erişimi yüzeyi
 
 Codex CLI `reasoning: {"effort": ..., "summary": ...}` gönderir. Kabul edilen effort değerleri `none`, `minimal`, `low`, `medium`, `high`, `xhigh` ve `max`'tir. Bunun dışındaki bir değer yok sayılmaz, HTTP 400 ile reddedilir.
 
-M365 ayrı bir effort ayarı sunmaz. Bu yüzden effort değeri yalnızca model seçimini değiştirir: `medium` ve üstü, registry'de bir karşılığı varsa isteği modelin reasoning varyantına yönlendirir; örneğin `gpt5.5` yerine `gpt5.5-reasoning`. Varyantı olmayan bir model ya da zaten varyant adı taşıyan bir anahtar değiştirilmeden bırakılır. `summary` kabul edilir ama bir etkisi yoktur.
+M365 ayrı bir effort ayarı sunmaz. Bu yüzden effort değeri yalnızca model seçimini değiştirir: `medium` ve üstü, registry'de bir karşılığı varsa isteği modelin reasoning varyantına yönlendirir; örneğin `gpt5.5` yerine `gpt5.5-reasoning`. Varyantı olmayan bir model ya da zaten varyant adı taşıyan bir key değiştirilmeden bırakılır. `summary` kabul edilir ama bir etkisi yoktur.
 
 ### Custom tool'lar
 
@@ -1236,7 +1236,7 @@ with open("cikti.png", "wb") as f:
 Üretilen bir görseli indirmek için proxy, MSAL.js broker token akışı üzerinden `designerappservice.officeapps.live.com` için bir JWE access token alır:
 
 1. Broker uygulaması (`c0ab8ce9`), M365 web uygulaması (`4765445b`) adına `designerappservice.officeapps.live.com/.default` scope'u ile token alır.
-2. Broker uyumlu bir refresh token, `data/tokens/rt_broker.txt` yolunda şifreli olarak saklanır ve arka plandaki token yenileyici tarafından döndürülür.
+2. Broker uyumlu bir refresh token, `data/tokens/rt_broker.txt` yolunda şifreli olarak saklanır ve arka planda çalışan token yenileme görevi onu düzenli olarak yenisiyle değiştirir.
 3. Broker refresh token'ı yoksa, PKCE ve `brk-multihub://outlook.office.com` redirect URI'si kullanılarak SSO cookie broker authorize akışıyla bir tane alınır.
 4. JWE token'ı ve bir `fileToken` header'ı ile görsel `designerapp.officeapps.live.com` adresinden indirilir.
 
@@ -1246,13 +1246,13 @@ with open("cikti.png", "wb") as f:
 - Login cookie'leri ve M365 web cookie'leri de aynı şekilde, `data/tokens/sso_cookies.json` ve `data/tokens/m365_cookies.json` yollarında şifrelenir.
 - Eski, düz metin bir M365 cookie deposu ilk kullanımda kendiliğinden şifrelenir.
 - Şifreleme anahtarı `data/tokens/encryption.key` dosyasındadır. Onu kaybetmek saklanan bütün kimlik bilgilerini okunamaz hâle getirir ve kurulumun baştan yapılmasını gerektirir.
-- Access token'lar `data/tokens/token_cache.json` içinde önbelleklenir; yaklaşık bir saat geçerlidir, 60 saniyelik bir pay bırakılır.
-- `serve` modunda arka plandaki bir yenileyici access token'ı her 30 dakikada bir tazeler.
+- Access token'lar `data/tokens/token_cache.json` içinde cache'lenir; yaklaşık bir saat geçerlidir, 60 saniyelik bir pay bırakılır.
+- `serve` modunda arka planda çalışan bir görev access token'ı her 30 dakikada bir yeniler.
 - 24 saatlik refresh token dolduğunda login cookie'leri sessizce yeniden kimlik doğrular.
 - Her state dosyası kısaltılıp yeniden yazılmak yerine tek adımda değiştirilir, böylece yarıda kalan bir yazma yarım bir kimlik bilgisi deposu bırakamaz.
 - Kodda ve repoda hiçbir kimlik bilgisi saklanmaz; `data/` dizini gitignore kapsamındadır.
-- Yapılandırıldığında API key doğrulaması her `/v1/*` route'unu ve `/mcp` route'unu korur. Key, `Authorization: Bearer <key>` ya da `x-api-key: <key>` başlığından okunur; istemci ikisini birden gönderirse birinin geçerli olması yeter.
-- Her sır sabit zamanda karşılaştırılır, böylece yanlış bir tahmin bayt bayt ölçülemez.
+- Yapılandırıldığında API key doğrulaması her `/v1/*` route'unu ve `/mcp` route'unu korur. Key, `Authorization: Bearer <key>` ya da `x-api-key: <key>` header'ından okunur; istemci ikisini birden gönderirse birinin geçerli olması yeter.
+- Her secret sabit zamanda karşılaştırılır, böylece yanlış bir tahmin bayt bayt ölçülemez.
 
 ## Proje yapısı
 
@@ -1265,7 +1265,7 @@ pkg/
   client/client.go         # M365Client, istek başına bir SignalR WebSocket
   client/conversations.go  # ConversationClient: web konuşmalarını listele, adlandır, sil
   client/history.go        # Bir konuşmanın turlarını render edilmiş sayfasından okur
-  client/citations.go      # Akan cevap metninde kaynak çözümleme
+  client/citations.go      # Stream edilen cevap metninde kaynak çözümleme
   client/errors.go         # UpstreamError; başarısız bir dial ya da upload'ın durumunu taşır
   codingtools/             # Built-in yerel araçlar, M365_ENABLE_CODE_TOOLS ile açılır
   crypto/crypto.go         # AES-256-GCM şifreleme
@@ -1284,7 +1284,7 @@ pkg/
     webui.go               # Gömülü tarayıcı arayüzünü sunar
   setup/wizard.go          # Kurulum sihirbazı: tarayıcı kodu, token doğrulama, data/.env
   textcut/                 # Rune sınırında güvenli kesme
-  toolcalling/             # Simulated tool calling, parser'ları ve dedektörleri
+  toolcalling/             # Simulated tool calling; parser'ları ve detector'ları
   webui/embed.go           # Derlenmiş arayüz, binary'nin içinde
 web/                       # Arayüzün Vite projesi; make ui bunu pkg/webui/dist içine derler
 docs/                      # README'lerde kullanılan ekran görüntüleri
