@@ -1,0 +1,50 @@
+{
+  "$label": "Türkçe",
+
+  "sidebar.language": "Dil",
+  "sidebar.newConversation": "Yeni konuşma",
+  "sidebar.rename": "Yeniden adlandır",
+  "sidebar.delete": "Sil",
+  "sidebar.deleteConfirm": "\"{title}\" silinsin mi?",
+  "sidebar.empty": "Henüz konuşma yok.",
+  "sidebar.remoteListFailed": "M365 konuşma listesi okunamadı, bu yüzden yalnızca bu gateway üzerinden açılan konuşmalar görünüyor. Listenin tamamı için M365 web cookie'leri gerekiyor.",
+
+  "dialog.save": "Kaydet",
+  "dialog.delete": "Sil",
+  "dialog.cancel": "Vazgeç",
+  "dialog.nameRequired": "Bir ad yaz.",
+
+  "conversation.new": "Yeni konuşma",
+  "conversation.unnamed": "Adsız konuşma",
+  "conversation.untitled": "Başlıksız",
+
+  "chat.transcriptsOff": "Transcript kaydı kapalı ({code}), bu yüzden geçmiş mesajlar yeniden çizilemiyor.",
+  "chat.empty": "Bir mesaj yazarak başla.",
+  "chat.placeholder": "Mesaj yaz. Enter gönderir, Shift+Enter satır ekler.",
+  "chat.send": "Gönder",
+  "chat.stop": "Durdur",
+  "chat.importHistory": "Geçmişi yükle",
+  "chat.importing": "Yükleniyor…",
+
+  "message.you": "sen",
+  "message.assistant": "asistan",
+  "message.error": "hata",
+  "message.showThinking": "Düşünceyi göster",
+  "message.hideThinking": "Düşünceyi gizle",
+
+  "model.unknown": "{model} (listede yok)",
+  "model.thinks": " · düşünür",
+
+  "gate.title": "API anahtarı",
+  "gate.body": "Bu gateway {keys} ile yapılandırılmış. Anahtar bu tarayıcıda bir cookie'de saklanır ve her istekte {header} başlığıyla gönderilir.",
+  "gate.save": "Kaydet",
+  "gate.passwordTitle": "Parola",
+  "gate.passwordBody": "Bu arayüz {variable} ile korunuyor. Parola bu tarayıcıda bir cookie'de saklanır ve her istekte gönderilir.",
+  "gate.passwordPlaceholder": "Parola",
+  "gate.enter": "Gir",
+  "gate.rejected": "Kabul edilmedi. Yeniden dene.",
+
+  "notice.authRequired": "Bu gateway bir API anahtarı istiyor.",
+  "notice.foreignConversation": "Bu konuşma bu gateway dışında başlamış. Buradan devam edebilirsin, ya da geçmişini M365 sayfasından yükleyebilirsin.",
+  "notice.renameBeforeSend": "Bu konuşma henüz gönderilmedi, adlandırmak için önce bir mesaj yaz."
+}

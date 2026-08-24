@@ -81,7 +81,7 @@ func (e *ContentStreamExtractor) Commit(allowedToolNames []string) string {
 	result := ParseSimulatedResponseResponses(
 		e.ParseText(),
 		allowedToolNames,
-		nil,
+		ToolContracts{},
 	)
 	e.done = true
 	if !strings.HasPrefix(result.Content, e.text) {

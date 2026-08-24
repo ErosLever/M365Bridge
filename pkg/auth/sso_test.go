@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/atomicfile"
 )
 
 func TestIdentityFromAccessToken(t *testing.T) {
@@ -238,9 +240,9 @@ func TestSaveM365CookiesPreservesExistingFileWhenRenameFails(t *testing.T) {
 	if err := os.WriteFile(m365CookiesFile, original, 0600); err != nil {
 		t.Fatalf("write existing M365 cookies: %v", err)
 	}
-	previousRename := renameFile
-	renameFile = func(string, string) error { return errors.New("rename failed") }
-	t.Cleanup(func() { renameFile = previousRename })
+	previousRename := atomicfile.RenameFile
+	atomicfile.RenameFile = func(string, string) error { return errors.New("rename failed") }
+	t.Cleanup(func() { atomicfile.RenameFile = previousRename })
 
 	err := SaveM365Cookies([]SSOCookie{{Name: "M365Session", Value: "new-value", Domain: "m365.cloud.microsoft"}})
 	if err == nil {

@@ -3,6 +3,8 @@
 A Go implementation that converts Microsoft 365 Copilot's WebSocket interface to OpenAI/Anthropic compatible HTTP API.
 On top of the original [M365Bridge](https://github.com/KilimcininKorOglu/M365Bridge), here a browser extension helps securely transferring auth tokens from the user's browser (logged in on M365) to the M365Bridge running process.
 
+![The browser interface answering a question with sources](docs/webui-en.png)
+
 ## Architecture
 
 Your Browser with M365 extension installed --(auth tokens)--> M365Bridge
@@ -11,7 +13,7 @@ Your App --(OpenAI compatible API endpoints)--> M365Bridge --(SignalR)--> substr
 
 ## Prerequisites
 
-- **Go 1.22+** installed ([download](https://go.dev/dl/))
+- **Go 1.26+** installed ([download](https://go.dev/dl/)). An older Go from 1.21 on also works: it downloads the 1.26 toolchain on the first build, unless `GOTOOLCHAIN` is set to `local`.
 - **git** for cloning this repository
 - A **Microsoft 365 Copilot license** (business or enterprise account with Copilot access) tested a copilot chat (basic) account
 - A browser logged into [https://m365.cloud.microsoft](https://m365.cloud.microsoft) (for setup wizard token extraction)
@@ -20,16 +22,21 @@ Your App --(OpenAI compatible API endpoints)--> M365Bridge --(SignalR)--> substr
 
 - Text chat with streaming/non-streaming output
 - Multimodal image input (OpenAI `image_url` and Anthropic `image` content blocks; PNG, JPEG, GIF, WebP)
-- Image generation via  (`/v1/images/generations`, `/v1/images/edits`) with `url` and `b64_json` response formats
+- Image generation through Microsoft Designer (`/v1/images/generations`, `/v1/images/edits`) with `url` and `b64_json` response formats
 - Multi-turn conversation support via ConversationId tracking
 - Session isolation (per-session M365 conversations)
 - Thinking/reasoning content extraction (`reasoning_content` for OpenAI, `thinking` blocks for Anthropic)
 - Simulated tool calling (client-defined tools work on both OpenAI and Anthropic endpoints, streaming and non-streaming)
-- OpenAI-compatible API endpoints
+- OpenAI-compatible API endpoints, including the Responses API and its compaction route
 - Anthropic-compatible API endpoints (dedicated SSE handlers)
+- Model Context Protocol server on `/mcp` (JSON-RPC 2.0)
+- Built-in coding tools the gateway runs locally, off unless `M365_ENABLE_CODE_TOOLS` turns them on
+- Stop sequences on every chat endpoint, cut as the answer streams
 - API key authentication (`M365_API_KEYS` / `M365_API_KEY`)
 - max_tokens enforcement across all endpoints (tiktoken BPE)
+- Conversation quota counters on `/v1/quota`
 - CLI interface for interactive use
+- Browser interface compiled into the binary (conversation list, streaming chat, model picker, markdown answers, English and Turkish)
 - Single binary with subcommand routing
 
 ## Installation
@@ -66,6 +73,8 @@ For a native installation, build the binary instead:
 go mod download
 go build -o bin/m365-bridge ./cmd/cli
 ```
+
+> **Note:** Prefer not to install a browser extension? The upstream project documents a manual, extension-free token setup using a browser console snippet: [Without Docker](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#without-docker) / [Docker](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#docker).
 
 #### Step 3: Install the extension and record its origin
 
@@ -176,7 +185,7 @@ Replace `chrome-extension://<extension-id>` with the exact origin recorded in St
 | Flag            | Type   | Default | Description                                                                                                                                                                        |
 |-----------------|--------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `-i`            | bool   | false   | Interactive mode (multi-turn conversation)                                                                                                                                         |
-| `--model`       | string | `auto`  | Model to use: `auto`, `quick`, `reasoning`, `gpt5.5`, `gpt5.5-reasoning`, `gpt5.6-reasoning`, `claude`, `claude-sonnet`, `claude-opus`, `claude-fable`, `claude-sonnet-4-20250514` |
+| `--model`       | string | `auto`  | Model to use: `auto`, `quick`, `reasoning`, `gpt5.2`, `gpt5.2-reasoning`, `gpt5.3`, `gpt5.4`, `gpt5.4-reasoning`, `gpt5.5`, `gpt5.5-reasoning`, `gpt5.6-reasoning`, `claude`, `claude-sonnet`, `claude-opus`, `claude-sonnet-4-20250514` |
 | `--reasoning`   | bool   | false   | Use reasoning mode                                                                                                                                                                 |
 | `--no-stream`   | bool   | false   | Disable streaming, print full response at once                                                                                                                                     |
 | `--list-models` | bool   | false   | List all available models and exit                                                                                                                                                 |
@@ -192,6 +201,23 @@ Starts the HTTP API server.
 |-------------|------|---------|-----------------------|
 | `--port`    | int  | 8000    | Port to listen on     |
 | `--version` | bool | false   | Show version and exit |
+
+A `setup-wizard` subcommand also exists, importing credentials from the JSON produced by upstream's manual browser-snippet flow (see the note in [Installation](#installation)); it is not needed when provisioning through the browser extension.
+
+### Core Environment Variables
+
+Configuration is read from `data/.env`; a process environment variable takes precedence over the file. The setup wizard writes the first two.
+
+| Variable         | Default                                | Description                                                                                          |
+|------------------|----------------------------------------|------------------------------------------------------------------------------------------------------|
+| `M365_TENANT_ID` | required                               | Directory (tenant) ID. The CLI and the server both exit without it.                                  |
+| `M365_USER_OID`  | required                               | Object ID of the signed-in user. The CLI and the server both exit without it.                        |
+| `M365_CLIENT_ID` | `4765445b-32c6-49b0-83e6-1d93765276ca` | OAuth client the access tokens are issued to. Change it only for a tenant that blocks the default.   |
+| `M365_API_KEYS`  | unset                                  | Comma-separated keys a client must present. Unset leaves every `/v1/*` route and `/mcp` open.        |
+| `M365_API_KEY`   | unset                                  | A single key, read only when `M365_API_KEYS` is unset.                                               |
+| `TZ`             | system zone                            | Timezone sent with each turn. Without it the zone comes from `/etc/localtime`, then UTC.             |
+
+The feature sections below document the remaining variables next to the behaviour they change. `m365-bridge --help` prints all of them in one list with their current defaults.
 
 ### Examples
 
@@ -248,7 +274,7 @@ When you start the server for the first time:
 1. The server reads `data/.env` from the current working directory
 2. It loads the encrypted refresh token from `data/tokens/rt_90day.txt`
 3. It performs a token refresh (exchanges refresh token for an access token). This takes 1-2 seconds
-4. On success, you will see: `Starting API server on port 8000`
+4. On success, you will see `Starting API server on port 8000 (no API key required)`, or `(API key required, N key(s) configured)` when keys are set
 5. The first request may take slightly longer as it opens a WebSocket connection to `substrate.office.com`
 
 If authentication is missing or expired, open the browser extension and select **Provision M365Bridge**. The server validates the browser session, refreshes authentication, and updates the runtime OID and tenant ID automatically.
@@ -257,12 +283,33 @@ If authentication is missing or expired, open the browser extension and select *
 
 Each session maps to a unique M365 conversation. Session ID is resolved in priority order:
 
-1. `session_id` field in request body
-2. `user` field in request body
-3. `X-Session-Id` header
-4. `hash(api_key + first_user_message)` (when auth is on) or `hash(first_user_message)` (when auth is off)
+1. `sessionID` after the colon in the model name (`model:sessionID`)
+2. `previous_response_id` field in request body (`/v1/responses` only)
+3. `session_id` field in request body
+4. `user` field in request body
+5. `X-Session-Id` header
+6. `X-Claude-Code-Session-Id` header (Claude Code) or `session-id` header (Codex)
+7. `hash(api_key + first_user_message)` (when auth is on) or `hash(first_user_message)` (when auth is off)
 
-The hash fallback allows standard OpenAI clients (like Claude Code) that cannot send custom headers to have separate conversations automatically, as long as their first user message differs.
+Every endpoint resolves the session through this one order.
+
+Claude Code and Codex each stamp their own session on every request of a session, under a header name neither can be told to change. Step 4 reads those two names, so both clients keep one conversation per session without any configuration. It ranks below the fields above because a client writes that header without being asked, while everything above it is a value the caller set deliberately.
+
+Codex also sends `thread-id` carrying the same value as `session-id`, so reading it would answer only for a request that already carries `session-id`. Its `x-codex-turn-metadata` header is never read: the `installation_id` inside stays the same across every session on one machine, so keying a conversation on it would merge unrelated sessions into one.
+
+The hash fallback covers any other client, as long as its first user message differs.
+
+`GET /v1/sessions` lists the mappings, newest first. Entries written before the mapping carried its session ID cannot be listed, because the cache file name is a hash of the key; they are reported as a `legacy_entries` count and appear in the list after their next turn rewrites them.
+
+`DELETE /v1/sessions/{id}` deletes the upstream M365 conversation and then clears the mapping, so the next turn on that session ID starts a fresh conversation. The mapping is kept when the upstream delete fails, so the request can be retried. Deleting the conversation needs the M365 web cookies in `data/tokens/m365_cookies.json`; add `?local_only=true` to clear only the mapping and leave the conversation in place, which is what a deployment without those cookies needs.
+
+### System Instructions
+
+The M365 backend keeps conversation history itself and receives only the latest turn, so an instruction sent in an earlier message would never reach it. Every `system` message in the request is therefore collected and prefixed to that turn, and kept out of the flattened history, where it would otherwise read as a past conversation line.
+
+`developer` is treated identically. OpenAI renamed the role for its reasoning models and both names remain valid, so a client that sends either reaches the model the same way.
+
+Anthropic's top-level `system` field is accepted as a string or as an array of text blocks, and becomes the same prefixed instruction.
 
 ### OpenCode
 
@@ -326,7 +373,7 @@ print(resp.choices[0].message.content)
 from anthropic import Anthropic
 
 client = Anthropic(
-    base_url="http://127.0.0.1:8000/v1",
+    base_url="http://127.0.0.1:8000",
     api_key="your-api-key",  # required if M365_API_KEYS is set
 )
 resp = client.messages.create(
@@ -336,6 +383,8 @@ resp = client.messages.create(
 )
 print(resp.content[0].text)
 ```
+
+The Anthropic SDK appends `/v1/messages` itself, so the base URL stops at the host.
 
 ### Image Input Example
 
@@ -364,6 +413,82 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)
 ```
 
+## Web Interface
+
+Open the server's root URL in a browser (`http://localhost:8230/` under the shipped Docker setup). The interface is compiled into the binary, so there is no separate asset directory and no second process to run.
+
+It lists conversations in a sidebar, streams answers as they arrive, lets you pick a model from `GET /v1/models`, and creates, renames and deletes conversations. An answer is rendered as markdown, so a comparison table is a table and a citation is a link rather than a URL in the middle of a sentence. The reasoning block behind **Show the thinking** is rendered the same way, because the backend writes that in markdown too. What you typed is shown exactly as you typed it. Rename and delete ask in the page rather than through the browser's own dialogs.
+
+### Addresses
+
+Each conversation has its own address, `/c/{session id}`. Opening one writes it, so a conversation can be reloaded onto, linked to, or reached with the browser's back and forward buttons. An address naming a conversation this gateway no longer holds falls back to the empty pane.
+
+Everything the page needs is compiled into the binary. It loads no font, script or stylesheet from anywhere else, so it works on a machine with no route to the internet beyond the M365 backend itself.
+
+The page itself is served without an API key, because the screen that asks for the key cannot require one. Every data call it makes goes through the same `withAuth` middleware as any other client. The key is stored in a cookie and sent in the `Authorization` header, never as a cookie the browser attaches on its own, so no cross-site request can carry it.
+
+### What the sidebar shows
+
+Two sources are merged. `GET /v1/conversations` supplies the names and needs M365 web cookies; `GET /v1/sessions` supplies the session ids that make a conversation continuable. A conversation present in both is one row.
+
+Without cookies the first call fails, the sidebar falls back to the local mappings alone and says so. A conversation that only M365 knows is marked and gets a session id bound to it the moment you open it, which is what makes a conversation started on another client continuable here.
+
+### Language
+
+The interface ships in English and Turkish, and the picker sits next to the name in the sidebar. English is the default.
+
+Each language is one JSON file under `web/src/locales`, named by its language code, and nothing in the code names a file: the build compiles the directory in. Adding a language is therefore a matter of copying `en.json`, translating its values, saving it as, say, `de.json`, and running `make ui`. The `$label` entry names the language in its own language and is what the picker shows. A file that translates only part of the catalog falls through to English for the rest, so a partial translation is usable rather than broken.
+
+The chosen language is stored in the `m365bridge_lang` cookie. A browser with no cookie, and a cookie naming a language this build does not carry, are the same case: English, written back so the stored value and the shown language cannot disagree.
+
+### Transcripts
+
+The backend tracks history by conversation ID and never replays it, so the gateway keeps its own record of the turns it carried, one file per session under `data/transcripts`. This is the only place message content reaches disk. Entries per session, bytes per message and files in the store are all bounded.
+
+A conversation started outside this gateway has no record, so its history is empty when you open it. The interface says so and offers to fetch it, which is `GET /v1/conversations/{id}/messages` (see below). Deleting a session deletes its transcript, and so does a turn that produced nothing, since both start a new conversation under that id.
+
+### Configuration
+
+| Variable               | Default | Description                                                                                    |
+|------------------------|---------|------------------------------------------------------------------------------------------------|
+| `M365_ENABLE_WEB_UI`   | `1`     | Serves the interface at `/` and records transcripts. `0`, `false`, `off` or `no` disables both. |
+| `M365_WEB_UI_PASSWORD` | unset   | Password the interface asks for. Unset opens it to anyone who can reach it.                     |
+
+Turning it off removes the interface (`/` returns 404) and stops the recording, which is what a deployment that only proxies wants. `GET /v1/sessions/{id}/messages` then answers `404 transcripts_disabled`.
+
+### Password
+
+Set `M365_WEB_UI_PASSWORD` and the interface asks for it before it draws anything. Leave it unset and the interface opens with no login.
+
+The password is one more credential the gateway accepts, not a session of its own: the browser holds it in a cookie and sends it in the same `Authorization` header an API client sends its key in. Every credential therefore stays on a header, where a cross-site form cannot carry it, and the interface reaches the authenticated routes without a session mechanism that would need CSRF protection of its own.
+
+Two routes exist so the interface can know what to ask for, because the page itself is served without a credential:
+
+| Endpoint               | Description                                                                          |
+|------------------------|--------------------------------------------------------------------------------------|
+| `GET /v1/auth`         | Reports which gate to show: `{"mode": "none" \| "password" \| "api_key"}`             |
+| `POST /v1/auth/verify` | Answers whether the credential in the request header is one this gateway accepts      |
+
+Both are public, and neither returns a secret. The credential travels in the header rather than in a body, so it stays out of anything that records a payload; the log records only that a credential was rejected.
+
+`M365_WEB_UI_PASSWORD` and `M365_API_KEYS` are separate switches:
+
+- **Neither set**: the interface opens with no login, and every route is open.
+- **Password only**: the interface asks for the password. The API stays open, because an empty key list means open everywhere else in this gateway. Set `M365_API_KEYS` as well if the API must be closed too.
+- **Keys only**: the interface asks for an API key, because without one its every data call is refused.
+- **Both**: the interface asks for the password, and the API accepts either the password or a key.
+
+### Building the interface
+
+The sources live in `web/` and the build output is committed at `pkg/webui/dist`, because `go:embed` reads it at compile time. Rebuild it after changing anything under `web/`:
+
+```bash
+make ui      # builds in a node container and copies the output into pkg/webui/dist
+make up      # rebuilds the image and restarts the container
+```
+
+The interface uses React, `react-markdown` with `remark-gfm` for answers, and SweetAlert2 for its dialogs. All of them are bundled into the committed output, so the served page fetches nothing at runtime.
+
 ## API Endpoints
 
 | Endpoint                         | Description                                            |
@@ -380,9 +505,61 @@ print(resp.choices[0].message.content)
 | `GET /v1/conversations`          | List M365 conversations (requires M365 web cookies)    |
 | `POST /v1/conversations`         | Create a conversation with an initial message          |
 | `PATCH /v1/conversations/{id}`   | Rename a conversation with `{ "name": "..." }`         |
-| `DELETE /v1/conversations/{id}`  | Permanently delete a conversation                      |
+| `DELETE /v1/conversations/{id}`  | Delete a conversation and clear its session mapping    |
+| `GET /v1/conversations/{id}/messages` | Read the turns of a conversation held upstream    |
 | `GET /v1/models`                 | Model list                                             |
+| `GET /v1/quota`                  | Last observed M365 conversation message quota          |
+| `GET /v1/sessions`               | List the session to conversation mappings              |
+| `GET /v1/sessions/{id}`          | Read one session's conversation ID                     |
+| `PUT /v1/sessions/{id}`          | Bind a session to an existing conversation             |
+| `GET /v1/sessions/{id}/messages` | Read the recorded turns of a session                   |
+| `DELETE /v1/sessions/{id}`       | Delete the conversation and clear the mapping          |
+| `POST /mcp`                      | Model Context Protocol server (JSON-RPC 2.0)           |
+| `POST /provision/v1/session`     | Browser extension session provisioning (no API key; secret-authenticated) |
+| `GET /v1/health`                 | Reachability probe for Codex (no auth required)        |
+| `GET /v1/auth`                   | Which gate the browser interface must show (no auth required) |
+| `POST /v1/auth/verify`           | Whether the offered credential is accepted (no auth required) |
 | `GET /health`                    | Health check (no auth required)                        |
+| `GET /`                          | Browser interface (no auth required for the page)      |
+
+A delete removes the conversation on both sides, whichever route starts it. `DELETE /v1/conversations/{id}` clears every session mapped to that conversation and its transcript; `DELETE /v1/sessions/{id}` deletes the upstream conversation first and keeps the mapping only when that fails. A caller therefore never sees a session pointing at a conversation that no longer exists.
+
+`PUT /v1/sessions/{id}` takes `{"conversation_id": "..."}` and points a session at a conversation that already exists. The chat path only ever resolves a session to a conversation, so without this a conversation started in the M365 web or mobile client could not be continued through the gateway. Rebinding an existing session is allowed.
+
+`GET /v1/sessions/{id}/messages` returns what the gateway recorded for that session. It answers `404 transcripts_disabled` when `M365_ENABLE_WEB_UI` is off, and an empty list for a conversation that was started elsewhere.
+
+`GET /v1/conversations/{id}/messages` reads the turns of a conversation this gateway never carried. The backend keeps history under the conversation ID and offers no action that returns it, so this recovers it from the conversation page the M365 web client renders, which needs M365 web cookies. It costs a page download and a walk of a serialization this project does not control, so nothing calls it automatically. Add `?session_id=...` to store the result under that session and bind the session to the conversation, which is what the interface does behind its "load history" button; without it the response is returned and nothing is written. A page that carries no readable turn answers `502` rather than an empty conversation, because a caller cannot tell an empty conversation from a failed read.
+
+## Error Responses
+
+Every endpoint reports failures in the OpenAI error shape. `type` is the category a client branches on, `code` is the specific machine-readable reason:
+
+```json
+{"error": {"message": "M365 rate limit reached for this chat request; retry after the interval in the Retry-After header", "type": "rate_limit_error", "code": "rate_limit_exceeded"}}
+```
+
+`type` is one of `invalid_request_error`, `authentication_error`, `rate_limit_error` or `server_error`. For a request the proxy rejects on its own, `code` is the status slug, for example `bad_request` or `method_not_allowed`. A body over 32 MiB is the one exception with a name of its own: it answers `413 request_too_large`, so a client can tell a request it must shrink from one that was simply malformed.
+
+A failed backend request is classified rather than reported as a generic `500`:
+
+| Status | `code`                     | Cause                                                        |
+|--------|----------------------------|--------------------------------------------------------------|
+| `401`  | `upstream_auth_failed`     | The stored credentials are missing or could not be refreshed |
+| `403`  | `insufficient_permissions` | M365 refused the request for the configured account          |
+| `429`  | `rate_limit_exceeded`      | M365 throttled the request; a `Retry-After` header is sent   |
+| `429`  | `upstream_throttled`       | The conversation message quota is exhausted                  |
+| `409`  | `tool_round_limit`         | One turn drove more tool rounds than `M365_MAX_TOOL_ROUNDS`  |
+| `404`  | `model_not_found`          | The requested model is not in `GET /v1/models`                |
+| `502`  | `upstream_error`           | M365 rejected the request or was unreachable                 |
+| `502`  | `upstream_unavailable`     | The WebSocket handshake failed or the connection dropped     |
+| `502`  | `upstream_turn_failed`     | M365 ended the turn without producing an answer              |
+| `502`  | `upstream_content_blocked` | M365 declined the request instead of answering it            |
+| `503`  | `upstream_unavailable`     | M365 reported itself unavailable                             |
+| `504`  | `upstream_timeout`         | M365 did not answer in time                                  |
+
+A failure with no evidence of an upstream cause still reports `500` with `internal_error`, so a bug in the proxy is not presented as a backend outage. Error messages are fixed text: the transport error, including request URLs and credential file paths, stays in the server log.
+
+Once a stream has opened the status is already sent, so the same classification travels in the body. OpenAI-shaped routes put an `error` object on the data line and then `[DONE]`; `/v1/messages` and `/v1/complete` send an `error` event; `/v1/responses` sends `response.failed`. No route writes the failure as assistant content, which a client would otherwise store as the answer.
 
 ## Models
 
@@ -392,14 +569,18 @@ All model selection is via the `tone` field sent to the M365 backend. The `Overr
 |----------------------------|-------------------|-------------------|-----------|---------|
 | `auto`                     | Magic             | gpt-4-auto        | No        | GPT-5   |
 | `quick`                    | Chat              | gpt-4-quick       | No        | GPT-5   |
-| `reasoning`                | Magic             | gpt-4-reasoning   | No        | GPT-5   |
+| `reasoning`                | Gpt_5_2_Reasoning | gpt-4-reasoning   | Yes       | GPT-5   |
+| `gpt5.2-reasoning`         | Gpt_5_2_Reasoning | gpt-5.2-reasoning | Yes       | GPT-5   |
+| `gpt5.4-reasoning`         | Gpt_5_4_Reasoning | gpt-5.4-reasoning | Yes       | GPT-5   |
+| `gpt5.2`                   | Gpt_5_2_Chat      | gpt-5.2           | No        | GPT-5   |
+| `gpt5.3`                   | Gpt_5_3_Chat      | gpt-5.3           | No        | GPT-5   |
+| `gpt5.4`                   | Gpt_5_4_Chat      | gpt-5.4           | No        | GPT-5   |
 | `gpt5.5`                   | Gpt_5_5_Chat      | gpt-5.5           | No        | GPT-5   |
 | `gpt5.5-reasoning`         | Gpt_5_5_Reasoning | gpt-5.5-reasoning | Yes       | GPT-5   |
 | `gpt5.6-reasoning`         | Gpt_5_6_Reasoning | gpt-5.6-reasoning | Yes       | GPT-5   |
 | `claude`                   | Claude_Sonnet     | claude-sonnet-4.6 | No        | Claude  |
 | `claude-sonnet`            | Claude_Sonnet     | claude-sonnet-4.6 | No        | Claude  |
-| `claude-opus`              | Claude_Opus       | claude-opus-4.6   | No        | Claude  |
-| `claude-fable`             | Claude_Fable      | claude-fable-5    | No        | Claude  |
+| `claude-opus`              | Claude_Opus       | claude-opus-4.6   | Yes       | Claude  |
 | `claude-sonnet-4-20250514` | Claude_Sonnet     | claude-sonnet-4.6 | No        | Claude  |
 
 ### Which model should I use?
@@ -409,18 +590,22 @@ All model selection is via the `tone` field sent to the M365 backend. The `Overr
 | General purpose, let backend decide       | `auto`             |
 | Fast responses, simple questions          | `quick`            |
 | Complex reasoning, multi-step problems    | `reasoning`        |
+| GPT-5.2 with deep thinking                | `gpt5.2-reasoning` |
+| GPT-5.4 with deep thinking                | `gpt5.4-reasoning` |
+| GPT-5.2 chat                              | `gpt5.2`           |
+| GPT-5.3 chat                              | `gpt5.3`           |
+| GPT-5.4 chat                              | `gpt5.4`           |
 | GPT-5.5 chat                              | `gpt5.5`           |
 | GPT-5.5 with deep thinking                | `gpt5.5-reasoning` |
 | GPT-5.6 with deep thinking (latest)       | `gpt5.6-reasoning` |
 | Claude Sonnet 4.6 (Anthropic)             | `claude-sonnet`    |
 | Claude Opus 4.6 (Anthropic, most capable) | `claude-opus`      |
-| Claude Fable tone                         | `claude-fable`     |
 
-`gpt5.5-reasoning` produces `reasoning_content` output containing the model's thinking process. OpenAI endpoints expose this as `reasoning_content`; Anthropic endpoints expose it as a `thinking` content block before the `text` block. Claude models do not produce reasoning content.
+A reasoning model produces `reasoning_content` output containing the model's thinking process. OpenAI endpoints expose this as `reasoning_content`; Anthropic endpoints expose it as a `thinking` content block before the `text` block. `claude-opus` produces reasoning content as well; `claude-sonnet` does not. `gpt5.6-reasoning` advertises the capability but has not been observed emitting it. The advertised capability comes from the measured behaviour of each tone rather than from its name.
 
 ### Session ID in Model Name
 
-You can embed a session ID directly in the model name using the `:` separator. This is useful for clients (like Claude Code, Codex) that cannot send custom headers:
+You can embed a session ID directly in the model name using the `:` separator. Claude Code and Codex are already handled by step 4 of [Session Isolation](#session-isolation), so reach for this when you want to name the session yourself, or for a client that sends no session header at all:
 
 ```
 model: "gpt5.5-reasoning:my-session-001"
@@ -430,9 +615,11 @@ This is equivalent to setting `X-Session-Id: my-session-001` header or `session_
 
 ### External Model Names
 
-Clients that send model names not in the registry (e.g. `claude-sonnet-4-20250514`, `gpt-4o`, `o1`) will fall back to the `auto` model. The proxy accepts any model string — unknown names do not cause errors, they just use the default model.
+A model name this gateway does not serve is answered with `404 model_not_found`, never with another entry, so a caller is never answered by a tone it did not ask for.
 
-A request that sends no model (empty `model` field, or only a `:session-id` suffix) defaults to `gpt5.5-reasoning`, the reasoning tone that is reliable for tool calling, rather than `auto`.
+The registry carries the vendor names agent clients send, so `claude-sonnet-4-20250514` resolves; `gpt-4o` and `o1` do not and return `404`. `GET /v1/models` lists every id that is served.
+
+A request that sends no model at all defaults to `gpt5.5-reasoning`, the reasoning tone that is reliable for tool calling, rather than `auto`. This covers an empty `model` field, a missing one, and a bare `:session-id` suffix.
 
 ### Advertised Context Window
 
@@ -442,6 +629,109 @@ Each entry in `GET /v1/models` advertises `context_window` and `max_output_token
 |--------------------------|-----------|--------------------------------------------------------|
 | `M365_CONTEXT_WINDOW`    | `1000000` | Advertised context window token count in `/v1/models`. |
 | `M365_MAX_OUTPUT_TOKENS` | `1000000` | Advertised maximum output token count in `/v1/models`. |
+
+### Model List Fields
+
+`GET /v1/models` lists each model once, keyed by its advertised id and sorted, so aliases such as `claude` and `claude-sonnet` do not appear twice. Each entry carries:
+
+| Field               | Description                                                                                     |
+|---------------------|-------------------------------------------------------------------------------------------------|
+| `owned_by`          | `anthropic-via-microsoft-365` for the Claude tones, `microsoft-365` for the rest.                 |
+| `context_window`    | The advertised window, from `M365_CONTEXT_WINDOW`.                                                |
+| `max_output_tokens` | The advertised output budget, from `M365_MAX_OUTPUT_TOKENS`.                                      |
+| `max_input_tokens`  | The window minus the output budget, or the full window when the output budget is not smaller.     |
+| `supports_tools`    | Always `true`; every model reaches caller-defined tools through the simulated tool calling layer. |
+
+The response also carries `reasoning_effort_presets`, each an `{effort, description}` pair naming an effort value the Responses API accepts.
+
+Each entry additionally carries the model-catalog fields Codex CLI reads, which plain OpenAI clients ignore: `base_instructions`, `model_messages`, `default_reasoning_level`, `apply_patch_tool_type`, `shell_type`, `tool_mode`, `truncation_policy`, `supports_parallel_tool_calls`, and the verbosity and reasoning-summary defaults. Every capability is repeated both at the top level and under `capabilities`, because OpenAI-compatible clients disagree on where to look for it.
+
+#### Both wire formats in one response
+
+The route answers OpenAI and Anthropic clients at once, because both protocols reach the proxy on the same path. Each entry is a valid OpenAI model object and a valid Anthropic `ModelInfo` at the same time; the two field sets do not collide, so each client reads only what it knows.
+
+| Field               | Protocol  | Description                                                              |
+|---------------------|-----------|--------------------------------------------------------------------------|
+| `object`            | OpenAI    | Always `model`.                                                          |
+| `created`           | OpenAI    | Unix seconds.                                                            |
+| `owned_by`          | OpenAI    | The vendor behind the tone.                                              |
+| `shutdown_date`     | OpenAI    | Always `null`; no model is scheduled to retire.                          |
+| `type`              | Anthropic | Always `model`.                                                          |
+| `display_name`      | Anthropic | Human-readable name, for example `Claude Sonnet 4.6`.                    |
+| `created_at`        | Anthropic | The same instant as `created`, in RFC 3339.                              |
+| `max_tokens`        | Anthropic | The output ceiling, matching `max_output_tokens`.                        |
+
+The list itself carries `object` and `data` for OpenAI, and `has_more`, `first_id` and `last_id` for Anthropic. The whole registry fits in one page, so `has_more` is always `false` and the cursors are the first and last advertised id.
+
+`capabilities` holds Anthropic's capability tree alongside the flat OpenAI-style entries: `batch`, `citations`, `code_execution`, `context_management`, `effort`, `image_input`, `pdf_input`, `structured_outputs` and `thinking`. Every node carries a `supported` boolean, and three of them nest one level further under it: `effort` names each accepted value (`low`, `medium`, `high`, `xhigh`, `max`), `thinking` names its `types` (`enabled`, `adaptive`), and `context_management` names each dated strategy. The values state what the proxy actually does, so most read `false`. `effort` is `true` only for a model that has a `-reasoning` variant to route to, and `thinking` only for a tone measured to emit chain-of-thought content.
+
+Claude Code discovers gateway models through this route, and it reads only the Anthropic format and only adds ids beginning with `claude` or `anthropic`. The Claude tones therefore keep such ids.
+
+### Conversation Quota
+
+M365 enforces a per-conversation message ceiling and reports the counters on its update frames. Every turn logs them, for example `ConvStream throttling: used=8 max=600 headroom=592`.
+
+`GET /v1/quota` returns the last observed counters. The backend only sends them while a turn is in flight, so the values reflect the most recent chat request rather than a live lookup, and they belong to whichever conversation produced that request:
+
+```json
+{"object":"quota","available":true,"exhausted":false,"used":8,"max":600,"headroom":592}
+```
+
+Counters the proxy does not recognize are returned under `extra` instead of being dropped. When a request produces an empty upstream response and the last counters show the ceiling was reached, the proxy answers `429` with code `upstream_throttled` rather than a generic empty-response error; start a new session to continue.
+
+### Token Usage
+
+Prompt and completion token counts are estimates produced locally; the M365 backend reports no usage. The encoder is `o200k_base`, the encoding of the GPT-5 class models the backend serves, with `cl100k_base` as the fallback and a character-based estimate when neither vocabulary can be fetched. Every `usage` object names which one produced the numbers:
+
+```json
+{"prompt_tokens": 42, "completion_tokens": 17, "reasoning_tokens": 6, "total_tokens": 59, "usage_source": "tiktoken_o200k_base_estimate"}
+```
+
+`usage_source` and `reasoning_tokens` are non-standard fields; the standard fields keep their meaning and position. `reasoning_tokens` counts the thinking content and reads `0` for a tone that emits none. Every endpoint reports usage, streaming and non-streaming alike, including `/v1/complete`, whose own format defines no usage object.
+
+The Anthropic endpoints report the same counts under their own field names, and carry the same two extra fields:
+
+```json
+{"input_tokens": 42, "output_tokens": 17, "reasoning_tokens": 6, "usage_source": "tiktoken_o200k_base_estimate"}
+```
+
+A streaming `/v1/messages` turn splits that object the way the Anthropic wire format does: `message_start` carries the input side, `message_delta` carries the output side, and both name their source. A streaming `/v1/complete` turn reports usage on its final `completion` event, because the earlier events carry deltas.
+
+`/v1/chat/completions` and `/v1/completions` accept the OpenAI `stream_options` object. `{"include_usage": false}` withholds the usage object from a streaming turn. Leaving `stream_options` out keeps the usage object, which differs from OpenAI's own default of `false`: this proxy has always reported usage on every streaming turn and clients here read it. Prompt tokens are counted from the message roles and contents, the serialized tool definitions and the `tool_choice` value, plus a fixed per-message and per-tool framing allowance. The `tool_choice` allowance applies only when the request declared tools. The same turn therefore costs the same on every endpoint.
+
+### Stop Sequences
+
+A stop sequence ends the answer where the caller said it ends. Every chat endpoint accepts one under its own protocol's name:
+
+| Endpoint                | Field           | Shape                        |
+|-------------------------|-----------------|------------------------------|
+| `/v1/chat/completions`  | `stop`          | A string or an array of them |
+| `/v1/completions`       | `stop`          | A string or an array of them |
+| `/v1/messages`          | `stop_sequences`| An array of strings          |
+| `/v1/complete`          | `stop_sequences`| An array of strings          |
+
+The answer is cut just before the earliest sequence that appears in it, and the sequence itself is removed, so a caller that frames a turn does not read the frame back. With several sequences the answer ends at whichever arrives first, not at whichever was listed first. An empty sequence is ignored rather than matching at offset zero.
+
+The OpenAI endpoints report the ordinary `finish_reason: "stop"`, the same as an answer that ended on its own. The Anthropic endpoints report `stop_reason: "stop_sequence"` and name the sequence that fired: `/v1/messages` in `stop_sequence`, `/v1/complete` in `stop`. Both fields stay `null` when the answer ended on its own, so a client testing for null is not misled by an empty string. `max_tokens` still wins when it is reached first, and the reported reason becomes `max_tokens`.
+
+A streamed answer is cut as it is produced, not afterwards. A sequence can straddle two upstream chunks, so the deltas pass through a writer that holds back the tail which could still complete one, released on a character boundary. A request that sends no stop sequence holds nothing back and receives every chunk as it arrives.
+
+## MCP Server
+
+`POST /mcp` exposes M365 Copilot to Model Context Protocol clients over JSON-RPC 2.0 (protocol revision `2025-06-18`). It supports `initialize`, `tools/list`, `tools/call`, and `ping`; lifecycle notifications are acknowledged with `202` and no body. The route requires an API key when one is configured.
+
+| Tool | Arguments | Description |
+|------|-----------|-------------|
+| `ask_copilot` | `prompt` (required), `model` | One stateless Copilot turn returning text |
+| `describe_image` | `image_url` (required, data URI), `prompt` | Asks Copilot about an inline image |
+
+```bash
+curl -s -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask_copilot","arguments":{"prompt":"Summarize the CAP theorem"}}}'
+```
+
+Copilot is deliberately a leaf in the MCP role. The simulated tool calling used by the `/v1` endpoints is **not** offered through MCP: an MCP client already has a real, schema-enforced tool mechanism, and nesting the prompt-based emulation inside it would create two competing tool loops. Every MCP call is an independent turn with no conversation continuity.
 
 ## Tool Calling
 
@@ -532,7 +822,7 @@ Response:
 {
   "content": [{
     "type": "tool_use",
-    "id": "toolu_001",
+    "id": "call_0e46d749-f182-419e-865f-abcb9c200de9",
     "name": "bash",
     "input": {"command": "echo hello"}
   }],
@@ -543,10 +833,39 @@ Response:
 ### Notes
 
 - Tool calling is always enabled — no configuration needed. Requests without `tools` are unaffected.
-- Tool calls that omit schema-required arguments are dropped, and the proxy performs a single corrective re-ask so agent clients never receive an unexecutable call. This works best for single-step tool calls; sustained multi-round agent loops (for example Claude Code's `/init` or sub-agent tasks) depend on the M365 backend model's own tool-use reliability and are not guaranteed.
+- Tool call arguments are validated against the declared JSON schema: `type`, `enum`, `required`, nested `properties`, and array `items`. A call that violates the contract is dropped, and the proxy performs a single corrective re-ask carrying the rejection reason so agent clients never receive an unexecutable call. This works best for single-step tool calls; sustained multi-round agent loops (for example Claude Code's `/init` or sub-agent tasks) depend on the M365 backend model's own tool-use reliability and are not guaranteed.
+- Under `additionalProperties: false`, arguments the schema does not declare are removed rather than rejected, so one stray field does not cost a round trip.
+- `tool_choice` is enforced when the response is parsed, not only asked for in the prompt. Under `"none"` no call is forwarded; when a specific function is pinned, a call to any other tool is dropped and re-asked.
+- `parallel_tool_calls: false` (OpenAI, on `/v1/chat/completions` and `/v1/responses`) and `tool_choice.disable_parallel_tool_use: true` (Anthropic, on `/v1/messages`) are enforced the same way: at most one call is forwarded per turn, and the rest are dropped rather than reordered, because the model emits them in the order it wants them run and the next round can ask for the following one. Leaving the field out allows parallel calls, which is the default in both protocols.
+- Every tool call id is a fresh `call_<uuid>`. The backend's own ids repeat across turns, which clients reject as duplicates.
+- A tool result whose `tool_call_id` (OpenAI), `tool_use_id` (Anthropic), or `call_id` (Responses) is missing, or names a call the same request never declared, is rejected with HTTP 400. A request that declares no tool calls at all skips the id check, so a client that trimmed its history is not blocked.
+- When the backend answers a tool request with prose that denies the tools exist, claims to have run the work in its own sandbox, or states that it cannot reach the caller's machine, the proxy re-asks once with an explicit instruction. The phrasings are recognized in English, Chinese and Turkish. An ordinary text answer passes through untouched.
 - When M365 Copilot runs its own server-side tools (web search, code interpreter) and returns plain text instead of a simulated JSON payload, the response is returned as a normal text completion with `finish_reason: "stop"`.
+- When M365 raises a tool call for one of its own built-ins (`search`, `code_interpreter`, `trigger_plugin`, `invoke_action`), that call is dropped and the turn ends on `stop`. This holds even when the request declares no tools at all: the client never declared those names and cannot execute them, and the answer already carries the search results inline.
+- When the backend answers with an unparseable tool-calling envelope, the envelope is withheld instead of being forwarded as the assistant message; an answer that was nothing but envelope becomes a short notice.
+- When M365 refuses the request itself rather than answering it, non-streaming endpoints return HTTP 502 with `upstream_content_blocked`, so the refusal is not mistaken for an answer. A streaming turn has already opened its response, so it is logged instead.
 - `tool_result` messages (OpenAI) and `tool_use`/`tool_result` content blocks (Anthropic) in conversation history are converted to plain text before being sent to M365, since the M365 backend does not understand tool roles.
-- Streaming endpoints buffer the full response before parsing tool calls (tool call JSON may span multiple chunks).
+- Streaming endpoints buffer the full response before parsing tool calls (tool call JSON may span multiple chunks). While that buffer fills, the stream writes a keepalive frame every ten idle seconds so the connection does not look dead to the client.
+
+### Client-Driven Tool Loops
+
+Agent clients such as Claude Code and Codex drive the tool loop themselves and resend the whole call and result history on every request. The proxy holds no state between those requests, so it rebuilds the evidence of the current user turn from the incoming history. A turn starts at the last user message that carries no tool result, which keeps the Anthropic shape, where every result arrives as a user message, from looking like a new turn.
+
+| Variable               | Default | Description                                                                 |
+|------------------------|---------|-----------------------------------------------------------------------------|
+| `M365_MAX_TOOL_ROUNDS` | `32`    | Tool rounds one user turn may drive before HTTP 409. Capped at `512`.        |
+| `M365_ENABLE_WEB_SEARCH` | `1`   | Declares the M365 `BingWebSearch` built-in on every turn. `0`, `false`, `off` or `no` withholds it. |
+
+- Exceeding the cap returns HTTP 409 with code `tool_round_limit` and reports the round count. HTTP 409 is not a status the Anthropic SDK expects, but an explicit refusal is preferable to answering forever while the client asks for one more round.
+- The completed calls and their results are restated in the prompt as final evidence, so the model answers from a result it already has instead of asking for it again. When the same call has failed the same way more than once, the prompt also asks for a change of approach.
+- A tool call repeating a name and arguments whose result is already in the turn is dropped on the third identical attempt. The first repeat passes, because reading a file back after writing it or re-running the tests after a change are ordinary. A call demanded through `tool_choice` is always forwarded, and a drop never triggers the corrective re-ask, because re-asking would produce the same call again.
+- Each restated result is compacted to a head and a tail around a marker naming the removed size, so a long build log does not grow the prompt on every round of the loop.
+- A tool call id declared twice, or answered twice, is rejected with HTTP 400: nothing can tell which call a later result belongs to.
+- A reply that only announces which tool it means to use, naming a declared tool in a short sentence without a code fence, is re-asked once. If the retry stays an announcement the answer text is replaced, so the client is not left waiting for a call that never comes.
+- A `function_call_progress` input item lets a long-running client tool report intermediate status. It reaches the model as context but never answers the pending call and never starts a new user turn.
+- A grammar-constrained tool (`"type": "custom"`, such as Codex code mode's `exec`) takes a raw body rather than JSON arguments. When the backend emits that body unfenced, either as a lone `{"input": "..."}` object or as bare source, it is claimed as a `custom_tool_call` on `/v1/responses` instead of being forwarded as escaped text.
+- A client-declared `web_search` tool is never routed back to the client: M365 runs the search itself through its `BingWebSearch` built-in and writes the results into the answer. The declaration stays in the prompt so the model knows the capability exists. When `web_search` is the only declared tool, the request drops out of the simulated tool path entirely and streams as ordinary text.
+- When the request declares tools, the turn emits no tool call, and no tool result exists, an answer claiming in the first person to have carried the work out is replaced with a short statement that nothing was verified; the original text is logged at debug level. A third-person statement such as "Go was created at Google" and a long prose answer are never touched. The replacement also applies to the streaming Chat Completions, Messages and Completions endpoints, which buffer a tool-enabled turn until the parse is done. Only `/v1/responses` streaming publishes content as it decodes it, so there the case is logged instead.
 
 ## Built-in Coding Tools (Opt-in)
 
@@ -595,7 +914,17 @@ Enabling these tools turns the API into a remote code and file access surface. *
 
 ## Responses API
 
-The `/v1/responses` endpoint implements the OpenAI Responses API format. It accepts `input` (string or array of typed items), `instructions`, `max_output_tokens`, `tools`, and `previous_response_id` for conversation continuity.
+The `/v1/responses` endpoint implements the OpenAI Responses API format. It accepts `input` (string or array of typed items), `instructions`, `max_output_tokens`, `tools`, `reasoning`, and `previous_response_id` for conversation continuity.
+
+### Reasoning Effort
+
+Codex CLI sends `reasoning: {"effort": ..., "summary": ...}`. The accepted effort values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; anything else is rejected with HTTP 400 rather than ignored.
+
+M365 exposes no separate effort dial, so effort steers the only lever that exists: `medium` and above routes the request to the model's reasoning variant when the registry has one, for example `gpt5.5` to `gpt5.5-reasoning`. A model without a variant, or a key that already names one, is left unchanged. `summary` is accepted and not acted on.
+
+### Custom Tools
+
+A tool declared with `"type": "custom"` takes free-form text rather than JSON arguments. Its calls come back as `custom_tool_call` items with the text under `input`, and the matching `custom_tool_call` / `custom_tool_call_output` history items are read back on the next turn.
 
 ### Example (non-streaming)
 
@@ -659,12 +988,27 @@ The streaming endpoint emits typed SSE events:
 | `response.output_text.done`              | Text complete                                                |
 | `response.content_part.done`             | Content part complete                                        |
 | `response.output_item.done`              | Output item complete                                         |
+| `response.reasoning_summary_part.added`  | Reasoning part opened                                        |
 | `response.reasoning_summary_text.delta`  | Reasoning/thinking delta                                     |
 | `response.reasoning_summary_text.done`   | Reasoning complete                                           |
+| `response.reasoning_summary_part.done`   | Reasoning part closed                                        |
 | `response.function_call_arguments.delta` | Tool call arguments delta                                    |
 | `response.function_call_arguments.done`  | Tool call arguments complete                                 |
 | `response.completed`                     | Full response object (status: completed)                     |
 | `response.failed`                        | Error occurred (status: failed)                              |
+
+### Codex Compatibility
+
+Codex CLI opens a provider with two probes before it sends any chat request.
+
+- `GET /v1/health` answers `{"status": "ok"}` without an API key and without touching the upstream. A 404 there makes Codex mark the whole provider unreachable.
+- A `POST /v1/responses` whose input carries no text, image, tool call or tool result is answered locally with an empty but well-formed Response, streaming or not. Sending that empty turn upstream cost about twelve seconds and one message of the conversation quota. A request that carries `instructions` is a real turn and still reaches M365.
+
+Every streaming endpoint also writes a keepalive frame after ten idle seconds, because a tool-enabled turn buffers its text until the tool-call parse completes. The OpenAI-shaped routes send an SSE comment, which no client parses as data; `/v1/messages` and `/v1/complete` send the Anthropic `ping` event.
+
+`/v1/chat/completions` and `/v1/completions` also write that comment the moment the stream opens, before the upstream turn starts. Every other streaming route already emits a frame first (`message_start`, `ping`, or `response.created`), so a client never has to tell a slow provider from a dead one.
+
+Two more rules protect a stream whose client went away. Each frame arms a thirty-second write deadline, so a reader that stopped consuming cannot hold the handler and its upstream WebSocket open. A failed keepalive write, or a canceled request context, ends the turn and releases the upstream connection instead of writing into a closed socket.
 
 ## Responses Compact API
 
@@ -719,30 +1063,53 @@ Streaming mode emits the same SSE event sequence as `/v1/responses` (`response.c
 ## Project Structure
 
 ```
-cmd/cli/main.go          # Single entry point, subcommand router
+cmd/cli/main.go            # Single entry point, subcommand router
 pkg/
-  auth/auth.go           # TokenManager, token refresh, AES-encrypted refresh token storage
-  auth/sso.go            # SSO cookie-based re-authentication (fallback for 24h token expiry)
-  client/client.go       # M365Client, WebSocket (SignalR) communication
-  crypto/crypto.go       # AES-256-GCM encryption for refresh tokens
-  models/models.go       # Version, ModelRegistry, Config, LoadConfig, LookupModel
-  payload/payload.go     # Request payload builders, URL builder, locale/timezone helpers
+  atomicfile/              # Write-and-rename, so a crash cannot leave a half-written credential
+  auth/auth.go             # TokenManager, token refresh, AES-encrypted refresh token storage
+  auth/sso.go              # SSO cookie re-authentication and the designer broker token flow
+  client/client.go         # M365Client, one SignalR WebSocket per request
+  client/conversations.go  # ConversationClient: list, rename and delete web conversations
+  client/history.go        # Reads the turns of a conversation from its rendered page
+  client/citations.go      # Citation resolution in streamed answer text
+  client/errors.go         # UpstreamError, carrying the status of a failed dial or upload
+  codingtools/             # Built-in local tools, gated by M365_ENABLE_CODE_TOOLS
+  crypto/crypto.go         # AES-256-GCM encryption for refresh tokens
+  logging/                 # Application logging
+  models/models.go         # Version, ModelRegistry, Config, LoadConfig, FindModel
+  payload/payload.go       # Request payload builders, URL builder, locale/timezone helpers
   servers/
-    api.go               # HTTP API server, all endpoints, max_tokens, token counting, session isolation
-    cli.go               # CLI server, interactive mode
-go.mod                   # Module: github.com/KilimcininKorOglu/M365Bridge, Go 1.22
-extension/               # Browser extension for secure M365 session provisioning
-data/                    # Runtime data (gitignored): tokens/, cache/, provisioning secret
+    api.go                 # HTTP adaptation: every endpoint, token counting, session isolation
+    auth.go                # Browser interface auth mode and credential verification routes
+    cli.go                 # CLI server, interactive mode
+    errors.go              # The one error shape every route reports
+    mcp.go                 # JSON-RPC 2.0 Model Context Protocol server
+    provisioning.go        # Browser extension session provisioning (/provision/v1/session)
+    sessions.go            # The session to conversation mapping routes
+    stopsequence.go        # Stop sequence cutting, including the streaming writer
+    transcripts.go         # The only place message content reaches disk
+    webui.go               # Serves the embedded browser interface
+  setup/wizard.go          # Browser-based setup wizard (JS snippet, token verify, data/.env save)
+  textcut/                 # Rune-boundary-safe cutting
+  toolcalling/             # Simulated caller-defined tool calling, its parsers and detectors
+  webui/embed.go           # The built interface, compiled into the binary
+go.mod                     # Module: github.com/KilimcininKorOglu/M365Bridge, Go 1.26
+extension/                 # Browser extension for secure M365 session provisioning
+web/                       # Vite project for the interface; make ui builds it into pkg/webui/dist
+docs/                      # Screenshots used by the READMEs
+data/                      # Runtime data (gitignored): tokens/, setup.json, cache/, provisioning secret, transcripts/
 ```
 
 ## Dependencies
+
+Three direct dependencies, and one they pull in.
 
 | Dependency                      | Purpose                                                               |
 |---------------------------------|-----------------------------------------------------------------------|
 | `github.com/google/uuid`        | UUID generation for SIDs and request IDs                              |
 | `github.com/gorilla/websocket`  | WebSocket client for SignalR                                          |
-| `github.com/pkoukk/tiktoken-go` | BPE token counting (cl100k_base) for usage and max_tokens enforcement |
-| `golang.org/x/net`              | publicsuffix list for SSO cookie jar                                  |
+| `github.com/pkoukk/tiktoken-go` | BPE token counting (o200k_base, cl100k_base fallback) for usage and max_tokens enforcement |
+| `github.com/dlclark/regexp2`    | Indirect; the regex engine tiktoken-go splits text with              |
 
 ## Security
 
@@ -756,19 +1123,33 @@ data/                    # Runtime data (gitignored): tokens/, cache/, provision
 - No credentials stored in code or repository
 - `data/` directory is gitignored (contains tokens, cache, and the provisioning secret)
 - API key authentication protects all `/v1/*` endpoints when configured
+- The key is read from `Authorization: Bearer <key>` or `x-api-key: <key>`; when a client offers both, either one being valid is enough
 
 ## Image Input Support
 
 The proxy supports multimodal image input via OpenAI and Anthropic API formats:
 
 - **OpenAI**: `content` array with `{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}` blocks
+- **Responses**: `content` array with `{"type": "input_image", "image_url": "data:image/png;base64,..."}` blocks, where the url is a bare string
 - **Anthropic**: `content` array with `{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}}` blocks
+
+An `image_url` block accepts the bare string form as well, because clients send it under both block names. A `file_id` reference is not supported; this gateway serves no Files API to resolve one against.
 
 Images are uploaded to the M365 backend via `POST https://substrate.office.com/m365Copilot/UploadFile` and attached to the WebSocket message as `messageAnnotations`. Supported formats: PNG, JPEG, GIF, WebP.
 
+### Remote Image URLs
+
+An OpenAI `image_url` block may also carry a remote `https://` address instead of a data URL. The proxy downloads it before uploading.
+
+No credential is sent on that download, so any public https host is accepted. The request is still checked to keep the proxy from being used to reach addresses inside its own network: plain http, loopback, private, link-local, multicast, carrier-grade NAT and cloud metadata targets are rejected, and the host is re-checked after DNS resolution. A response larger than 20 MB, one whose content type is not an image, or one that fails outright drops that single image rather than the whole request. At most 16 remote images are fetched per turn.
+
+Anthropic `image` blocks carry base64 data directly and are unaffected.
+
+`input_file`, `file`, `input_audio` and `audio` content blocks are dropped with a DEBUG log entry, because the M365 backend accepts image attachments only.
+
 ## Image Generation
 
-The proxy exposes M365 Copilot's  image generation as OpenAI Images API endpoints:
+The proxy exposes M365 Copilot's Microsoft Designer image generation as OpenAI Images API endpoints:
 
 - `POST /v1/images/generations` (JSON body): Generate images from a text prompt (no file upload)
 - `POST /v1/images/edits` (multipart/form-data): Edit existing image(s) with a text prompt; supports up to 16 images via repeated `image` form fields
@@ -779,16 +1160,25 @@ Both endpoints accept the following parameters:
 |-------------------|--------|-------------|---------------------------------------------------------------------------------------------------|
 | `prompt`          | string | (required)  | The text prompt for image generation/editing                                                      |
 | `n`               | int    | 1           | Number of images to generate (M365 generates one per request)                                     |
-| `size`            | string | `1024x1024` | Image size hint (appended to prompt as natural language)                                          |
+| `size`            | string | `1024x1024` | Size hint (appended to prompt as natural language; `1024x1024` is skipped)                        |
 | `quality`         | string | `standard`  | Quality hint (appended to prompt; `standard` is skipped)                                          |
 | `style`           | string | `natural`   | Style hint (appended to prompt; `natural` is skipped)                                             |
 | `response_format` | string | `url`       | Response format: `url` returns a data URL (base64), `b64_json` returns base64 in a separate field |
 | `session_id`      | string | (optional)  | Session ID for conversation continuity                                                            |
+| `user`            | string | (optional)  | Read as the session ID when `session_id` is absent                                                |
 
 ### Response Format
 
 - `response_format=url` (default): Downloads the image server-side and returns a `data:image/png;base64,...` data URL. Falls back to the raw `designerapp.officeapps.live.com` URL if the download fails.
 - `response_format=b64_json`: Downloads the image server-side using a broker token and returns the image as base64-encoded PNG data in the `b64_json` field.
+
+### Image Host Allowlist
+
+Generated-image URLs are read out of the model's own markdown output, which is untrusted, and the download sends the designerapp access token. The proxy therefore only contacts hosts on an allowlist, requires `https`, and rejects hosts that resolve to loopback, private, link-local, carrier-grade NAT or cloud metadata addresses. A URL that fails these checks is dropped rather than returned to the client.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `M365_IMAGE_HOST_ALLOWLIST` | `.officeapps.live.com` | Comma-separated hosts that may serve generated images. An entry starting with a dot matches that domain and its subdomains. |
 
 ### Image Download Token Flow
 

@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/textcut"
 )
 
 // Config controls coding tool execution and resource limits.
@@ -270,11 +272,14 @@ func (m *Manager) readFile(a map[string]any) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	// m.resolve rejected an absolute path, a traversal, a symlink leaving the
+	// workspace and every protected credential path before this point.
+	// #nosec G304
 	file, err := os.Open(path)
 	if err != nil {
 		return "", false, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, m.config.MaxReadBytes+1))
 	if err != nil {
 		return "", false, err
@@ -302,10 +307,10 @@ func (m *Manager) writeFile(a map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err = os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return "", err
 	}
-	if err = os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err = os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("wrote %d bytes", len(content)), nil
@@ -335,7 +340,7 @@ func (m *Manager) searchFiles(a map[string]any) (string, bool, error) {
 		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
-		data, readErr := os.ReadFile(path)
+		data, readErr := m.readWalkedFile(path)
 		if readErr != nil || int64(len(data)) > m.config.MaxReadBytes {
 			return nil
 		}
@@ -350,6 +355,40 @@ func (m *Manager) searchFiles(a map[string]any) (string, bool, error) {
 		return "", false, err
 	}
 	return bound(strings.Join(matches, "\n"), m.config.MaxOutput)
+}
+
+// readWalkedFile reads a file a directory walk found.
+//
+// The walk's DirEntry reports what the directory listing said, and that answer
+// is already stale by the time the file is opened. So the open is checked
+// against the file it actually reached: a regular file whose resolved path is
+// still inside the workspace. Without that, a symlink planted between the
+// listing and the read would let a search report a file from anywhere on disk.
+func (m *Manager) readWalkedFile(path string) ([]byte, error) {
+	// The opened file is checked below for being regular and still inside the
+	// workspace, which is what makes the walk path safe to open.
+	// #nosec G304
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("not a regular file")
+	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	if !contained(m.workspace, canonical) {
+		return nil, errors.New("path escapes workspace through a symlink")
+	}
+	return io.ReadAll(io.LimitReader(file, m.config.MaxReadBytes+1))
 }
 
 func (m *Manager) applyPatch(ctx context.Context, a map[string]any) (string, bool, error) {
@@ -400,6 +439,10 @@ func (m *Manager) command(ctx context.Context, tool string, command any, stdin [
 			result.Error = "command is required"
 			return result
 		}
+		// Running a command is what this package is for, and it is off unless
+		// M365_ENABLE_CODE_TOOLS turns it on. Every []string form here is built
+		// from literals in Execute, never from caller text.
+		// #nosec G204
 		cmd = exec.CommandContext(timed, value[0], value[1:]...)
 	default:
 		result.Error = "invalid command"
@@ -446,7 +489,7 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 		return original, nil
 	}
 	if int64(len(p)) > remaining {
-		p = p[:remaining]
+		p = textcut.Truncate(p, int(remaining))
 		b.truncated = true
 	}
 	_, err := b.buffer.Write(p)
@@ -457,8 +500,9 @@ func bound(value string, limit int64) (string, bool, error) {
 	if int64(len(value)) <= limit {
 		return value, false, nil
 	}
-	return value[:limit], true, nil
+	return textcut.Truncate(value, int(limit)), true, nil
 }
+
 func tool(name, description string, schema map[string]any) Tool {
 	return Tool{Name: name, Description: description, InputSchema: schema}
 }

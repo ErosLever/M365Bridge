@@ -11,13 +11,16 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/atomicfile"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/auth"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/crypto"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/models"
 )
 
 const (
-	// defaultRefreshTokenFile is the default path for the refresh token.
+	// defaultRefreshTokenFile is the default path for the refresh token. The
+	// value is where a credential is stored, not a credential.
+	// #nosec G101
 	defaultRefreshTokenFile = "data/tokens/rt_90day.txt"
 	// defaultCacheFile is the default path for the token cache.
 	defaultCacheFile = "data/tokens/token_cache.json"
@@ -233,6 +236,8 @@ func splitCookiesByDomain(cookies []auth.SSOCookie) ([]auth.SSOCookie, []auth.SS
 // getConfigFromFile reads setup JSON from a file.
 // Returns tenant, oid, refresh token, SSO cookies, and error.
 func getConfigFromFile(path string) (string, string, string, []auth.SSOCookie, error) {
+	// The path is the -file argument the operator typed at the setup wizard.
+	// #nosec G304
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", "", "", nil, fmt.Errorf("failed to read file %s: %w", path, err)
@@ -311,14 +316,14 @@ func verifyToken(tenant, oid, refreshToken string) error {
 		return fmt.Errorf("failed to encrypt token: %w", err)
 	}
 
-	if err := os.WriteFile(defaultRefreshTokenFile, []byte(encryptedToken), 0600); err != nil {
+	if err := atomicfile.Write(defaultRefreshTokenFile, []byte(encryptedToken), 0600); err != nil {
 		return fmt.Errorf("failed to save refresh token: %w", err)
 	}
 	fmt.Println("  Refresh token encrypted and saved")
 
 	// Set environment variables for verification
-	os.Setenv("M365_TENANT_ID", tenant)
-	os.Setenv("M365_USER_OID", oid)
+	_ = os.Setenv("M365_TENANT_ID", tenant)
+	_ = os.Setenv("M365_USER_OID", oid)
 
 	// Create token manager and verify
 	tokenManager := auth.NewTokenManager(tenant, models.DefaultClientID, models.DefaultScope, defaultRefreshTokenFile, defaultCacheFile)
@@ -336,7 +341,7 @@ func saveEnv(tenant, oid string) error {
 	envContent := fmt.Sprintf("# M365 Copilot Configuration\nM365_TENANT_ID=%s\nM365_USER_OID=%s\nM365_CLIENT_ID=%s\n",
 		tenant, oid, models.DefaultClientID)
 
-	if err := os.WriteFile(defaultEnvFile, []byte(envContent), 0600); err != nil {
+	if err := atomicfile.Write(defaultEnvFile, []byte(envContent), 0600); err != nil {
 		return fmt.Errorf("failed to save environment file: %w", err)
 	}
 

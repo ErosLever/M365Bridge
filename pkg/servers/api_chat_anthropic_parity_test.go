@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -22,6 +23,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 			name: "chat stream",
 			run: func(api *APIServer, w http.ResponseWriter, sid string) {
 				api.streamChatCompletions(
+					context.Background(),
 					w,
 					[]payload.Message{{Role: "user", Content: "hello"}},
 					models.ModelConfig{OpenAIID: "gpt-test"},
@@ -30,6 +32,10 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					0,
 					false,
 					nil,
+					"",
+					nil,
+					false,
+					true,
 				)
 			},
 		},
@@ -45,6 +51,9 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					0,
 					false,
 					nil,
+					"",
+					nil,
+					false,
 				)
 			},
 		},
@@ -52,6 +61,7 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 			name: "anthropic stream",
 			run: func(api *APIServer, w http.ResponseWriter, sid string) {
 				api.streamAnthropicMessages(
+					context.Background(),
 					w,
 					[]payload.Message{{Role: "user", Content: "hello"}},
 					models.ModelConfig{OpenAIID: "gpt-test"},
@@ -61,6 +71,9 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					"conv-poisoned",
 					false,
 					nil,
+					"",
+					nil,
+					false,
 				)
 			},
 		},
@@ -77,6 +90,9 @@ func TestChatAndAnthropicConversationErrorsClearStickySession(t *testing.T) {
 					"conv-poisoned",
 					false,
 					nil,
+					"",
+					nil,
+					false,
 				)
 			},
 		},
@@ -133,6 +149,7 @@ func TestUpdateChatStreamSessionDropsOnlyEmptyFinalTurn(t *testing.T) {
 
 			api.updateChatStreamSession(
 				sid,
+				"gpt-5.5",
 				"conv-new",
 				tt.fullText,
 				tt.thinking,
@@ -176,13 +193,13 @@ func TestChatAndAnthropicSimulationPromptsPreserveCurrentUserMessage(t *testing.
 		{
 			name: "chat completions",
 			inject: func(messages *[]payload.Message) {
-				injectSimulatedPrompt(messages, requestJSON, "required")
+				injectSimulatedPrompt(messages, requestJSON, "required", "")
 			},
 		},
 		{
 			name: "anthropic messages",
 			inject: func(messages *[]payload.Message) {
-				injectSimulatedPromptAnthropic(messages, requestJSON, "any")
+				injectSimulatedPromptAnthropic(messages, requestJSON, "any", "")
 			},
 		},
 	}

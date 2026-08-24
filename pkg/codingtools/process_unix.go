@@ -10,6 +10,11 @@ import (
 )
 
 func shellCommand(ctx context.Context, command string) *exec.Cmd {
+	// Running a caller's command is the declared purpose of the shell_command
+	// and run_tests tools. The layer is off unless M365_ENABLE_CODE_TOOLS turns
+	// it on, and the manager confines the working directory and bounds the
+	// runtime and the output.
+	// #nosec G204
 	return exec.CommandContext(ctx, "/bin/sh", "-c", command)
 }
 

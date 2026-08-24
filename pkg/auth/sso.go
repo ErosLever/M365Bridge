@@ -20,8 +20,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/atomicfile"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/crypto"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/textcut"
 )
 
 const (
@@ -87,8 +89,6 @@ type m365CookieStore struct {
 	Cookies     []SSOCookie `json:"cookies"`
 }
 
-var renameFile = os.Rename
-
 // generatePKCE creates a PKCE code verifier and code challenge (S256).
 func generatePKCE() (verifier, challenge string, err error) {
 	verifierBytes := make([]byte, 32)
@@ -127,7 +127,7 @@ func SaveSSOCookies(cookies []SSOCookie) error {
 		}
 	}
 
-	return os.WriteFile(ssoCookiesFile, []byte(encrypted), 0600)
+	return atomicWriteFile(ssoCookiesFile, []byte(encrypted), 0600)
 }
 
 // SaveM365Cookies encrypts and stores browser cookies used by M365 web APIs.
@@ -155,40 +155,11 @@ func saveM365CookieStore(store m365CookieStore) error {
 	return nil
 }
 
-func atomicWriteFile(path string, data []byte, mode os.FileMode) (returnErr error) {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	temporary, err := os.CreateTemp(dir, ".m365-cookies-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary file: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		if returnErr != nil {
-			temporary.Close()
-			os.Remove(temporaryPath)
-		}
-	}()
-
-	if err := temporary.Chmod(mode); err != nil {
-		return fmt.Errorf("failed to set temporary file permissions: %w", err)
-	}
-	if _, err := temporary.Write(data); err != nil {
-		return fmt.Errorf("failed to write temporary file: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		return fmt.Errorf("failed to sync temporary file: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("failed to close temporary file: %w", err)
-	}
-	if err := renameFile(temporaryPath, path); err != nil {
-		return fmt.Errorf("failed to replace file: %w", err)
-	}
-	return nil
+// atomicWriteFile writes a credential file through pkg/atomicfile, so a crash
+// in the middle of a write never leaves a shorter file that still decrypts to
+// nothing useful.
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	return atomicfile.Write(path, data, mode)
 }
 
 // SetSSOCookies replaces the runtime SSO cookie set. Runtime cookies are kept
@@ -475,16 +446,20 @@ func (tm *TokenManager) reauthWithSSO() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: authorize request failed: %v", ErrRefreshFailed, err)
 	}
-	defer authResp.Body.Close()
+	defer func() { _ = authResp.Body.Close() }()
 
 	// Follow redirects manually until we get the auth code or reach redirect_uri
 	currentResp := authResp
 	for {
 		location := currentResp.Header.Get("Location")
 		if location == "" {
-			body, err := io.ReadAll(currentResp.Body)
+			body, err := io.ReadAll(io.LimitReader(currentResp.Body, authPageMax+1))
 			if err != nil {
 				return "", fmt.Errorf("%w: read authorize response (status %d): %v", ErrRefreshFailed, currentResp.StatusCode, err)
+			}
+			if len(body) > authPageMax {
+				logging.Warnf("sign-in page exceeds %d bytes; a meta refresh past the cap is not followed", authPageMax)
+				body = body[:authPageMax]
 			}
 			bodyStr := string(body)
 			// Check for meta refresh redirect in HTML
@@ -542,12 +517,12 @@ func (tm *TokenManager) reauthWithSSO() (string, error) {
 		redirectReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 		redirectReq.Header.Set("Cookie", cookieHeader)
 
-		currentResp.Body.Close()
+		_ = currentResp.Body.Close()
 		currentResp, err = client.Do(redirectReq)
 		if err != nil {
 			return "", fmt.Errorf("%w: redirect request failed: %v", ErrRefreshFailed, err)
 		}
-		defer currentResp.Body.Close()
+		defer func() { _ = currentResp.Body.Close() }()
 	}
 }
 
@@ -617,10 +592,7 @@ func summarizeBrokerAuthorizeResponse(body string) string {
 	}
 
 	compactBody := strings.Join(strings.Fields(body), " ")
-	if len(compactBody) > 300 {
-		compactBody = compactBody[:300]
-	}
-	return compactBody
+	return textcut.Truncate(compactBody, 300)
 }
 
 // exchangeAuthCode exchanges an authorization code for access and refresh tokens.
@@ -650,11 +622,14 @@ func (tm *TokenManager) exchangeAuthCode(authCode, verifier string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("%w: token exchange failed: %v", ErrRefreshFailed, err)
 	}
-	defer tokenResp.Body.Close()
+	defer func() { _ = tokenResp.Body.Close() }()
 
-	body, err := io.ReadAll(tokenResp.Body)
+	body, err := io.ReadAll(io.LimitReader(tokenResp.Body, tokenResponseMax+1))
 	if err != nil {
 		return "", fmt.Errorf("%w: failed to read token response: %v", ErrRefreshFailed, err)
+	}
+	if len(body) > tokenResponseMax {
+		return "", fmt.Errorf("%w: token response exceeds %d bytes", ErrRefreshFailed, tokenResponseMax)
 	}
 
 	if tokenResp.StatusCode != http.StatusOK {
@@ -693,7 +668,9 @@ func (tm *TokenManager) exchangeAuthCode(authCode, verifier string) (string, err
 	return result.AccessToken, nil
 }
 
-// designerTokenCacheFile stores the designerapp access token cache.
+// designerTokenCacheFile stores the designerapp access token cache. The value
+// is where a credential is stored, not a credential.
+// #nosec G101
 const designerTokenCacheFile = "data/tokens/designer_token_cache.json"
 
 // designerBrokerRefreshFile stores the broker-compatible refresh token.
@@ -751,15 +728,20 @@ func (e *designerOAuthError) isExpiredRefreshToken() bool {
 // refresh token is available.
 func (tm *TokenManager) GetDesignerToken() (string, error) {
 	// Check cache first
-	data, err := os.ReadFile(designerTokenCacheFile)
-	if err == nil {
-		var cache designerTokenCache
-		if json.Unmarshal(data, &cache) == nil {
-			if time.Now().Unix() < cache.ExpiresAt-60 {
-				logging.Debug("GetDesignerToken: cache hit")
-				return cache.AccessToken, nil
-			}
-		}
+	if token, ok := readDesignerTokenCache(); ok {
+		logging.Debug("GetDesignerToken: cache hit")
+		return token, nil
+	}
+
+	// The broker refresh token is single-use like the primary one, so only one
+	// goroutine may acquire at a time.
+	tm.designerMu.Lock()
+	defer tm.designerMu.Unlock()
+
+	// Re-check under the lock; a concurrent caller may have just filled it.
+	if token, ok := readDesignerTokenCache(); ok {
+		logging.Debug("GetDesignerToken: cache filled while waiting for designer lock")
+		return token, nil
 	}
 
 	logging.Info("GetDesignerToken: cache miss, acquiring new token")
@@ -775,11 +757,34 @@ func (tm *TokenManager) GetDesignerToken() (string, error) {
 		AccessToken: token,
 		ExpiresAt:   time.Now().Add(time.Duration(expiresIn) * time.Second).Unix(),
 	}
+	// The cache holds the designer access token by design; caching it is the
+	// whole point of the file. It lives under the gitignored data/ tree and is
+	// written 0600.
+	// #nosec G117
 	cacheData, _ := json.Marshal(cache)
-	os.WriteFile(designerTokenCacheFile, cacheData, 0600)
+	if err := atomicWriteFile(designerTokenCacheFile, cacheData, 0600); err != nil {
+		logging.Errorf("GetDesignerToken: failed to write cache: %v", err)
+	}
 
 	logging.Infof("GetDesignerToken: success, expires_in=%d", expiresIn)
 	return token, nil
+}
+
+// readDesignerTokenCache returns the cached designerapp token when it is still
+// valid for at least 60 more seconds.
+func readDesignerTokenCache() (string, bool) {
+	data, err := os.ReadFile(designerTokenCacheFile)
+	if err != nil {
+		return "", false
+	}
+	var cache designerTokenCache
+	if json.Unmarshal(data, &cache) != nil {
+		return "", false
+	}
+	if time.Now().Unix() >= cache.ExpiresAt-60 {
+		return "", false
+	}
+	return cache.AccessToken, true
 }
 
 // acquireDesignerToken performs a broker refresh token request to obtain a
@@ -874,11 +879,14 @@ func (tm *TokenManager) requestDesignerToken(refreshToken string) (string, int, 
 	if err != nil {
 		return "", 0, fmt.Errorf("designer broker token request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, tokenResponseMax+1))
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to read designer broker token response: %w", err)
+	}
+	if len(respBody) > tokenResponseMax {
+		return "", 0, fmt.Errorf("designer broker token response exceeds %d bytes", tokenResponseMax)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -977,7 +985,7 @@ func (tm *TokenManager) acquireBrokerRefreshTokenViaSSOForTenant(tenant string) 
 	if err != nil && !strings.Contains(err.Error(), "ErrUseLastResponse") {
 		return "", fmt.Errorf("broker authorize request failed: %w", err)
 	}
-	defer currentResp.Body.Close()
+	defer func() { _ = currentResp.Body.Close() }()
 
 	// Follow redirects manually until we get the auth code or reach brk_redirect_uri.
 	// Microsoft AAD may return intermediate redirects (e.g. /jsdisabled, /kmsi)
@@ -987,7 +995,11 @@ func (tm *TokenManager) acquireBrokerRefreshTokenViaSSOForTenant(tenant string) 
 	for i := range maxRedirects {
 		location := currentResp.Header.Get("Location")
 		if location == "" {
-			body, _ := io.ReadAll(currentResp.Body)
+			body, _ := io.ReadAll(io.LimitReader(currentResp.Body, authPageMax+1))
+			if len(body) > authPageMax {
+				logging.Warnf("sign-in page exceeds %d bytes; a meta refresh past the cap is not followed", authPageMax)
+				body = body[:authPageMax]
+			}
 			bodyStr := string(body)
 			// Check for meta refresh redirect in HTML (AAD sometimes uses this)
 			if metaURL := extractMetaRefreshURL(bodyStr); metaURL != "" {
@@ -1036,12 +1048,12 @@ func (tm *TokenManager) acquireBrokerRefreshTokenViaSSOForTenant(tenant string) 
 		redirectReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 		redirectReq.Header.Set("Cookie", cookieHeader)
 
-		currentResp.Body.Close()
+		_ = currentResp.Body.Close()
 		currentResp, err = httpClient.Do(redirectReq)
 		if err != nil && !strings.Contains(err.Error(), "ErrUseLastResponse") {
 			return "", fmt.Errorf("broker redirect request failed (hop %d): %w", i, err)
 		}
-		defer currentResp.Body.Close()
+		defer func() { _ = currentResp.Body.Close() }()
 	}
 
 	return "", fmt.Errorf("broker authorize: max redirects (%d) reached without obtaining auth code", maxRedirects)
@@ -1083,11 +1095,14 @@ func (tm *TokenManager) exchangeBrokerAuthCode(authCode, verifier, tenant string
 	if err != nil {
 		return "", fmt.Errorf("broker code exchange failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, tokenResponseMax+1))
 	if err != nil {
 		return "", fmt.Errorf("failed to read broker code exchange response: %w", err)
+	}
+	if len(respBody) > tokenResponseMax {
+		return "", fmt.Errorf("broker code exchange response exceeds %d bytes", tokenResponseMax)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -1146,7 +1161,7 @@ func (tm *TokenManager) writeBrokerRefreshToken(token string) error {
 		return fmt.Errorf("failed to create directory for broker refresh token: %w", err)
 	}
 
-	return os.WriteFile(designerBrokerRefreshFile, []byte(encrypted), 0600)
+	return atomicWriteFile(designerBrokerRefreshFile, []byte(encrypted), 0600)
 }
 
 // generateClientRequestID generates a UUID for the client-request-id parameter.

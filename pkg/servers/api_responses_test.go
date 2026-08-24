@@ -32,7 +32,7 @@ func TestInjectSimulatedPromptResponsesUsesOneCanonicalMessage(t *testing.T) {
 	}
 	requestJSON := `{"input":[{"role":"user","content":"old user message"},{"role":"assistant","content":"old assistant message"},{"role":"user","content":"latest user message"}]}`
 
-	injectSimulatedPromptResponses(&messages, requestJSON, "auto")
+	injectSimulatedPromptResponses(&messages, requestJSON, "auto", "")
 
 	if len(messages) != 1 {
 		t.Fatalf("expected one canonical simulation message, got %d: %#v", len(messages), messages)
@@ -350,11 +350,13 @@ func TestBuildResponsesObjectPlacesCommentaryBeforeToolCall(t *testing.T) {
 
 	response := buildResponsesObject(
 		"resp_test",
+		1700000000,
 		"gpt-test",
 		"Nonce dosyasını şimdi okuyorum.",
 		"",
 		[]client.ToolCall{call},
 		map[string]string{"read_nonce": "function"},
+		false,
 		"tool_calls",
 		1,
 		1,
@@ -822,7 +824,7 @@ func TestResponsesReasoningIsSuppressedDuringToolSimulation(t *testing.T) {
 func TestWriteResponsesSimulationErrorNonStreaming(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	writeResponsesSimulationError(rec, false, "resp_test", "gpt-test", errSimulatedToolCallRequired)
+	writeResponsesSimulationError(rec, false, "resp_test", 1700000000, "gpt-test", errSimulatedToolCallRequired)
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
@@ -840,7 +842,7 @@ func TestWriteResponsesSimulationErrorNonStreaming(t *testing.T) {
 func TestWriteResponsesSimulationErrorStreaming(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	writeResponsesSimulationError(rec, true, "resp_test", "gpt-test", errSimulatedToolCallRequired)
+	writeResponsesSimulationError(rec, true, "resp_test", 1700000000, "gpt-test", errSimulatedToolCallRequired)
 
 	body := rec.Body.String()
 	if !strings.Contains(body, `"type":"response.failed"`) {
@@ -857,6 +859,7 @@ func TestWriteResponsesSimulationErrorStreaming(t *testing.T) {
 func TestBuildResponsesFailedEventIncludesSequenceNumber(t *testing.T) {
 	event := buildResponsesFailedEvent(
 		"resp_test",
+		1700000000,
 		"gpt-test",
 		"upstream_timeout",
 		"timed out",
@@ -1331,7 +1334,7 @@ func responsesTestChunkStream(chunks ...client.StreamChunk) <-chan client.Stream
 func TestWriteResponsesUpstreamEmptyErrorNonStreaming(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	writeResponsesUpstreamEmptyError(rec, false, "resp_test", "gpt-test")
+	writeResponsesUpstreamEmptyError(rec, false, "resp_test", 1700000000, "gpt-test")
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
@@ -1355,7 +1358,7 @@ func TestWriteResponsesUpstreamEmptyErrorNonStreaming(t *testing.T) {
 func TestWriteResponsesUpstreamEmptyErrorStreaming(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	writeResponsesUpstreamEmptyError(rec, true, "resp_test", "gpt-test")
+	writeResponsesUpstreamEmptyError(rec, true, "resp_test", 1700000000, "gpt-test")
 
 	body := rec.Body.String()
 	if !strings.Contains(body, `"type":"response.failed"`) {

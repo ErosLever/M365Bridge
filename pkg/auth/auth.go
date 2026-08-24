@@ -28,10 +28,19 @@ var (
 )
 
 const (
-	// tokenURLTemplate is the OAuth2 token endpoint URL template.
+	// tokenURLTemplate is the OAuth2 token endpoint URL template. It is a public
+	// Microsoft endpoint and carries no secret.
+	// #nosec G101
 	tokenURLTemplate = "https://login.microsoftonline.com/%s/oauth2/v2.0/token"
 	// cacheExpiryBuffer is the time buffer before token expiry to trigger refresh.
 	cacheExpiryBuffer = 60 * time.Second
+	// tokenResponseMax caps a token endpoint response. The body is a small JSON
+	// object, so anything near this size is a redirected or hostile endpoint
+	// rather than a token, and reading it whole would hold it all in memory.
+	tokenResponseMax = 1 << 20
+	// authPageMax caps a sign-in page read while following redirects. Those
+	// pages are HTML and much larger than a token response.
+	authPageMax = 4 << 20
 )
 
 // TokenCache represents the cached access token data.
@@ -41,6 +50,14 @@ type TokenCache struct {
 }
 
 // TokenManager handles OAuth2 token lifecycle management.
+//
+// Refresh tokens are single-use: Entra rotates them on every redemption and
+// invalidates the previous value. The background refresher and every request
+// path can both reach a refresh, so all redemption paths are serialized by
+// mutexes. refreshMu guards the primary refresh token and access-token cache;
+// designerMu guards the separate designerapp broker refresh token and its
+// cache. Both are held across the network exchange so two callers can never
+// redeem the same refresh token concurrently.
 type TokenManager struct {
 	identityMu             sync.RWMutex
 	tenant                 string
@@ -55,6 +72,8 @@ type TokenManager struct {
 	ssoCookies             *SSOCookieStore
 	designerTokenRequest   func(string) (string, int, error)
 	brokerTokenAcquisition func() (string, error)
+	refreshMu              sync.Mutex
+	designerMu             sync.Mutex
 }
 
 // NewTokenManager creates a new TokenManager instance.
@@ -119,13 +138,32 @@ func (tm *TokenManager) Get() (string, error) {
 	}
 
 	logging.Debug("TokenManager.Get: cache miss, refreshing")
-	// Cache miss or expired, perform refresh
-	return tm.Refresh()
+	tm.refreshMu.Lock()
+	defer tm.refreshMu.Unlock()
+
+	// Re-check the cache under the lock. A concurrent caller may have completed
+	// a refresh while this goroutine waited, and redeeming again would burn the
+	// rotated refresh token for nothing.
+	if token, err := tm.loadFromCache(); err == nil {
+		logging.Debug("TokenManager.Get: cache filled while waiting for refresh lock")
+		return token, nil
+	}
+
+	return tm.refreshLocked()
 }
 
 // Refresh exchanges the refresh token for a new access token.
 // Updates both the refresh token file and cache file.
 func (tm *TokenManager) Refresh() (string, error) {
+	tm.refreshMu.Lock()
+	defer tm.refreshMu.Unlock()
+	return tm.refreshLocked()
+}
+
+// refreshLocked performs the refresh token exchange. Callers must hold
+// refreshMu, which keeps the single-use refresh token from being redeemed by
+// two goroutines at once.
+func (tm *TokenManager) refreshLocked() (string, error) {
 	logging.Info("TokenManager.Refresh: starting token refresh")
 	refreshToken, err := tm.readRefreshToken()
 	if err != nil {
@@ -153,11 +191,15 @@ func (tm *TokenManager) Refresh() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrRefreshFailed, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	// One extra byte distinguishes "exactly at the limit" from "truncated".
+	body, err := io.ReadAll(io.LimitReader(resp.Body, tokenResponseMax+1))
 	if err != nil {
 		return "", fmt.Errorf("%w: failed to read response", ErrRefreshFailed)
+	}
+	if len(body) > tokenResponseMax {
+		return "", fmt.Errorf("%w: token response exceeds %d bytes", ErrRefreshFailed, tokenResponseMax)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -206,64 +248,6 @@ func (tm *TokenManager) Refresh() (string, error) {
 	return result.AccessToken, nil
 }
 
-// GetTokenForScope exchanges the refresh token for an access token with a
-// different scope (e.g. PowerPlatform or BAP). Does NOT cache or rotate the
-// refresh token — use Refresh() for the primary M365 scope.
-func (tm *TokenManager) GetTokenForScope(scope string) (string, error) {
-	return tm.GetTokenForScopeAndClient(scope, tm.clientID)
-}
-
-// GetTokenForScopeAndClient exchanges the refresh token for an access token
-// with a different scope AND a different client ID (RT exchange). Used for
-// APIs that require a token issued to a specific SPA client (e.g. Copilot
-// Studio's Island Gateway requires client_id 96ff4394-9197-43aa-b393-6a41652e21f8).
-func (tm *TokenManager) GetTokenForScopeAndClient(scope, clientID string) (string, error) {
-	refreshToken, err := tm.readRefreshToken()
-	if err != nil {
-		return "", err
-	}
-
-	data := url.Values{}
-	data.Set("client_id", clientID)
-	data.Set("refresh_token", refreshToken)
-	data.Set("grant_type", "refresh_token")
-	data.Set("scope", scope)
-
-	req, err := http.NewRequest("POST", tm.currentTokenURL(), bytes.NewBufferString(data.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("%w: failed to create request", ErrRefreshFailed)
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Origin", "https://m365.cloud.microsoft")
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrRefreshFailed, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("%w: failed to read response", ErrRefreshFailed)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%w: status %d: %s", ErrRefreshFailed, resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("%w: failed to parse response", ErrRefreshFailed)
-	}
-
-	return result.AccessToken, nil
-}
-
 // readRefreshToken reads and decrypts the refresh token from file.
 func (tm *TokenManager) readRefreshToken() (string, error) {
 	data, err := os.ReadFile(tm.refreshFile)
@@ -301,7 +285,7 @@ func (tm *TokenManager) writeRefreshToken(token string) error {
 		}
 	}
 
-	return os.WriteFile(tm.refreshFile, []byte(encrypted), 0600)
+	return atomicWriteFile(tm.refreshFile, []byte(encrypted), 0600)
 }
 
 // loadFromCache attempts to load a valid access token from cache.
@@ -325,7 +309,12 @@ func (tm *TokenManager) loadFromCache() (string, error) {
 }
 
 // writeCache writes the access token cache to file.
+//
+// The cache holds the access token by design; caching it is the whole point of
+// the file. It lives under the gitignored data/ tree, its directory is 0700 and
+// the file itself is 0600.
 func (tm *TokenManager) writeCache(cache TokenCache) error {
+	// #nosec G117
 	data, err := json.Marshal(cache)
 	if err != nil {
 		return err
@@ -339,5 +328,5 @@ func (tm *TokenManager) writeCache(cache TokenCache) error {
 		}
 	}
 
-	return os.WriteFile(tm.cacheFile, data, 0600)
+	return atomicWriteFile(tm.cacheFile, data, 0600)
 }

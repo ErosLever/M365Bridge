@@ -1,0 +1,58 @@
+export interface ModelEntry {
+  id: string
+  display_name?: string
+  capabilities?: {
+    thinking?: { supported?: boolean }
+    effort?: { supported?: boolean }
+  }
+}
+
+// The field names come from the live RefreshNavPane response, not from a
+// documented schema, so anything the interface does not read is left out.
+export interface M365Conversation {
+  conversationId: string
+  chatName?: string
+  updateTimeUtc?: number
+  isMessageless?: boolean
+  tone?: string
+}
+
+export interface SessionRecord {
+  id: string
+  conversation_id: string
+  updated_at: number
+}
+
+// A row in the sidebar. It comes from the M365 conversation list, from the
+// local session mappings, or from both when the two describe the same
+// conversation.
+export interface ConversationRow {
+  sessionId: string
+  conversationId: string
+  title: string
+  updatedAt: number
+  /** True when the row exists only in M365 and has never been bound here. */
+  remoteOnly: boolean
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+  thinking?: string
+  model?: string
+  createdAt?: number
+  /** Set when the turn failed, so the row renders as an error instead of an answer. */
+  error?: string
+}
+
+export class ApiError extends Error {
+  readonly status: number
+  readonly code: string
+
+  constructor(status: number, code: string, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+  }
+}

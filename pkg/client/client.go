@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime/multipart"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/models"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/payload"
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/textcut"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -34,6 +37,12 @@ const (
 	defaultRecvTimeout = 45 * time.Second
 	// defaultRecvFinalTimeout is the timeout for final message in streaming.
 	defaultRecvFinalTimeout = 60 * time.Second
+	// progressMessageType marks a status message rather than answer text.
+	progressMessageType = "Progress"
+	// uploadResponseMax caps an upload response. The body is a small JSON
+	// object naming the stored file, so a body near this size is a redirected
+	// or hostile endpoint rather than an upload result.
+	uploadResponseMax = 1 << 20
 )
 
 var (
@@ -65,12 +74,35 @@ type M365Client struct {
 	handshakeTimeout time.Duration
 	recvTimeout      time.Duration
 	recvFinalTimeout time.Duration
+	// throttlingObserver is configuration set once before serving, not
+	// per-request state. It reports quota counters from both the streaming and
+	// the aggregating paths, which discard the final chunk.
+	throttlingObserver func(*ThrottlingInfo)
+	// webSearchEnabled is configuration set once before serving, not
+	// per-request state. It declares the BingWebSearch built-in on outgoing
+	// payloads.
+	webSearchEnabled bool
+}
+
+// SetWebSearchEnabled declares or withholds the BingWebSearch built-in on every
+// request. Call it before serving requests.
+func (c *M365Client) SetWebSearchEnabled(enabled bool) {
+	c.webSearchEnabled = enabled
+}
+
+// SetThrottlingObserver registers a callback invoked whenever the backend
+// reports conversation quota counters. Call it before serving requests; the
+// callback runs on the WebSocket read goroutine and must be safe for
+// concurrent use.
+func (c *M365Client) SetThrottlingObserver(observer func(*ThrottlingInfo)) {
+	c.throttlingObserver = observer
 }
 
 // NewM365Client creates a new M365 client instance.
 func NewM365Client(tokenManager *auth.TokenManager) *M365Client {
 	return &M365Client{
 		tokenManager:     tokenManager,
+		webSearchEnabled: true,
 		handshakeTimeout: defaultHandshakeTimeout,
 		recvTimeout:      defaultRecvTimeout,
 		recvFinalTimeout: defaultRecvFinalTimeout,
@@ -109,11 +141,11 @@ func (c *M365Client) UploadFile(base64Data, mediaType, fileName, conversationID,
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	writer.WriteField("scenario", "UploadImage")
-	writer.WriteField("conversationId", conversationID)
-	writer.WriteField("FileBase64", dataURL)
-	writer.WriteField("optionsSets", "gptvnorm2048")
-	writer.Close()
+	_ = writer.WriteField("scenario", "UploadImage")
+	_ = writer.WriteField("conversationId", conversationID)
+	_ = writer.WriteField("FileBase64", dataURL)
+	_ = writer.WriteField("optionsSets", "gptvnorm2048")
+	_ = writer.Close()
 
 	req, err := http.NewRequest("POST", "https://substrate.office.com/m365Copilot/UploadFile", &body)
 	if err != nil {
@@ -134,17 +166,25 @@ func (c *M365Client) UploadFile(base64Data, mediaType, fileName, conversationID,
 		logging.Errorf("UploadFile: request failed: %v", err)
 		return nil, fmt.Errorf("upload request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// One extra byte distinguishes "exactly at the limit" from "truncated".
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, uploadResponseMax+1))
 	if err != nil {
 		logging.Errorf("UploadFile: failed to read response: %v", err)
 		return nil, fmt.Errorf("failed to read upload response: %w", err)
 	}
+	if len(respBody) > uploadResponseMax {
+		return nil, fmt.Errorf("upload response exceeds %d bytes", uploadResponseMax)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		logging.Errorf("UploadFile: upload failed status=%d body=%s", resp.StatusCode, string(respBody)[:min(300, len(respBody))])
-		return nil, fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(respBody))
+		return nil, &UpstreamError{
+			Op:     "upload",
+			Status: resp.StatusCode,
+			Err:    errors.New(string(respBody)),
+		}
 	}
 
 	var result struct {
@@ -192,26 +232,34 @@ func (c *M365Client) dialConnection(conversationID, userOID, tenantID string) (*
 		HandshakeTimeout: c.handshakeTimeout,
 	}
 
-	conn, _, err := dialer.Dial(url, nil)
+	// The dial response carries the status the backend refused with. Discarding
+	// it would leave an expired token, a throttled account and a backend outage
+	// indistinguishable at the HTTP layer.
+	conn, dialResp, err := dialer.Dial(url, nil)
 	if err != nil {
-		logging.Errorf("dialConnection: WebSocket dial failed: %v", err)
-		return nil, "", "", fmt.Errorf("failed to dial: %w", err)
+		status := 0
+		if dialResp != nil {
+			status = dialResp.StatusCode
+			_ = dialResp.Body.Close()
+		}
+		logging.Errorf("dialConnection: WebSocket dial failed: status=%d err=%v", status, err)
+		return nil, "", "", &UpstreamError{Op: "dial", Status: status, Err: err}
 	}
 
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(handshakeMessage)); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		logging.Errorf("dialConnection: handshake write failed: %v", err)
 		return nil, "", "", fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
 	}
 
-	conn.SetReadDeadline(time.Now().Add(c.handshakeTimeout))
+	_ = conn.SetReadDeadline(time.Now().Add(c.handshakeTimeout))
 	_, _, err = conn.ReadMessage()
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		logging.Errorf("dialConnection: handshake read failed: %v", err)
 		return nil, "", "", fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
 	}
-	conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
 
 	logging.Debug("dialConnection: WebSocket connected and handshake OK")
 	return conn, hexSID, uuidSID, nil
@@ -225,9 +273,9 @@ func (c *M365Client) Chat(text, tone, gptOverride, conversationID, userOID, tena
 	if err != nil {
 		return "", err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
-	payloadStr, err := payload.BuildPayload(hexSID, uuidSID, text, tone, gptOverride, false, hasTools, nil)
+	payloadStr, err := payload.BuildPayload(hexSID, uuidSID, text, tone, gptOverride, false, hasTools, c.webSearchEnabled, nil)
 	if err != nil {
 		return "", err
 	}
@@ -259,9 +307,91 @@ type StreamChunk struct {
 	Thinking       string
 	IsFinal        bool
 	Error          error
-	ConversationID string     // set on final chunk
-	ToolCalls      []ToolCall // set on final chunk
-	FinishReason   string     // set on final chunk
+	ConversationID string          // set on final chunk
+	ToolCalls      []ToolCall      // set on final chunk
+	FinishReason   string          // set on final chunk
+	Throttling     *ThrottlingInfo // latest quota counters, when the backend sent them
+}
+
+// ThrottlingInfo carries M365's per-conversation quota counters. The backend
+// sends them in a `throttling` object on type 1 update frames. Counters are
+// pointers because a frame may carry only some of them, and zero is a
+// meaningful value that must not be confused with absent.
+type ThrottlingInfo struct {
+	// NumUserMessages is the user message count consumed in this conversation.
+	NumUserMessages *int
+	// MaxNumUserMessages is the ceiling M365 enforces per conversation.
+	MaxNumUserMessages *int
+	// Extra holds every other key the backend sent, so a counter this build
+	// does not know about is still observable instead of silently dropped.
+	Extra map[string]any
+}
+
+// Exhausted reports whether the conversation reached its message ceiling.
+func (t *ThrottlingInfo) Exhausted() bool {
+	if t == nil || t.NumUserMessages == nil || t.MaxNumUserMessages == nil {
+		return false
+	}
+	return *t.MaxNumUserMessages > 0 && *t.NumUserMessages >= *t.MaxNumUserMessages
+}
+
+// Summary renders the counters as a compact log string.
+func (t *ThrottlingInfo) Summary() string {
+	if t == nil {
+		return ""
+	}
+	parts := make([]string, 0, 3+len(t.Extra))
+	if t.NumUserMessages != nil {
+		parts = append(parts, fmt.Sprintf("used=%d", *t.NumUserMessages))
+	}
+	if t.MaxNumUserMessages != nil {
+		parts = append(parts, fmt.Sprintf("max=%d", *t.MaxNumUserMessages))
+	}
+	if t.NumUserMessages != nil && t.MaxNumUserMessages != nil {
+		parts = append(parts, fmt.Sprintf("headroom=%d", *t.MaxNumUserMessages-*t.NumUserMessages))
+	}
+	for _, key := range slices.Sorted(maps.Keys(t.Extra)) {
+		parts = append(parts, fmt.Sprintf("%s=%v", key, t.Extra[key]))
+	}
+	return strings.Join(parts, " ")
+}
+
+// parseThrottling converts the backend's `throttling` object into
+// ThrottlingInfo. Keys beyond the two documented counters are preserved in
+// Extra rather than dropped by a hardcoded key list.
+func parseThrottling(raw map[string]any) *ThrottlingInfo {
+	if len(raw) == 0 {
+		return nil
+	}
+	info := &ThrottlingInfo{}
+	for key, value := range raw {
+		switch key {
+		case "numUserMessagesInConversation":
+			if n, ok := jsonInt(value); ok {
+				info.NumUserMessages = &n
+				continue
+			}
+		case "maxNumUserMessagesInConversation":
+			if n, ok := jsonInt(value); ok {
+				info.MaxNumUserMessages = &n
+				continue
+			}
+		}
+		if info.Extra == nil {
+			info.Extra = make(map[string]any)
+		}
+		info.Extra[key] = value
+	}
+	return info
+}
+
+// jsonInt converts a JSON number to int, rejecting bools and non-numbers.
+func jsonInt(value any) (int, bool) {
+	f, ok := value.(float64)
+	if !ok {
+		return 0, false
+	}
+	return int(f), true
 }
 
 // ChatStreamGen generates a stream of response chunks for a single text prompt.
@@ -308,9 +438,12 @@ func (c *M365Client) ChatConversationContext(
 		hasTools,
 	)
 
-	var fullText, thinking, convID string
+	var convID string
 	var toolCalls []ToolCall
 	var finishReason string
+	// A long answer arrives as hundreds of chunks. String concatenation would
+	// copy the whole text on every one of them.
+	var fullText, thinking strings.Builder
 
 	for chunk := range ch {
 		if chunk.Error != nil {
@@ -321,15 +454,15 @@ func (c *M365Client) ChatConversationContext(
 			toolCalls = chunk.ToolCalls
 			finishReason = chunk.FinishReason
 		} else {
-			fullText += chunk.Text
-			thinking += chunk.Thinking
+			fullText.WriteString(chunk.Text)
+			thinking.WriteString(chunk.Thinking)
 		}
 	}
 
 	if err := ctx.Err(); err != nil {
 		return "", "", nil, "", "", err
 	}
-	return cleanText(fullText), thinking, toolCalls, finishReason, convID, nil
+	return cleanText(fullText.String()), thinking.String(), toolCalls, finishReason, convID, nil
 }
 
 // ChatConversationStreamGen generates a stream of conversation response chunks.
@@ -359,6 +492,10 @@ func (c *M365Client) ChatConversationStreamGenContext(
 	logging.Infof("ChatConversationStreamGen: tone=%s override=%s convID=%s hasTools=%v msgs=%d", tone, gptOverride, conversationID, hasTools, len(messages))
 	ch := make(chan StreamChunk)
 
+	// The goroutine runs on the request context this function was given; the
+	// nil branch below is only a guard for a caller that passes none, and every
+	// caller in this repository passes one.
+	// #nosec G118
 	go func() {
 		defer close(ch)
 		if ctx == nil {
@@ -384,13 +521,13 @@ func (c *M365Client) ChatConversationStreamGenContext(
 			}
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		contextWatchDone := make(chan struct{})
 		defer close(contextWatchDone)
 		go func() {
 			select {
 			case <-ctx.Done():
-				conn.Close()
+				_ = conn.Close()
 			case <-contextWatchDone:
 			}
 		}()
@@ -404,6 +541,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 			gptOverride,
 			false,
 			hasTools,
+			c.webSearchEnabled,
 			nil,
 		)
 		if err != nil {
@@ -421,12 +559,19 @@ func (c *M365Client) ChatConversationStreamGenContext(
 
 		toolCalls := []ToolCall{}
 		seenImages := map[string]bool{}
-		accText := ""
-		accThinking := ""
+		// accText is a Builder because a turn arrives as hundreds of appends,
+		// but a snapshot replaces the whole accumulation rather than extending
+		// it, which is why Reset appears alongside WriteString.
+		var accText strings.Builder
+		var accThinking strings.Builder
+		// citations holds back a citation run that has not finished arriving,
+		// because a delta already emitted cannot be retracted.
+		var citations citationFilter
 		var finalConvID string
+		var throttling *ThrottlingInfo
 
 		for {
-			conn.SetReadDeadline(time.Now().Add(c.recvFinalTimeout))
+			_ = conn.SetReadDeadline(time.Now().Add(c.recvFinalTimeout))
 			msgType, message, err := conn.ReadMessage()
 			if err != nil {
 				if ctx.Err() != nil {
@@ -441,7 +586,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 				}
 				return
 			}
-			conn.SetReadDeadline(time.Time{})
+			_ = conn.SetReadDeadline(time.Time{})
 
 			if msgType != websocket.TextMessage {
 				continue
@@ -471,7 +616,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 					j, _ := json.Marshal(data)
 					s := string(j)
 					if len(s) > 3000 {
-						s = s[:3000] + "...(truncated)"
+						s = textcut.Truncate(s, 3000) + "...(truncated)"
 					}
 					logging.Debugf("ConvStream type=6: %s", s)
 				}
@@ -482,6 +627,17 @@ func (c *M365Client) ChatConversationStreamGenContext(
 								if argMap, ok := arg.(map[string]any); ok {
 									// DEBUG: log all keys in argMap
 									logging.Debugf("ConvStream argMap keys: %v", mapKeys(argMap))
+									// Capture the conversation quota counters. They arrive on
+									// their own update frames, separate from message frames.
+									if rawThrottling, ok := argMap["throttling"].(map[string]any); ok {
+										if info := parseThrottling(rawThrottling); info != nil {
+											throttling = info
+											logging.Infof("ConvStream throttling: %s", info.Summary())
+											if c.throttlingObserver != nil {
+												c.throttlingObserver(info)
+											}
+										}
+									}
 									// Extract conversationId from type:1 update if present (rare)
 									if convID, ok := argMap["conversationId"].(string); ok && convID != "" {
 										finalConvID = convID
@@ -505,10 +661,10 @@ func (c *M365Client) ChatConversationStreamGenContext(
 														}
 													}
 													// Extract thinking from Progress + ChainOfThoughtSummary
-													if messageType == "Progress" {
+													if messageType == progressMessageType {
 														if co, _ := msgMap["contentOrigin"].(string); co == "ChainOfThoughtSummary" {
 															if t, _ := msgMap["text"].(string); t != "" {
-																accThinking += t
+																accThinking.WriteString(t)
 																if !emit(StreamChunk{Thinking: t, IsFinal: false}) {
 																	return
 																}
@@ -517,7 +673,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 														// Extract generated image URLs from contentGenerationProgressList
 														if co, _ := msgMap["contentOrigin"].(string); co == "ImageGeneration" {
 															if imgMD := extractImageGenerationMarkdown(msgMap, seenImages); imgMD != "" {
-																accText += imgMD
+																accText.WriteString(imgMD)
 																if !emit(StreamChunk{Text: imgMD, IsFinal: false}) {
 																	return
 																}
@@ -536,19 +692,21 @@ func (c *M365Client) ChatConversationStreamGenContext(
 												}
 											}
 										}
-										// Only process text from the last message (skip Progress messages)
+										// Only process text from the last message, and only when
+										// that message is the answer rather than the backend's
+										// own tool traffic.
 										if len(msgs) > 0 {
 											if lastMsg, ok := msgs[len(msgs)-1].(map[string]any); ok {
-												if lastMsgType, _ := lastMsg["messageType"].(string); lastMsgType != "Progress" {
+												if carriesAnswerText(lastMsg) {
 													if newText, ok := lastMsg["text"].(string); ok && newText != "" {
-														if newText != accText {
-															var chunk string
-															if strings.HasPrefix(newText, accText) {
-																chunk = newText[len(accText):]
-															} else {
-																chunk = newText
-															}
-															accText = newText
+														// The snapshot restates the whole answer, so
+														// it is stripped whole rather than through the
+														// streaming filter, and stays comparable with
+														// the accumulation that was already filtered.
+														newText = stripCitations(newText)
+														if chunk, advanced := snapshotDelta(accText.String(), newText); advanced {
+															accText.Reset()
+															accText.WriteString(newText)
 															if chunk != "" {
 																if !emit(StreamChunk{Text: chunk, IsFinal: false}) {
 																	return
@@ -561,9 +719,14 @@ func (c *M365Client) ChatConversationStreamGenContext(
 										}
 									}
 									if writeAtCursor, ok := argMap["writeAtCursor"].(string); ok {
-										accText += writeAtCursor
-										if !emit(StreamChunk{Text: writeAtCursor, IsFinal: false}) {
-											return
+										// A citation run can straddle two deltas, so the
+										// filter holds the tail back rather than emitting
+										// text it would have to retract.
+										if emitText := citations.push(writeAtCursor); emitText != "" {
+											accText.WriteString(emitText)
+											if !emit(StreamChunk{Text: emitText, IsFinal: false}) {
+												return
+											}
 										}
 									}
 								}
@@ -572,18 +735,42 @@ func (c *M365Client) ChatConversationStreamGenContext(
 					}
 				} else if msgType, ok := data["type"].(float64); ok && int(msgType) == 2 {
 					// type: 2 is invocation completion; contains item.conversationId
+					// and the backend's verdict on the turn.
 					if item, ok := data["item"].(map[string]any); ok {
 						if convID, ok := item["conversationId"].(string); ok && convID != "" {
 							finalConvID = convID
 						}
+						if failure := parseTurnResult(item); failure != nil {
+							// Text already on the wire cannot be retracted, so a
+							// partial answer is delivered rather than replaced by
+							// an error.
+							if accText.Len() > 0 {
+								logging.Warnf("ChatConversationStreamGen: %v, keeping the %d bytes already emitted", failure, accText.Len())
+							} else {
+								logging.Errorf("ChatConversationStreamGen: %v", failure)
+								emit(StreamChunk{Error: failure})
+								return
+							}
+						}
 					}
 				} else if msgType, ok := data["type"].(float64); ok && int(msgType) == 3 {
+					// A run still held here never closed, so it was a truncated
+					// citation marker rather than answer text. Report the drop
+					// instead of letting it vanish silently.
+					if held := citations.flush(); held != "" {
+						logging.Warnf("ChatConversationStreamGen: dropped %d bytes of an unterminated citation marker", len(held))
+					}
+					if emptyTurn(accText.String(), toolCalls) {
+						logging.Errorf("ChatConversationStreamGen: %v (thinking=%d bytes)", ErrEmptyTurn, accThinking.Len())
+						emit(StreamChunk{Error: ErrEmptyTurn})
+						return
+					}
 					finishReason := "stop"
 					if len(toolCalls) > 0 {
 						finishReason = "tool_calls"
 					}
 					logging.Infof("ChatConversationStreamGen: completed finishReason=%s toolCalls=%d", finishReason, len(toolCalls))
-					emit(StreamChunk{Text: "", IsFinal: true, ConversationID: finalConvID, ToolCalls: toolCalls, FinishReason: finishReason})
+					emit(StreamChunk{Text: "", IsFinal: true, ConversationID: finalConvID, ToolCalls: toolCalls, FinishReason: finishReason, Throttling: throttling})
 					return
 				} else if msgType, ok := data["type"].(float64); ok && int(msgType) == -1 {
 					logging.Errorf("ChatConversationStreamGen: server error: %v", data)
@@ -607,13 +794,13 @@ func (c *M365Client) sendRecv(conn *websocket.Conn, payload string) (string, err
 	fullText := ""
 
 	for {
-		conn.SetReadDeadline(time.Now().Add(c.recvTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(c.recvTimeout))
 		msgType, message, err := conn.ReadMessage()
 		if err != nil {
 			logging.Errorf("sendRecv: read error: %v", err)
 			return "", err
 		}
-		conn.SetReadDeadline(time.Time{})
+		_ = conn.SetReadDeadline(time.Time{})
 
 		if msgType != websocket.TextMessage {
 			continue
@@ -639,9 +826,12 @@ func (c *M365Client) sendRecv(conn *websocket.Conn, payload string) (string, err
 						for _, arg := range args {
 							if argMap, ok := arg.(map[string]any); ok {
 								if msgs, ok := argMap["messages"].([]any); ok && len(msgs) > 0 {
-									if lastMsg, ok := msgs[len(msgs)-1].(map[string]any); ok {
+									if lastMsg, ok := msgs[len(msgs)-1].(map[string]any); ok && carriesAnswerText(lastMsg) {
 										if text, ok := lastMsg["text"].(string); ok {
-											fullText = text
+											// This path replaces rather than
+											// accumulates, so the whole text is
+											// stripped each time.
+											fullText = stripCitations(text)
 										}
 									}
 								}
@@ -649,11 +839,106 @@ func (c *M365Client) sendRecv(conn *websocket.Conn, payload string) (string, err
 						}
 					}
 				}
+			} else if msgType, ok := data["type"].(float64); ok && int(msgType) == 2 {
+				// The backend reports whether the turn produced anything. A
+				// failed turn sends no answer message, so without this the
+				// caller receives empty text and no error.
+				if item, ok := data["item"].(map[string]any); ok {
+					if failure := parseTurnResult(item); failure != nil && fullText == "" {
+						logging.Errorf("sendRecv: %v", failure)
+						return "", failure
+					}
+				}
 			} else if msgType, ok := data["type"].(float64); ok && int(msgType) == 3 {
+				if fullText == "" {
+					logging.Errorf("sendRecv: %v", ErrEmptyTurn)
+					return "", ErrEmptyTurn
+				}
 				return fullText, nil
 			}
 		}
 	}
+}
+
+// emptyTurn reports whether a finished turn produced nothing the caller can
+// use. Generated images and web-search queries both reach accText, so text is
+// the only content channel that has to be checked alongside the tool calls.
+func emptyTurn(accText string, toolCalls []ToolCall) bool {
+	return accText == "" && len(toolCalls) == 0
+}
+
+// parseTurnResult reports the backend's verdict on a finished turn, or nil when
+// the turn succeeded or carried no verdict.
+//
+// The completion frame's `result.value` is "Success" on a turn that answered.
+// Anything else is the backend saying it produced nothing, which it does for a
+// `tone` it accepts but no longer serves. A frame without `result` returns nil,
+// because an unfamiliar frame shape must not turn a working turn into an error.
+func parseTurnResult(item map[string]any) *TurnFailedError {
+	result, ok := item["result"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	value, ok := result["value"].(string)
+	if !ok || value == "" || value == "Success" {
+		return nil
+	}
+	message, _ := result["message"].(string)
+	turnState, _ := item["turnState"].(string)
+	return &TurnFailedError{Value: value, TurnState: turnState, Message: message}
+}
+
+// snapshotDelta reports the text a message snapshot adds to what was already
+// emitted, and whether the snapshot may become the new baseline.
+//
+// A turn arrives over two channels that carry the same answer. writeAtCursor
+// appends incrementally and renders citations as resolved markdown links, while
+// the messages[] snapshots restate the whole answer with raw citation markers.
+// The two encodings diverge mid-string, so a snapshot can fail a prefix test
+// against an accumulation that already ends with the same text: one measured
+// turn produced a 667-byte snapshot against 724 bytes emitted, with identical
+// tails. Emitting that snapshot as new text delivered the answer twice.
+//
+// So a snapshot only ever contributes its prefix extension. When it diverges
+// after text has already gone out, it is a re-encoding of delivered content and
+// contributes nothing; the longer accumulation stays the baseline, because
+// later writeAtCursor deltas append to what was emitted rather than to the
+// snapshot. A snapshot that arrives before any text is the answer itself, which
+// is how a turn that never streams still produces one.
+func snapshotDelta(emitted, snapshot string) (string, bool) {
+	if snapshot == emitted {
+		return "", false
+	}
+	if strings.HasPrefix(snapshot, emitted) {
+		return snapshot[len(emitted):], true
+	}
+	if emitted == "" {
+		return snapshot, true
+	}
+	return "", false
+}
+
+// carriesAnswerText reports whether a backend message holds assistant answer
+// text. M365 mixes its own tool traffic into the same messages array: a
+// Progress message carries status, and a GeneratedCode message carries the
+// code interpreter's source and then its raw result object. Treating those as
+// answer text puts backend internals into the reply, which is the same reason
+// servers.withoutBackendToolCalls discards the matching tool calls.
+//
+// The rule excludes the known backend types rather than admitting only the
+// empty messageType that a plain answer carries. Dropping answer text is the
+// worse failure, and no evidence rules out an answer arriving under a
+// messageType this package has not seen.
+func carriesAnswerText(msg map[string]any) bool {
+	messageType, _ := msg["messageType"].(string)
+	if messageType == "" {
+		return true
+	}
+	if messageType == progressMessageType {
+		return false
+	}
+	_, backendTool := models.ToolMessageType[messageType]
+	return !backendTool
 }
 
 // extractToolCall extracts a tool call from a message.
@@ -778,7 +1063,7 @@ func extractImageGenerationMarkdown(msg map[string]any, seenImages map[string]bo
 		if j, err := json.Marshal(itemMap); err == nil {
 			s := string(j)
 			if len(s) > 2000 {
-				s = s[:2000] + "...(truncated)"
+				s = textcut.Truncate(s, 2000) + "...(truncated)"
 			}
 			logging.Debugf("ImageGen progress item JSON: %s", s)
 		}

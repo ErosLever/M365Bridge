@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/atomicfile"
 	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
 )
 
@@ -45,7 +46,9 @@ func loadOrCreateKey() ([]byte, error) {
 		return nil, err
 	}
 
-	// Try to load existing key
+	// Try to load existing key. The path is this process's own key file under
+	// the gitignored data/ tree, never a caller-supplied value.
+	// #nosec G304
 	if keyData, err := os.ReadFile(keyPath); err == nil {
 		logging.Debug("crypto: loaded existing encryption key")
 		return keyData, nil
@@ -63,7 +66,9 @@ func loadOrCreateKey() ([]byte, error) {
 		return nil, fmt.Errorf("%w: %v", ErrKeyGeneration, err)
 	}
 
-	if err := os.WriteFile(keyPath, key, 0600); err != nil {
+	// A half-written key decrypts nothing, and every credential on disk is
+	// encrypted under it, so this file above all others is replaced in one step.
+	if err := atomicfile.Write(keyPath, key, 0600); err != nil {
 		return nil, fmt.Errorf("failed to write key file: %w", err)
 	}
 

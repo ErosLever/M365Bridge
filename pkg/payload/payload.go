@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KilimcininKorOglu/M365Bridge/pkg/logging"
 	"github.com/google/uuid"
 )
 
@@ -96,6 +97,32 @@ type Message struct {
 	Images      []ImageData         `json:"-"`
 	Annotations []MessageAnnotation `json:"-"`
 	ToolCallID  string              `json:"tool_call_id,omitempty"` // OpenAI tool role messages
+	// ToolCalls lists the tool calls this assistant message announced and
+	// ToolResults lists the results it carries. The conversation payload
+	// flattens both into text, so the structure is kept here for the server to
+	// check that a result answers a call the same request declared, and to
+	// rebuild the evidence ledger for a client-driven tool loop.
+	ToolCalls   []ToolCallRecord   `json:"-"`
+	ToolResults []ToolResultRecord `json:"-"`
+	// ToolProgress marks a message that reports a client tool still running.
+	// It travels as a user message so the model reads it, but it neither
+	// answers the pending call nor starts a new user turn.
+	ToolProgress bool `json:"-"`
+}
+
+// ToolCallRecord is one tool call announced by an assistant message, kept in
+// its structured form after the message content has been flattened to text.
+type ToolCallRecord struct {
+	ID        string
+	Name      string
+	Arguments string
+}
+
+// ToolResultRecord is one tool result carried by a message, kept in its
+// structured form after the message content has been flattened to text.
+type ToolResultRecord struct {
+	ID      string
+	Content string
 }
 
 // ImageData represents an image extracted from multimodal content.
@@ -103,6 +130,10 @@ type ImageData struct {
 	Base64    string // raw base64 data without data: prefix
 	MediaType string // e.g. "image/png"
 	FileName  string // e.g. "upload.png"
+	// RemoteURL holds a caller-supplied https URL whose bytes have not been
+	// fetched yet. This package performs no network I/O, so the server layer
+	// resolves it before upload; Base64 is empty until then.
+	RemoteURL string
 }
 
 // MessageAnnotation represents an image annotation attached to a WebSocket message.
@@ -110,6 +141,20 @@ type MessageAnnotation struct {
 	ID                        string            `json:"id"`
 	MessageAnnotationType     string            `json:"messageAnnotationType"`
 	MessageAnnotationMetadata map[string]string `json:"messageAnnotationMetadata"`
+}
+
+// appendImageURL records one image the caller named by url. A data URL is
+// decoded here; a remote address is kept for the server layer to fetch, because
+// this package does no network I/O. Anything else names no image and is
+// ignored.
+func (m *Message) appendImageURL(url string) {
+	if img := parseDataURL(url); img != nil {
+		m.Images = append(m.Images, *img)
+		return
+	}
+	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
+		m.Images = append(m.Images, ImageData{RemoteURL: url})
+	}
 }
 
 // UnmarshalJSON implements custom JSON unmarshaling for Message to handle
@@ -137,22 +182,34 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	m.Role = raw.Role
 	m.Name = raw.Name
 	m.ToolCallID = raw.ToolCallID
+	isToolRole := raw.Role == "tool" && raw.ToolCallID != ""
 
 	// Handle OpenAI assistant messages with tool_calls field
 	if len(raw.ToolCalls) > 0 {
 		var sb strings.Builder
 		for _, tc := range raw.ToolCalls {
 			fmt.Fprintf(&sb, "[Previous Tool Call: %s]\nArguments: %s\n\n", tc.Function.Name, tc.Function.Arguments)
+			m.ToolCalls = append(m.ToolCalls, ToolCallRecord{
+				ID:        tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			})
 		}
 		m.Content = strings.TrimSpace(sb.String())
 	}
 
 	if len(raw.Content) == 0 {
+		if isToolRole {
+			m.ToolResults = append(m.ToolResults, ToolResultRecord{ID: raw.ToolCallID})
+		}
 		return nil
 	}
 
 	// Handle null content (e.g. assistant message with tool_calls and content=null)
 	if string(raw.Content) == "null" {
+		if isToolRole {
+			m.ToolResults = append(m.ToolResults, ToolResultRecord{ID: raw.ToolCallID})
+		}
 		return nil
 	}
 
@@ -161,7 +218,8 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(raw.Content, &s); err == nil {
 		m.Content = s
 		// Convert tool role messages to formatted text
-		if m.Role == "tool" && m.ToolCallID != "" {
+		if isToolRole {
+			m.ToolResults = append(m.ToolResults, ToolResultRecord{ID: raw.ToolCallID, Content: s})
 			m.Content = fmt.Sprintf("[Tool Result (call_id: %s)]\n%s", m.ToolCallID, s)
 		}
 		return nil
@@ -176,17 +234,34 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	for _, block := range blocks {
 		blockType, _ := block["type"].(string)
 		switch blockType {
-		case "text":
+		case "text", "input_text", "output_text":
+			// The Responses API names the same block input_text on the way in
+			// and output_text on the way back.
 			if txt, ok := block["text"].(string); ok {
 				m.Content += txt
 			}
+		case "input_image":
+			// Responses format: {"type":"input_image","image_url":"data:image/png;base64,..."}
+			// The url is a bare string here, not the object Chat Completions
+			// wraps it in. A file_id reference is not supported, because this
+			// gateway serves no Files API to resolve it against.
+			if url, ok := block["image_url"].(string); ok {
+				m.appendImageURL(url)
+			}
 		case "image_url":
 			// OpenAI format: {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
-			if imgURL, ok := block["image_url"].(map[string]any); ok {
+			// The url may also be a remote https address, which the server
+			// layer fetches later because this package does no network I/O.
+			//
+			// Clients also send the url bare under this type, the way the
+			// Responses input_image block carries it. Both shapes name the same
+			// image, so both are read rather than one being dropped.
+			switch imgURL := block["image_url"].(type) {
+			case string:
+				m.appendImageURL(imgURL)
+			case map[string]any:
 				if url, ok := imgURL["url"].(string); ok {
-					if img := parseDataURL(url); img != nil {
-						m.Images = append(m.Images, *img)
-					}
+					m.appendImageURL(url)
 				}
 			}
 		case "image":
@@ -207,10 +282,14 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 		case "tool_use":
 			// Anthropic assistant message: previous tool call
 			name, _ := block["name"].(string)
+			id, _ := block["id"].(string)
 			input := block["input"]
+			arguments := ""
 			if inputBytes, err := json.Marshal(input); err == nil {
-				m.Content += fmt.Sprintf("\n[Previous Tool Call: %s]\nArguments: %s\n", name, string(inputBytes))
+				arguments = string(inputBytes)
+				m.Content += fmt.Sprintf("\n[Previous Tool Call: %s]\nArguments: %s\n", name, arguments)
 			}
+			m.ToolCalls = append(m.ToolCalls, ToolCallRecord{ID: id, Name: name, Arguments: arguments})
 		case "tool_result":
 			// Anthropic user message: tool result
 			toolUseID, _ := block["tool_use_id"].(string)
@@ -226,8 +305,22 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 					}
 				}
 			}
+			m.ToolResults = append(m.ToolResults, ToolResultRecord{ID: toolUseID, Content: resultContent})
 			m.Content += fmt.Sprintf("\n[Tool Result (call_id: %s)]\n%s\n", toolUseID, resultContent)
+		case "input_file", "file", "input_audio", "audio":
+			// The M365 backend accepts image attachments only, so these blocks
+			// cannot be forwarded. They were already skipped by falling through
+			// the switch; the case exists so the drop is visible in the log
+			// rather than looking like the client never sent anything.
+			logging.Debugf("Message.UnmarshalJSON: dropping unsupported %q content block", blockType)
 		}
+	}
+
+	// A tool role message whose content is a block array carries its result as
+	// text blocks rather than a tool_result block, so the record is built from
+	// the accumulated text instead.
+	if isToolRole && len(m.ToolResults) == 0 {
+		m.ToolResults = append(m.ToolResults, ToolResultRecord{ID: raw.ToolCallID, Content: m.Content})
 	}
 
 	return nil
@@ -315,10 +408,22 @@ func formatUUID(hex string) string {
 		hex[0:8], hex[8:12], hex[12:16], hex[16:20], hex[20:32])
 }
 
+// webSearchPlugins returns the built-in plugin list for a request. BingWebSearch
+// is the only server-side plugin the backend needs declared, and M365_ENABLE_WEB_SEARCH
+// turns it off for callers that want the model to answer from the conversation alone.
+func webSearchPlugins(enableWebSearch bool) []map[string]string {
+	if !enableWebSearch {
+		return []map[string]string{}
+	}
+	return []map[string]string{
+		{"Id": "BingWebSearch", "Source": "BuiltIn"},
+	}
+}
+
 // BuildPayload constructs a chat request payload for a single message.
 // When hasTools is true, code_interpreter option flags are stripped to prevent
 // M365 from intercepting file/code operations.
-func BuildPayload(hexSID, uuidSID, text, tone, gptOverride string, enableFileUpload, hasTools bool, extraOptions []string) (string, error) {
+func BuildPayload(hexSID, uuidSID, text, tone, gptOverride string, enableFileUpload, hasTools, enableWebSearch bool, extraOptions []string) (string, error) {
 	invocationID := uuid.New().String()
 	options := getOptions(enableFileUpload, false, hasTools, extraOptions)
 
@@ -328,21 +433,19 @@ func BuildPayload(hexSID, uuidSID, text, tone, gptOverride string, enableFileUpl
 		"target":       "chat",
 		"arguments": []map[string]any{
 			{
-				"source":                   "officeweb",
-				"clientCorrelationId":      hexSID,
-				"sessionId":                uuidSID,
-				"message":                  buildFullMessage(hexSID, text, nil),
-				"optionsSets":              options,
-				"streamingMode":            "ConciseWithPadding",
-				"spokenTextMode":           "None",
-				"options":                  map[string]any{},
-				"extraExtensionParameters": map[string]any{},
-				"allowedMessageTypes":      allowedMessageTypes,
-				"sliceIds":                 []string{},
-				"tone":                     tone,
-				"plugins": []map[string]string{
-					{"Id": "BingWebSearch", "Source": "BuiltIn"},
-				},
+				"source":                    "officeweb",
+				"clientCorrelationId":       hexSID,
+				"sessionId":                 uuidSID,
+				"message":                   buildFullMessage(hexSID, text, nil),
+				"optionsSets":               options,
+				"streamingMode":             "ConciseWithPadding",
+				"spokenTextMode":            "None",
+				"options":                   map[string]any{},
+				"extraExtensionParameters":  map[string]any{},
+				"allowedMessageTypes":       allowedMessageTypes,
+				"sliceIds":                  []string{},
+				"tone":                      tone,
+				"plugins":                   webSearchPlugins(enableWebSearch),
 				"isStartOfSession":          false,
 				"isSbsSupported":            true,
 				"renderReferencesBehindEOS": true,
@@ -366,6 +469,18 @@ func BuildPayload(hexSID, uuidSID, text, tone, gptOverride string, enableFileUpl
 	return string(data), nil
 }
 
+// IsSystemRole reports whether a role carries instructions rather than
+// conversation. OpenAI renamed the system role to developer for its reasoning
+// models and both names remain valid, so every site that treats a system
+// message specially has to accept the newer name too.
+func IsSystemRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "system", "developer":
+		return true
+	}
+	return false
+}
+
 func conversationTextForM365(messages []Message, includeHistory bool) string {
 	if len(messages) == 0 {
 		return ""
@@ -379,7 +494,7 @@ func conversationTextForM365(messages []Message, includeHistory bool) string {
 	lastConversationIndex := -1
 	conversationCount := 0
 	for index, message := range messages {
-		if message.Role == "system" || strings.TrimSpace(message.Content) == "" {
+		if IsSystemRole(message.Role) || strings.TrimSpace(message.Content) == "" {
 			continue
 		}
 		lastConversationIndex = index
@@ -392,7 +507,7 @@ func conversationTextForM365(messages []Message, includeHistory bool) string {
 	var flattened strings.Builder
 	flattened.WriteString("CLIENT-PROVIDED CONVERSATION HISTORY\n")
 	for index, message := range messages {
-		if message.Role == "system" || strings.TrimSpace(message.Content) == "" {
+		if IsSystemRole(message.Role) || strings.TrimSpace(message.Content) == "" {
 			continue
 		}
 		if index == lastConversationIndex {
@@ -415,7 +530,7 @@ func conversationTextForM365(messages []Message, includeHistory bool) string {
 // BuildConversationPayload constructs a chat request payload with conversation history.
 // When hasTools is true, code_interpreter option flags are stripped to prevent
 // M365 from intercepting file/code operations.
-func BuildConversationPayload(hexSID, uuidSID string, messages []Message, includeHistory bool, tone, gptOverride string, enableFileUpload, hasTools bool, extraOptions []string) (string, error) {
+func BuildConversationPayload(hexSID, uuidSID string, messages []Message, includeHistory bool, tone, gptOverride string, enableFileUpload, hasTools, enableWebSearch bool, extraOptions []string) (string, error) {
 	invocationID := uuid.New().String()
 
 	// Extract annotations from the last message (images are attached to the last user message)
@@ -433,7 +548,7 @@ func BuildConversationPayload(hexSID, uuidSID string, messages []Message, includ
 	// Prepending them to the last message ensures they reach the model.
 	var systemParts []string
 	for _, msg := range messages {
-		if msg.Role == "system" && strings.TrimSpace(msg.Content) != "" {
+		if IsSystemRole(msg.Role) && strings.TrimSpace(msg.Content) != "" {
 			systemParts = append(systemParts, msg.Content)
 		}
 	}
@@ -450,21 +565,19 @@ func BuildConversationPayload(hexSID, uuidSID string, messages []Message, includ
 		"target":       "chat",
 		"arguments": []map[string]any{
 			{
-				"source":                   "officeweb",
-				"clientCorrelationId":      hexSID,
-				"sessionId":                uuidSID,
-				"message":                  buildMinimalMessage(hexSID, lastText, annotations),
-				"optionsSets":              options,
-				"streamingMode":            "ConciseWithPadding",
-				"spokenTextMode":           "None",
-				"options":                  map[string]any{},
-				"extraExtensionParameters": map[string]any{},
-				"allowedMessageTypes":      allowedMessageTypes,
-				"sliceIds":                 []string{},
-				"tone":                     tone,
-				"plugins": []map[string]string{
-					{"Id": "BingWebSearch", "Source": "BuiltIn"},
-				},
+				"source":                    "officeweb",
+				"clientCorrelationId":       hexSID,
+				"sessionId":                 uuidSID,
+				"message":                   buildMinimalMessage(hexSID, lastText, annotations),
+				"optionsSets":               options,
+				"streamingMode":             "ConciseWithPadding",
+				"spokenTextMode":            "None",
+				"options":                   map[string]any{},
+				"extraExtensionParameters":  map[string]any{},
+				"allowedMessageTypes":       allowedMessageTypes,
+				"sliceIds":                  []string{},
+				"tone":                      tone,
+				"plugins":                   webSearchPlugins(enableWebSearch),
 				"isStartOfSession":          false,
 				"isSbsSupported":            true,
 				"renderReferencesBehindEOS": true,
