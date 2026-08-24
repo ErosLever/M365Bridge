@@ -67,6 +67,8 @@ func newProvisioningHandler(config *models.Config, provision func([]auth.SSOCook
 		secret = strings.TrimSpace(string(data))
 	}
 	if secret == "" {
+		logging.Warn("provisioning: M365_PROVISION_SECRET and M365_PROVISION_SECRET_FILE are both unset; " +
+			"/provision/v1/session is disabled and requests to it return 404 Not Found")
 		return handler, nil
 	}
 	if len(secret) < provisionSecretMinLength {

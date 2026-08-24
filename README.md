@@ -53,6 +53,8 @@ chmod 600 data/provision-secret
 
 Keep `data/provision-secret` private. The browser extension uses this secret to encrypt and authenticate session provisioning requests.
 
+Alternatively, `docker-compose.provision-secret.yml` reads the secret from a `M365_PROVISION_SECRET` shell variable instead of a file, via a [Compose secret](https://docs.docker.com/compose/how-tos/use-secrets/). Layer it in with `-f` (see [Optional: Encrypt cached tokens at rest](#optional-encrypt-cached-tokens-at-rest) for the same pattern applied to the master passphrase).
+
 #### Step 2: Build M365Bridge and package the extension
 
 Package the browser extension:
