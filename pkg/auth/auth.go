@@ -290,13 +290,8 @@ func (tm *TokenManager) writeRefreshToken(token string) error {
 
 // loadFromCache attempts to load a valid access token from cache.
 func (tm *TokenManager) loadFromCache() (string, error) {
-	data, err := os.ReadFile(tm.cacheFile)
-	if err != nil {
-		return "", err
-	}
-
 	var cache TokenCache
-	if err := json.Unmarshal(data, &cache); err != nil {
+	if err := readEncryptedJSON(tm.cacheFile, &cache); err != nil {
 		return "", err
 	}
 
@@ -312,14 +307,10 @@ func (tm *TokenManager) loadFromCache() (string, error) {
 //
 // The cache holds the access token by design; caching it is the whole point of
 // the file. It lives under the gitignored data/ tree, its directory is 0700 and
-// the file itself is 0600.
+// the file itself is 0600. The access token inside is encrypted at rest with
+// the same key that protects the refresh token, the same way and for the same
+// reason: it is a live credential, not just a pointer to one.
 func (tm *TokenManager) writeCache(cache TokenCache) error {
-	// #nosec G117
-	data, err := json.Marshal(cache)
-	if err != nil {
-		return err
-	}
-
 	// Ensure directory exists
 	dir := filepath.Dir(tm.cacheFile)
 	if dir != "" && dir != "." {
@@ -328,5 +319,38 @@ func (tm *TokenManager) writeCache(cache TokenCache) error {
 		}
 	}
 
-	return atomicWriteFile(tm.cacheFile, data, 0600)
+	return writeEncryptedJSON(tm.cacheFile, cache)
+}
+
+// readEncryptedJSON reads a file written by writeEncryptedJSON and decodes it
+// into v. A file left over from before caches were encrypted is plain JSON, so
+// a decryption failure falls back to decoding the bytes directly.
+func readEncryptedJSON(path string, v any) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	if plaintext, err := crypto.Decrypt(string(data)); err == nil {
+		data = []byte(plaintext)
+	}
+
+	return json.Unmarshal(data, v)
+}
+
+// writeEncryptedJSON marshals v to JSON and encrypts it before writing, so a
+// cached access token is never stored in the clear.
+func writeEncryptedJSON(path string, v any) error {
+	// #nosec G117
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	encrypted, err := crypto.Encrypt(string(data))
+	if err != nil {
+		return fmt.Errorf("failed to encrypt cache: %w", err)
+	}
+
+	return atomicWriteFile(path, []byte(encrypted), 0600)
 }

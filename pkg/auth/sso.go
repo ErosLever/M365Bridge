@@ -758,11 +758,10 @@ func (tm *TokenManager) GetDesignerToken() (string, error) {
 		ExpiresAt:   time.Now().Add(time.Duration(expiresIn) * time.Second).Unix(),
 	}
 	// The cache holds the designer access token by design; caching it is the
-	// whole point of the file. It lives under the gitignored data/ tree and is
-	// written 0600.
-	// #nosec G117
-	cacheData, _ := json.Marshal(cache)
-	if err := atomicWriteFile(designerTokenCacheFile, cacheData, 0600); err != nil {
+	// whole point of the file. It lives under the gitignored data/ tree, is
+	// written 0600, and the access token inside is encrypted at rest like the
+	// primary access-token cache.
+	if err := writeEncryptedJSON(designerTokenCacheFile, cache); err != nil {
 		logging.Errorf("GetDesignerToken: failed to write cache: %v", err)
 	}
 
@@ -773,12 +772,8 @@ func (tm *TokenManager) GetDesignerToken() (string, error) {
 // readDesignerTokenCache returns the cached designerapp token when it is still
 // valid for at least 60 more seconds.
 func readDesignerTokenCache() (string, bool) {
-	data, err := os.ReadFile(designerTokenCacheFile)
-	if err != nil {
-		return "", false
-	}
 	var cache designerTokenCache
-	if json.Unmarshal(data, &cache) != nil {
+	if readEncryptedJSON(designerTokenCacheFile, &cache) != nil {
 		return "", false
 	}
 	if time.Now().Unix() >= cache.ExpiresAt-60 {
