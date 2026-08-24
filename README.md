@@ -132,6 +132,24 @@ The bridge and provisioning endpoint are now available at `http://localhost:8230
 
 `M365_PROVISION_AUTHORITY` controls the Microsoft identity authority used for the initial browser provisioning flow. It defaults to `organizations`; set it to `common` or an exact tenant ID when required. The tenant ID derived from the resulting access token still becomes the runtime authority after provisioning.
 
+#### Optional: Encrypt cached tokens at rest
+
+By default, M365Bridge stores the AES key for cached refresh tokens in the clear at `data/tokens/encryption.key`. Setting a master passphrase wraps that key under a passphrase-derived key instead, storing only the wrapped result at `data/tokens/encryption.key.enc`.
+
+`docker-compose.secrets.yml` is an optional Compose override that enables this. It declares an env-sourced [Compose secret](https://docs.docker.com/compose/how-tos/use-secrets/): Compose reads the passphrase from `M365_MASTER_PASSPHRASE_VALUE` in the host shell and mounts it as a file at `/run/secrets/m365_master_passphrase` inside the container, so the value itself never appears in `environment:`, `docker inspect`, or `docker compose config` output.
+
+The `scripts/with-passphrase.sh` / `.ps1` wrapper scripts source a passphrase from the OS keychain (macOS Keychain, Linux Secret Service, Windows DPAPI) and set `M365_MASTER_PASSPHRASE_VALUE` for one command only, so it never lands in `.env` or a persistent shell variable:
+
+```bash
+scripts/with-passphrase.sh docker compose -f docker-compose.yml -f docker-compose.secrets.yml up -d
+```
+
+```powershell
+scripts\with-passphrase.ps1 docker compose -f docker-compose.yml -f docker-compose.secrets.yml up -d
+```
+
+Layering in `docker-compose.secrets.yml` requires `M365_MASTER_PASSPHRASE_VALUE` to be set in the environment (the wrapper scripts do this); Compose refuses to start the container otherwise, since it can't populate the secret. Without the override file, M365Bridge logs a warning and falls back to the plaintext key. If `data/tokens/encryption.key` already exists in plaintext from an earlier run, the first run with a passphrase configured migrates it automatically: the existing key is wrapped, the plaintext file is removed, and previously cached tokens keep decrypting correctly.
+
 #### Step 5: Provision the Microsoft 365 session
 
 Sign in to [https://m365.cloud.microsoft](https://m365.cloud.microsoft) in the browser where the extension is installed. Open the extension, enter `http://127.0.0.1:8230` and the value from `data/provision-secret`, then select **Provision M365Bridge**.
@@ -170,6 +188,8 @@ docker run -d \
 
 Replace `chrome-extension://<extension-id>` with the exact origin recorded in Step 3, then continue with Steps 5 and 6 above.
 
+`docker run` has no equivalent to Compose's env-sourced secrets; the [optional token encryption step](#optional-encrypt-cached-tokens-at-rest) is Compose-only. To encrypt cached tokens at rest under `docker run`, mount a passphrase file yourself and set `-e M365_MASTER_PASSPHRASE_FILE=<path inside the container>`.
+
 #### Notes
 
 - The `data/` directory stores tokens, cache, and configuration. It is created automatically on first run.
@@ -177,6 +197,7 @@ Replace `chrome-extension://<extension-id>` with the exact origin recorded in St
 - The container starts with `serve --port 8000` by default.
 - Browser provisioning uses the existing server port and does not require another published port.
 - To build the image from source instead of using the pre-built one: `docker compose up --build -d`
+- Without a master passphrase configured, `data/tokens/encryption.key` is a plaintext AES key; anyone who can read the `data/` directory can decrypt cached tokens. See [Optional: Encrypt cached tokens at rest](#optional-encrypt-cached-tokens-at-rest).
 
 ## Usage
 
