@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.4.9] - 2026-08-24
+
+### Changed
+- Keep every technical term in its original form in the Turkish documentation and in the Turkish interface catalog. `README.tr.md` translated terms the same document keeps in English elsewhere, so one term appeared under two names, and `web/src/locales/tr.json` showed the gate screen and the auth notice as `API anahtarı` while the same catalog kept `gateway`, `cookie` and `transcript`
+- Rename the two `README.tr.md` headings that a link points at, so neither starts with `İ`. That letter lowercases to `i` plus the combining mark U+0307, which an anchor written with a plain `i` never reaches
+
+### Fixed
+- Correct two `README.tr.md` sentences that stated the wrong fact: the `M365_CLIENT_ID` row said the access tokens are arranged rather than issued to the client, and the broker refresh token step read as "returned by the refresher" where the token is rotated by it
+
 ## [1.4.8] - 2026-08-24
 
 ### Added
