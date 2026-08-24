@@ -3,8 +3,8 @@
 package servers
 
 import (
-	"cmp"
 	"bytes"
+	"cmp"
 	"context"
 	// md5 is used only to derive cache file names and session ids, never as a
 	// security primitive.
