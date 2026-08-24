@@ -18,7 +18,7 @@
   "conversation.unnamed": "Adsız konuşma",
   "conversation.untitled": "Başlıksız",
 
-  "chat.transcriptsOff": "Transcript kaydı kapalı ({code}), bu yüzden geçmiş mesajlar yeniden çizilemiyor.",
+  "chat.transcriptsOff": "Transcript kaydı kapalı ({code}), bu yüzden geçmiş mesajlar gösterilemiyor.",
   "chat.empty": "Bir mesaj yazarak başla.",
   "chat.placeholder": "Mesaj yaz. Enter gönderir, Shift+Enter satır ekler.",
   "chat.send": "Gönder",
@@ -35,8 +35,8 @@
   "model.unknown": "{model} (listede yok)",
   "model.thinks": " · düşünür",
 
-  "gate.title": "API anahtarı",
-  "gate.body": "Bu gateway {keys} ile yapılandırılmış. Anahtar bu tarayıcıda bir cookie'de saklanır ve her istekte {header} başlığıyla gönderilir.",
+  "gate.title": "API key",
+  "gate.body": "Bu gateway {keys} ile yapılandırılmış. Key bu tarayıcıda bir cookie'de saklanır ve her istekte {header} header'ıyla gönderilir.",
   "gate.save": "Kaydet",
   "gate.passwordTitle": "Parola",
   "gate.passwordBody": "Bu arayüz {variable} ile korunuyor. Parola bu tarayıcıda bir cookie'de saklanır ve her istekte gönderilir.",
@@ -44,7 +44,7 @@
   "gate.enter": "Gir",
   "gate.rejected": "Kabul edilmedi. Yeniden dene.",
 
-  "notice.authRequired": "Bu gateway bir API anahtarı istiyor.",
+  "notice.authRequired": "Bu gateway bir API key istiyor.",
   "notice.foreignConversation": "Bu konuşma bu gateway dışında başlamış. Buradan devam edebilirsin, ya da geçmişini M365 sayfasından yükleyebilirsin.",
   "notice.renameBeforeSend": "Bu konuşma henüz gönderilmedi, adlandırmak için önce bir mesaj yaz."
 }
