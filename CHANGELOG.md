@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.4.7] - 2026-08-24
+
+### Fixed
+- Start a conversation in the browser interface when the gateway is reached over plain `http` on a LAN address. `crypto.randomUUID` carries `[SecureContext]` in the Web Cryptography IDL, so a browser outside a trusted origin does not carry it and naming a new session threw. The interface worked behind TLS and on `localhost`, which is why the failure only appeared on a deployment. The session id now comes from `getRandomValues`, the one member of `Crypto` an insecure context still offers, and falls back to a timestamp only where neither exists
+
 ## [1.4.6] - 2026-08-23
 
 ### Added
