@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.4.8] - 2026-08-24
+
+### Added
+- Route a Codex `compaction_trigger` item in a `/v1/responses` input to `/v1/responses/compact`. Codex sends that item when it wants a conversation compacted; without the routing the request was answered as an ordinary turn, which consumed a message from the conversation quota and returned an answer instead of a summary. The item is also skipped during message conversion, so a stray trigger never reaches the prompt
+
+### Changed
+- Rewrite `README.md` and `README.tr.md` around one setup chapter
+
+### Fixed
+- Print the same browser snippet in the setup wizard that both READMEs document
+
 ## [1.4.7] - 2026-08-24
 
 ### Fixed
