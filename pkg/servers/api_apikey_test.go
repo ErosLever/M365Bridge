@@ -64,3 +64,40 @@ func TestAuthRejectsMissingAndWrongKeys(t *testing.T) {
 		t.Fatalf("empty bearer: status = %d, want 401", got)
 	}
 }
+
+// The comparison itself is constant-time, so the only other lever a caller has
+// is trying enough guesses. This pins that withAuth eventually locks it out.
+func TestWithAuthLocksOutRepeatedInvalidKeys(t *testing.T) {
+	api := &APIServer{config: &models.Config{APIKeys: []string{"good-key"}}}
+	handler := api.withAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrongAttempt := func() int {
+		request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		request.RemoteAddr = "203.0.113.1:12345"
+		request.Header.Set("X-API-Key", "wrong")
+		recorder := httptest.NewRecorder()
+		handler(recorder, request)
+		return recorder.Code
+	}
+
+	for i := 0; i < authFailureLimit; i++ {
+		if got := wrongAttempt(); got != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401", i, got)
+		}
+	}
+	if got := wrongAttempt(); got != http.StatusTooManyRequests {
+		t.Fatalf("after %d failures: status = %d, want 429", authFailureLimit, got)
+	}
+
+	// A different remote address is unaffected by another caller's failures.
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	request.RemoteAddr = "203.0.113.2:12345"
+	request.Header.Set("X-API-Key", "good-key")
+	recorder := httptest.NewRecorder()
+	handler(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("a different address: status = %d, want 200", recorder.Code)
+	}
+}

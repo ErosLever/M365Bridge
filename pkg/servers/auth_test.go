@@ -168,6 +168,41 @@ func TestWithAuthStillRefusesAnUnknownCredential(t *testing.T) {
 	}
 }
 
+// A wrong password tried enough times locks the remote address out of
+// /v1/auth/verify, on top of the constant-time comparison the route already
+// makes to avoid answering a guess faster than a right one.
+func TestAuthVerifyLocksOutRepeatedInvalidCredentials(t *testing.T) {
+	api := authServer("letmein")
+
+	wrongAttempt := func() int {
+		req := httptest.NewRequest(http.MethodPost, "/v1/auth/verify", nil)
+		req.RemoteAddr = "203.0.113.1:12345"
+		req.Header.Set("Authorization", "Bearer nope")
+		rec := httptest.NewRecorder()
+		api.handleAuthVerify(rec, req)
+		return rec.Code
+	}
+
+	for i := 0; i < authFailureLimit; i++ {
+		if got := wrongAttempt(); got != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401", i, got)
+		}
+	}
+	if got := wrongAttempt(); got != http.StatusTooManyRequests {
+		t.Fatalf("after %d failures: status = %d, want 429", authFailureLimit, got)
+	}
+
+	// The right password from a different address is unaffected.
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/verify", nil)
+	req.RemoteAddr = "203.0.113.2:12345"
+	req.Header.Set("Authorization", "Bearer letmein")
+	rec := httptest.NewRecorder()
+	api.handleAuthVerify(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a different address: status = %d, want 200", rec.Code)
+	}
+}
+
 // A password with no API key gates the interface and leaves the API open, which
 // is what an empty key list means everywhere else. This pins that choice so it
 // cannot change by accident.

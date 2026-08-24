@@ -85,7 +85,14 @@ func (api *APIServer) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if api.authFailures.limited(r.RemoteAddr) {
+		logging.Warnf("Auth: %s locked out of /v1/auth/verify after repeated invalid credentials", r.RemoteAddr)
+		api.sendError(w, http.StatusTooManyRequests, "Too many invalid credentials; try again later")
+		return
+	}
+
 	if slices.ContainsFunc(apiKeyCandidates(r), api.isValidAPIKey) {
+		api.authFailures.clear(r.RemoteAddr)
 		api.sendJSON(w, http.StatusOK, map[string]any{
 			"object":        "auth.verification",
 			"authenticated": true,
@@ -94,6 +101,7 @@ func (api *APIServer) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	api.authFailures.recordFailure(r.RemoteAddr)
 	logging.Warnf("Auth: rejected a credential offered to /v1/auth/verify from %s", r.RemoteAddr)
 	api.sendError(w, http.StatusUnauthorized, "Invalid credential")
 }

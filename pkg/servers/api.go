@@ -297,6 +297,11 @@ type APIServer struct {
 	// a 429 instead of an unexplained empty response.
 	throttlingMu   sync.RWMutex
 	lastThrottling *client.ThrottlingInfo
+
+	// authFailures locks out a remote address that offers too many invalid
+	// credentials to withAuth or /v1/auth/verify. The comparisons themselves are
+	// constant-time, so this is what bounds the number of guesses a caller gets.
+	authFailures failureLimiter
 }
 
 // noteThrottling records the quota counters carried by a final stream chunk.
@@ -468,6 +473,11 @@ func (api *APIServer) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if len(api.config.APIKeys) > 0 {
+			if api.authFailures.limited(r.RemoteAddr) {
+				logging.Warnf("Auth: %s locked out after repeated invalid API keys", r.RemoteAddr)
+				api.sendError(w, http.StatusTooManyRequests, "Too many invalid credentials; try again later")
+				return
+			}
 			offered := apiKeyCandidates(r)
 			if len(offered) == 0 {
 				logging.Warnf("Auth: no API key header from %s", r.RemoteAddr)
@@ -475,10 +485,12 @@ func (api *APIServer) withAuth(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			if !slices.ContainsFunc(offered, api.isValidAPIKey) {
+				api.authFailures.recordFailure(r.RemoteAddr)
 				logging.Warnf("Auth: invalid API key from %s", r.RemoteAddr)
 				api.sendError(w, http.StatusUnauthorized, "Invalid API key")
 				return
 			}
+			api.authFailures.clear(r.RemoteAddr)
 		}
 		next(w, r)
 	}
