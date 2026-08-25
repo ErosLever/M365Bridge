@@ -553,10 +553,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 
 		toolCalls := []ToolCall{}
 		seenImages := map[string]bool{}
-		// accText is a Builder because a turn arrives as hundreds of appends,
-		// but a snapshot replaces the whole accumulation rather than extending
-		// it, which is why Reset appears alongside WriteString.
-		var accText strings.Builder
+		var acc answerAccumulator
 		var accThinking strings.Builder
 		// citations holds back a citation run that has not finished arriving,
 		// because a delta already emitted cannot be retracted.
@@ -666,11 +663,8 @@ func (c *M365Client) ChatConversationStreamGenContext(
 														}
 														// Extract generated image URLs from contentGenerationProgressList
 														if co, _ := msgMap["contentOrigin"].(string); co == "ImageGeneration" {
-															if imgMD := extractImageGenerationMarkdown(msgMap, seenImages); imgMD != "" {
-																accText.WriteString(imgMD)
-																if !emit(StreamChunk{Text: imgMD, IsFinal: false}) {
-																	return
-																}
+															if !acc.emitGeneratedImage(msgMap, seenImages, emit) {
+																return
 															}
 														}
 														// Extract web search tool calls from searchQueries field
@@ -698,9 +692,8 @@ func (c *M365Client) ChatConversationStreamGenContext(
 														// streaming filter, and stays comparable with
 														// the accumulation that was already filtered.
 														newText = stripCitations(newText)
-														if chunk, advanced := snapshotDelta(accText.String(), newText); advanced {
-															accText.Reset()
-															accText.WriteString(newText)
+														if chunk, advanced := snapshotDelta(acc.baseline(), newText); advanced {
+															acc.replaceAnswer(newText)
 															if chunk != "" {
 																if !emit(StreamChunk{Text: chunk, IsFinal: false}) {
 																	return
@@ -717,7 +710,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 										// filter holds the tail back rather than emitting
 										// text it would have to retract.
 										if emitText := citations.push(writeAtCursor); emitText != "" {
-											accText.WriteString(emitText)
+											acc.appendAnswer(emitText)
 											if !emit(StreamChunk{Text: emitText, IsFinal: false}) {
 												return
 											}
@@ -738,8 +731,8 @@ func (c *M365Client) ChatConversationStreamGenContext(
 							// Text already on the wire cannot be retracted, so a
 							// partial answer is delivered rather than replaced by
 							// an error.
-							if accText.Len() > 0 {
-								logging.Warnf("ChatConversationStreamGen: %v, keeping the %d bytes already emitted", failure, accText.Len())
+							if acc.emittedBytes() > 0 {
+								logging.Warnf("ChatConversationStreamGen: %v, keeping the %d bytes already emitted", failure, acc.emittedBytes())
 							} else {
 								logging.Errorf("ChatConversationStreamGen: %v", failure)
 								emit(StreamChunk{Error: failure})
@@ -754,7 +747,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 					if held := citations.flush(); held != "" {
 						logging.Warnf("ChatConversationStreamGen: dropped %d bytes of an unterminated citation marker", len(held))
 					}
-					if emptyTurn(accText.String(), toolCalls) {
+					if acc.emptyTurn(toolCalls) {
 						logging.Errorf("ChatConversationStreamGen: %v (thinking=%d bytes)", ErrEmptyTurn, accThinking.Len())
 						emit(StreamChunk{Error: ErrEmptyTurn})
 						return
@@ -854,11 +847,68 @@ func (c *M365Client) sendRecv(conn *websocket.Conn, payload string) (string, err
 	}
 }
 
+// answerAccumulator tracks what a turn has already put on the wire.
+//
+// It keeps two things apart on purpose. The answer is what the backend itself
+// restates in a snapshot, and it is the only thing snapshotDelta may compare
+// against. Injected text is what this package adds, today the generated-image
+// markdown, and a snapshot never carries it: counting it into the baseline made
+// the first snapshot diverge, and the opening words of the answer went with it.
+type answerAccumulator struct {
+	// answer is a Builder because a turn arrives as hundreds of appends.
+	answer strings.Builder
+	// injected counts bytes emitted that no snapshot restates.
+	injected int
+}
+
+// appendAnswer records answer text that went out as a delta.
+func (a *answerAccumulator) appendAnswer(text string) {
+	a.answer.WriteString(text)
+}
+
+// replaceAnswer adopts a snapshot as the new baseline, because a snapshot
+// restates the whole answer rather than extending it.
+func (a *answerAccumulator) replaceAnswer(text string) {
+	a.answer.Reset()
+	a.answer.WriteString(text)
+}
+
+// inject records bytes this package emitted that no snapshot restates.
+func (a *answerAccumulator) inject(n int) {
+	a.injected += n
+}
+
+// emitGeneratedImage forwards the generated-image link a message carries, if it
+// carries one this turn has not sent yet. It reports whether the caller may keep
+// streaming.
+//
+// The link is recorded with inject rather than appendAnswer. A snapshot restates
+// the answer alone and never this link, so a baseline holding it makes the first
+// snapshot diverge and the answer's opening words are dropped with it.
+func (a *answerAccumulator) emitGeneratedImage(msg map[string]any, seenImages map[string]bool, emit func(StreamChunk) bool) bool {
+	imgMD := extractImageGenerationMarkdown(msg, seenImages)
+	if imgMD == "" {
+		return true
+	}
+	a.inject(len(imgMD))
+	return emit(StreamChunk{Text: imgMD, IsFinal: false})
+}
+
+// baseline returns the text a snapshot must be compared against.
+func (a *answerAccumulator) baseline() string {
+	return a.answer.String()
+}
+
+// emittedBytes returns everything that went out, injected text included.
+func (a *answerAccumulator) emittedBytes() int {
+	return a.answer.Len() + a.injected
+}
+
 // emptyTurn reports whether a finished turn produced nothing the caller can
-// use. Generated images and web-search queries both reach accText, so text is
-// the only content channel that has to be checked alongside the tool calls.
-func emptyTurn(accText string, toolCalls []ToolCall) bool {
-	return accText == "" && len(toolCalls) == 0
+// use. A turn that answered with an image and no words still produced
+// something, which is why the injected count is read here.
+func (a *answerAccumulator) emptyTurn(toolCalls []ToolCall) bool {
+	return a.emittedBytes() == 0 && len(toolCalls) == 0
 }
 
 // parseTurnResult reports the backend's verdict on a finished turn, or nil when

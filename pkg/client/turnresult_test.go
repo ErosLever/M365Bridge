@@ -95,13 +95,26 @@ func TestTurnFailureRejectsAnUnrelatedError(t *testing.T) {
 // verdict frame. The check must not fire on a turn that produced either one,
 // because that would turn a working answer into an error.
 func TestEmptyTurnDetectsATurnWithNothingToReturn(t *testing.T) {
-	if !emptyTurn("", nil) {
+	var empty answerAccumulator
+	if !empty.emptyTurn(nil) {
 		t.Error("a turn with no text and no tool call was reported as usable")
 	}
-	if emptyTurn("an answer", nil) {
+
+	var answered answerAccumulator
+	answered.appendAnswer("an answer")
+	if answered.emptyTurn(nil) {
 		t.Error("a turn that produced text was reported as empty")
 	}
-	if emptyTurn("", []ToolCall{{Function: ToolCallFunction{Name: "search"}}}) {
+
+	var called answerAccumulator
+	if called.emptyTurn([]ToolCall{{Function: ToolCallFunction{Name: "search"}}}) {
 		t.Error("a turn that produced a tool call was reported as empty")
+	}
+
+	// A turn that answered with an image and no words still produced something.
+	var pictured answerAccumulator
+	pictured.inject(len("\n\n![image](https://example.test/a.png)\n\n"))
+	if pictured.emptyTurn(nil) {
+		t.Error("a turn that produced only an image was reported as empty")
 	}
 }
