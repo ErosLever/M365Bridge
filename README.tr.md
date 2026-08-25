@@ -4,7 +4,7 @@
 [![Release](https://github.com/KilimcininKorOglu/M365Bridge/actions/workflows/release.yml/badge.svg)](https://github.com/KilimcininKorOglu/M365Bridge/actions/workflows/release.yml)
 [![Version](https://img.shields.io/github/v/release/KilimcininKorOglu/M365Bridge)](https://github.com/KilimcininKorOglu/M365Bridge/releases)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/KilimcininKorOglu/M365Bridge/pkgs/container/m365bridge)
-[![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.26.6%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-412991)](#api-endpointleri)
 [![Anthropic Compatible](https://img.shields.io/badge/API-Anthropic%20Compatible-D97757?logo=anthropic&logoColor=white)](#api-endpointleri)
 
@@ -26,7 +26,7 @@ Copilot'un herkese açık bir API'si yok. Kendi web istemcisiyle bir SignalR Web
 
 - **Microsoft 365 Copilot lisansı.** Copilot erişimi olan bir business veya enterprise hesabı. Copilot Chat (temel) hesabı da test edildi.
 - [m365.cloud.microsoft](https://m365.cloud.microsoft) adresinde **oturum açmış bir tarayıcı**. Kurulum sırasında kimlik bilgilerini bir kez buradan alacaksınız.
-- **Docker**, ya da kaynaktan derleyecekseniz **Go 1.26+**. Go 1.21 ve sonrası da çalışır: ilk derlemede 1.26 toolchain'ini kendisi indirir, `GOTOOLCHAIN` değeri `local` yapılmadığı sürece.
+- **Docker**, ya da kaynaktan derleyecekseniz **Go 1.26.6+**. Go 1.21 ve sonrası da çalışır: ilk derlemede 1.26.6 toolchain'ini kendisi indirir, `GOTOOLCHAIN` değeri `local` yapılmadığı sürece. Patch seviyesi gerekliliğin parçasıdır: 1.26.6 öncesi her sürüm, bu servisin kendi HTTP ve TLS yollarından ulaştığı standart kütüphane açıklarını taşır.
 
 ## Özellikler
 

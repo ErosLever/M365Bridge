@@ -4,7 +4,7 @@
 [![Release](https://github.com/KilimcininKorOglu/M365Bridge/actions/workflows/release.yml/badge.svg)](https://github.com/KilimcininKorOglu/M365Bridge/actions/workflows/release.yml)
 [![Version](https://img.shields.io/github/v/release/KilimcininKorOglu/M365Bridge)](https://github.com/KilimcininKorOglu/M365Bridge/releases)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/KilimcininKorOglu/M365Bridge/pkgs/container/m365bridge)
-[![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.26.6%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-412991)](#api-endpoints)
 [![Anthropic Compatible](https://img.shields.io/badge/API-Anthropic%20Compatible-D97757?logo=anthropic&logoColor=white)](#api-endpoints)
 
@@ -26,7 +26,7 @@ Copilot has no public API. It talks to its own web client over a SignalR WebSock
 
 - A **Microsoft 365 Copilot license**. A business or enterprise account with Copilot access. A Copilot Chat (basic) account has also been tested.
 - A **browser signed in** to [m365.cloud.microsoft](https://m365.cloud.microsoft). You will collect credentials from it once during setup.
-- **Docker**, or **Go 1.26+** if you build from source. Go 1.21 and newer also work, because they download the 1.26 toolchain on the first build, unless `GOTOOLCHAIN` is set to `local`.
+- **Docker**, or **Go 1.26.6+** if you build from source. Go 1.21 and newer also work, because they download the 1.26.6 toolchain on the first build, unless `GOTOOLCHAIN` is set to `local`. The patch level is part of the requirement: every release before 1.26.6 carries standard-library vulnerabilities this service reaches through its own HTTP and TLS paths.
 
 ## Features
 
