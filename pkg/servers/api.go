@@ -288,9 +288,12 @@ type APIServer struct {
 	// redraw a conversation. It is nil when the interface is disabled, which
 	// is what keeps message content off disk in a plain gateway deployment.
 	transcripts *TranscriptStore
-	server      *http.Server
-	stopCh      chan struct{}
-	mu          sync.RWMutex
+	// imageRefs resolves the references routeGeneratedImages mints for the
+	// generated-image addresses it takes out of an answer.
+	imageRefs *imageRefStore
+	server    *http.Server
+	stopCh    chan struct{}
+	mu        sync.RWMutex
 
 	// throttlingMu guards lastThrottling, which holds the most recent quota
 	// counters M365 reported. Handlers read it to turn an exhausted quota into
@@ -325,6 +328,7 @@ func NewAPIServer(config *models.Config, tokenManager *auth.TokenManager) *APISe
 		config:       config,
 		tokenManager: tokenManager,
 		ctxCache:     NewContextCache(contextCacheDir),
+		imageRefs:    newImageRefStore(),
 	}
 	if config.EnableWebUI {
 		api.transcripts = NewTranscriptStore(transcriptDir)
@@ -369,6 +373,9 @@ func (api *APIServer) Start(port int) error {
 	mux.HandleFunc("/v1/complete", api.withAuth(api.handleAnthropicComplete))
 	mux.HandleFunc("/v1/images/generations", api.withAuth(api.handleImageGenerations))
 	mux.HandleFunc("/v1/images/edits", api.withAuth(api.handleImageEdits))
+	// A generated image the gateway put in an answer. The two routes above are
+	// exact patterns, so the longest match keeps them on their own handlers.
+	mux.HandleFunc("/v1/images/", api.withAuth(api.handleGeneratedImage))
 	mux.HandleFunc("/v1/conversations", api.withAuth(api.handleConversations))
 	mux.HandleFunc("/v1/conversations/", api.withAuth(api.handleConversation))
 	// Session routes expose conversation IDs, so they stay behind the API key
@@ -1978,6 +1985,7 @@ func (api *APIServer) nonStreamAnthropicComplete(w http.ResponseWriter, messages
 		api.sendUpstreamError(w, "completion", err)
 		return
 	}
+	respText = api.routeGeneratedImages(respText)
 
 	// The completion ends where the caller said it ends. Reporting
 	// stop_sequence while still returning the text past the sequence would
@@ -2095,6 +2103,8 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 			finalToolCalls = chunk.ToolCalls
 			break
 		}
+
+		chunk.Text = api.routeGeneratedImages(chunk.Text)
 
 		// The Complete wire format carries no thinking block, so reasoning is
 		// counted for the usage object but never emitted.
@@ -2231,6 +2241,11 @@ func (api *APIServer) streamChatCompletions(ctx context.Context, w http.Response
 			finalToolCalls = chunk.ToolCalls
 			break
 		}
+
+		// A generated image arrives as a link to an address the browser cannot
+		// fetch, so it is rewritten to a route on this gateway before it goes
+		// out. The link arrives as a chunk of its own, so it is never split.
+		chunk.Text = api.routeGeneratedImages(chunk.Text)
 
 		// Send thinking as reasoning_content (OpenAI extended thinking format)
 		if chunk.Thinking != "" {
@@ -2489,6 +2504,7 @@ func (api *APIServer) nonStreamChatCompletions(w http.ResponseWriter, messages [
 		api.sendUpstreamError(w, "chat", err)
 		return
 	}
+	respText = api.routeGeneratedImages(respText)
 
 	toolCalls, finishReason = withoutBackendToolCalls(toolCalls, finishReason)
 	// The transport thinking filter belongs to simulated mode only, where the
@@ -2711,6 +2727,8 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 			finalToolCalls = chunk.ToolCalls
 			break
 		}
+
+		chunk.Text = api.routeGeneratedImages(chunk.Text)
 
 		// Handle thinking content
 		if chunk.Thinking != "" {
@@ -3038,6 +3056,7 @@ func (api *APIServer) nonStreamAnthropicMessages(w http.ResponseWriter, messages
 		api.sendUpstreamError(w, "chat", err)
 		return
 	}
+	respText = api.routeGeneratedImages(respText)
 
 	toolCalls, finishReason = withoutBackendToolCalls(toolCalls, finishReason)
 	// The transport thinking filter belongs to simulated mode only, where the
@@ -3251,6 +3270,8 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 			break
 		}
 
+		chunk.Text = api.routeGeneratedImages(chunk.Text)
+
 		// Accumulate thinking text (not sent as content for text_completion)
 		if chunk.Thinking != "" {
 			thinkingBuilder.WriteString(chunk.Thinking)
@@ -3385,6 +3406,7 @@ func (api *APIServer) nonStreamCompletions(w http.ResponseWriter, messages []pay
 		api.sendUpstreamError(w, "completion", err)
 		return
 	}
+	respText = api.routeGeneratedImages(respText)
 
 	toolCalls, finishReason = withoutBackendToolCalls(toolCalls, finishReason)
 
@@ -6191,7 +6213,7 @@ func (api *APIServer) nonStreamResponses(
 		api.sendUpstreamError(w, "chat", err)
 		return
 	}
-	respText := result.text
+	respText := api.routeGeneratedImages(result.text)
 	thinking := result.thinking
 	toolCalls := result.toolCalls
 	finishReason := result.finishReason
@@ -6548,6 +6570,8 @@ func (api *APIServer) streamResponses(
 			finalConvID = chunk.ConversationID
 			break
 		}
+
+		chunk.Text = api.routeGeneratedImages(chunk.Text)
 
 		// Stream reasoning live. Under simulated tool calling it is filtered so
 		// the transport envelope never leaks; otherwise it passes through raw.
@@ -7732,27 +7756,37 @@ func (api *APIServer) validateImageDownloadURL(rawURL string) error {
 }
 
 // downloadAndBase64 downloads an image from a designerapp URL and returns its
-// base64-encoded content. designerapp URLs require a JWE access token (acquired
-// via SSO cookies with the M365 web app client_id) and the fileToken query
-// parameter sent as a header.
+// base64-encoded content.
 func (api *APIServer) downloadAndBase64(imageURL string) (string, error) {
-	if err := api.validateImageDownloadURL(imageURL); err != nil {
-		logging.Errorf("downloadAndBase64: refusing download: %v", err)
+	body, _, err := api.downloadImage(imageURL)
+	if err != nil {
 		return "", err
 	}
-	logging.Infof("downloadAndBase64: downloading image from %s", imageURL[:min(100, len(imageURL))])
+	return base64.StdEncoding.EncodeToString(body), nil
+}
+
+// downloadImage downloads an image from a designerapp URL and returns its bytes
+// with the content type the server reported. designerapp URLs require a JWE
+// access token (acquired via SSO cookies with the M365 web app client_id) and
+// the fileToken query parameter sent as a header.
+func (api *APIServer) downloadImage(imageURL string) ([]byte, string, error) {
+	if err := api.validateImageDownloadURL(imageURL); err != nil {
+		logging.Errorf("downloadImage: refusing download: %v", err)
+		return nil, "", err
+	}
+	logging.Infof("downloadImage: downloading image from %s", imageURL[:min(100, len(imageURL))])
 	parsedURL, err := neturl.Parse(imageURL)
 	if err != nil {
-		logging.Errorf("downloadAndBase64: invalid URL: %v", err)
-		return "", fmt.Errorf("invalid image URL: %w", err)
+		logging.Errorf("downloadImage: invalid URL: %v", err)
+		return nil, "", fmt.Errorf("invalid image URL: %w", err)
 	}
 
 	// Extract fileToken from query params and remove it from the URL
 	query := parsedURL.Query()
 	fileToken := query.Get("fileToken")
 	if fileToken == "" {
-		logging.Errorf("downloadAndBase64: no fileToken in URL")
-		return "", fmt.Errorf("no fileToken in image URL")
+		logging.Errorf("downloadImage: no fileToken in URL")
+		return nil, "", fmt.Errorf("no fileToken in image URL")
 	}
 	query.Del("fileToken")
 	parsedURL.RawQuery = query.Encode()
@@ -7761,7 +7795,7 @@ func (api *APIServer) downloadAndBase64(imageURL string) (string, error) {
 	// Acquire designerapp access token via SSO cookies
 	token, err := api.tokenManager.GetDesignerToken()
 	if err != nil {
-		return "", fmt.Errorf("failed to acquire designer token: %w", err)
+		return nil, "", fmt.Errorf("failed to acquire designer token: %w", err)
 	}
 
 	// cleanURL comes from the URL validateImageDownloadURL already cleared at
@@ -7769,7 +7803,7 @@ func (api *APIServer) downloadAndBase64(imageURL string) (string, error) {
 	// #nosec G704
 	req, err := http.NewRequest("GET", cleanURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create image request: %w", err)
+		return nil, "", fmt.Errorf("failed to create image request: %w", err)
 	}
 	req.Header.Set("Authorization", token)
 	req.Header.Set("filetoken", fileToken)
@@ -7789,7 +7823,7 @@ func (api *APIServer) downloadAndBase64(imageURL string) (string, error) {
 	// #nosec G704
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("download failed: %w", err)
+		return nil, "", fmt.Errorf("download failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -7801,21 +7835,28 @@ func (api *APIServer) downloadAndBase64(imageURL string) (string, error) {
 		failReason := resp.Header.Get("X-Failurereason")
 		logging.Errorf("Image download failed: status=%d, x-errorcode=%s, x-failurereason=%s, body=%s",
 			resp.StatusCode, errCode, failReason, string(body)[:min(200, len(body))])
-		return "", fmt.Errorf("download returned status %d: x-errorcode=%s, x-failurereason=%s", resp.StatusCode, errCode, failReason)
+		return nil, "", fmt.Errorf("download returned status %d: x-errorcode=%s, x-failurereason=%s", resp.StatusCode, errCode, failReason)
 	}
 
 	// One extra byte distinguishes "exactly at the limit" from "truncated".
 	body, err := io.ReadAll(io.LimitReader(resp.Body, remoteImageMaxBytes+1))
 	if err != nil {
-		logging.Errorf("downloadAndBase64: failed to read body: %v", err)
-		return "", fmt.Errorf("failed to read response body: %w", err)
+		logging.Errorf("downloadImage: failed to read body: %v", err)
+		return nil, "", fmt.Errorf("failed to read response body: %w", err)
 	}
 	if len(body) > remoteImageMaxBytes {
-		return "", fmt.Errorf("generated image exceeds %d bytes", remoteImageMaxBytes)
+		return nil, "", fmt.Errorf("generated image exceeds %d bytes", remoteImageMaxBytes)
 	}
 
-	logging.Infof("downloadAndBase64: success, size=%d bytes", len(body))
-	return base64.StdEncoding.EncodeToString(body), nil
+	// A designerapp response states its own type. An answer without one is
+	// treated as PNG, which is what this backend has been observed to return.
+	contentType := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(contentType, "image/") {
+		contentType = "image/png"
+	}
+
+	logging.Infof("downloadImage: success, size=%d bytes type=%s", len(body), contentType)
+	return body, contentType, nil
 }
 
 // fmtAtoi parses an int from a string without importing strconv.

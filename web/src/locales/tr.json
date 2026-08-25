@@ -32,6 +32,9 @@
   "message.showThinking": "Düşünceyi göster",
   "message.hideThinking": "Düşünceyi gizle",
 
+  "image.loading": "Görsel yükleniyor…",
+  "image.missing": "Bu görsele artık ulaşılamıyor.",
+
   "model.unknown": "{model} (listede yok)",
   "model.thinks": " · düşünür",
 

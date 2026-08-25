@@ -335,6 +335,24 @@ body {
   margin-left: 4px;
 }
 
+/* A generated image is wider than the bubble, so it scales down to it. */
+.generated-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 10px 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+/* Stands in for the image while it downloads, and when it is gone. */
+.generated-image-note {
+  display: inline-block;
+  margin: 10px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .markdown code {
   padding: 1px 5px;
   border-radius: 4px;

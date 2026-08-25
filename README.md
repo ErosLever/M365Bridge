@@ -649,6 +649,7 @@ Anthropic's top-level `system` field is accepted as a string or as an array of t
 | `POST /v1/complete`                   | Anthropic Complete                                     |
 | `POST /v1/images/generations`         | Generate an image from text                            |
 | `POST /v1/images/edits`               | Edit an existing image                                 |
+| `GET /v1/images/{ref}`                | An image generated in a chat answer                    |
 | `GET /v1/conversations`               | List M365 conversations; needs the M365 web cookies    |
 | `POST /v1/conversations`              | Create a conversation with an initial message          |
 | `PATCH /v1/conversations/{id}`        | Rename a conversation with `{"name": "..."}`           |
@@ -1188,7 +1189,17 @@ Anthropic `image` blocks carry base64 data directly and are unaffected.
 
 ## Image generation
 
-The proxy exposes Copilot's Microsoft Designer image generation as OpenAI Images API endpoints:
+An image can also come out of an ordinary chat turn. Asking for one in `/v1/chat/completions`, `/v1/messages`, `/v1/completions` or `/v1/responses` puts a markdown image link in the answer, and the image stays part of the conversation, so the next turn can ask for a change to it.
+
+The address M365 puts in that link cannot be fetched by whoever reads the answer: the download needs the designer access token in `Authorization` plus the `fileToken` as its own header, and an `<img>` element sends neither. So the proxy replaces the address with a route of its own before the answer goes out, and downloads the image itself when that route is called:
+
+```
+![image](/v1/images/2f1c8b7e-...)
+```
+
+The path is root-relative, so a client resolves it against the base URL it already uses, and it sits behind the API key like every other `/v1` route. The reference is minted by the proxy and lives in memory: a restart drops it, and it expires on its own after twelve hours, which is also roughly how long the address behind it stays valid. A reference the proxy no longer holds answers `404 image_not_found`, and the browser interface shows a short note in place of the image. An address the [host allowlist](#host-allowlist) refuses is removed from the answer rather than passed on, for the reason a generated URL is never handed to a client directly.
+
+The separate Images API endpoints stay one-shot and return the image data itself:
 
 - `POST /v1/images/generations`, JSON body, generates from a text prompt
 - `POST /v1/images/edits`, multipart form, edits existing images; up to 16 through repeated `image` fields

@@ -32,6 +32,9 @@
   "message.showThinking": "Show the thinking",
   "message.hideThinking": "Hide the thinking",
 
+  "image.loading": "Loading the image…",
+  "image.missing": "This image is no longer available.",
+
   "model.unknown": "{model} (not in the list)",
   "model.thinks": " · thinks",
 

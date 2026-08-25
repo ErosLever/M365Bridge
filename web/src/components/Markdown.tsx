@@ -1,5 +1,9 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { GatewayImage } from './GatewayImage'
+
+/** The route the gateway rewrites a generated-image address to. */
+const generatedImagePrefix = '/v1/images/'
 
 /**
  * Renders an answer as markdown.
@@ -24,6 +28,22 @@ export function Markdown({ text }: { text: string }) {
             return (
               <a href={props.href} title={props.title} target="_blank" rel="noreferrer">
                 {props.children}
+              </a>
+            )
+          },
+          // A generated image is served by this gateway under a reference of
+          // its own. Every other address is shown as a link instead of an
+          // image, because rendering it would make the page fetch an asset
+          // from somewhere else at runtime, which this interface never does.
+          img(props) {
+            const src = typeof props.src === 'string' ? props.src : ''
+            const alt = typeof props.alt === 'string' ? props.alt : ''
+            if (src.startsWith(generatedImagePrefix)) {
+              return <GatewayImage src={src} alt={alt} />
+            }
+            return (
+              <a href={src} target="_blank" rel="noreferrer">
+                {alt || src}
               </a>
             )
           },

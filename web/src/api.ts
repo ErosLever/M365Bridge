@@ -163,6 +163,20 @@ export async function renameConversation(conversationId: string, name: string): 
   if (!res.ok) throw await toError(res)
 }
 
+/**
+ * Downloads a generated image from the gateway.
+ *
+ * The address M365 puts in an answer needs the designer token and a fileToken
+ * header, so the gateway downloads it and serves it under a reference of its
+ * own. That route is behind the API key, and an `<img>` element sends no
+ * header, which is why the bytes are fetched here and shown as a blob.
+ */
+export async function fetchGeneratedImage(path: string): Promise<Blob> {
+  const res = await fetch(path, { headers: headers() })
+  if (!res.ok) throw await toError(res)
+  return await res.blob()
+}
+
 export interface StreamDelta {
   content?: string
   reasoning?: string

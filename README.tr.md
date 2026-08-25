@@ -649,6 +649,7 @@ Anthropic'in üst seviye `system` alanı hem string hem de metin bloğu dizisi o
 | `POST /v1/complete`                   | Anthropic Complete                                              |
 | `POST /v1/images/generations`         | Metinden görsel üretir                                          |
 | `POST /v1/images/edits`               | Var olan bir görseli düzenler                                   |
+| `GET /v1/images/{ref}`                | Chat cevabında üretilmiş bir görsel                             |
 | `GET /v1/conversations`               | M365 konuşmalarını listeler; M365 web cookie'lerini gerektirir |
 | `POST /v1/conversations`              | İlk mesajla birlikte konuşma oluşturur                          |
 | `PATCH /v1/conversations/{id}`        | `{"name": "..."}` ile konuşmayı yeniden adlandırır             |
@@ -1188,7 +1189,17 @@ Anthropic `image` blokları base64 veriyi doğrudan taşır ve bundan etkilenmez
 
 ## Görsel üretimi
 
-Proxy, Copilot'un Microsoft Designer görsel üretimini OpenAI Images API endpoint'leri olarak sunar:
+Görsel sıradan bir chat turundan da çıkar. `/v1/chat/completions`, `/v1/messages`, `/v1/completions` ya da `/v1/responses` üzerinde görsel istemek cevabın içine bir markdown görsel bağlantısı koyar. Görsel konuşmanın parçası kaldığı için bir sonraki turda onun üzerinde değişiklik isteyebilirsiniz.
+
+M365'in o bağlantıya koyduğu adresi, cevabı okuyan taraf indiremez: indirme `Authorization` header'ında designer access token'ını ve ayrı bir `fileToken` header'ını ister, bir `<img>` elemanı ikisini de göndermez. Bu yüzden proxy, cevabı göndermeden önce adresi kendi route'uyla değiştirir ve o route çağrıldığında görseli kendisi indirir:
+
+```
+![image](/v1/images/2f1c8b7e-...)
+```
+
+Yol kök göreli olduğu için istemci onu zaten kullandığı base URL ile çözer ve her `/v1` route'u gibi API key'in arkasındadır. Referansı proxy üretir ve bellekte tutar: yeniden başlatma onu düşürür, on iki saat sonra da kendiliğinden dolar; arkasındaki adres de yaklaşık o kadar geçerli kalır. Proxy'nin artık tutmadığı bir referans `404 image_not_found` alır ve tarayıcı arayüzü görselin yerine kısa bir not gösterir. [Host allowlist'inin](#host-allowlisti) kabul etmediği bir adres, iletilmek yerine cevaptan çıkarılır; üretilen bir adresin istemciye hiç verilmemesinin sebebi budur.
+
+Ayrı Images API endpoint'leri tek seferliktir ve görselin verisini döndürür:
 
 - `POST /v1/images/generations`, JSON gövde, metinden üretir
 - `POST /v1/images/edits`, multipart form, var olan görselleri düzenler; tekrarlanan `image` alanlarıyla en fazla 16 tane
