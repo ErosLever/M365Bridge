@@ -12,3 +12,15 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+
+  extension-builder:
+    profiles:
+      - tools
+    build:
+      context: .
+      target: extension-builder
+    environment:
+      M365_PROVISION_SECRET_FILE: ${M365_PROVISION_SECRET_FILE:-}
+    volumes:
+      - ./data:/app/data
+      - ./extension/dist:/app/extension/dist

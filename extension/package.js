@@ -119,11 +119,14 @@ function packageExtension(options = {}) {
     }
   }
 
-  fs.rmSync(outputRoot, { recursive: true, force: true });
+  // outputRoot may be a Docker bind-mount target, which cannot itself be
+  // removed. Recreate each generated target below instead.
+  fs.mkdirSync(outputRoot, { recursive: true });
 
   for (const [target, manifestFile] of Object.entries(targets)) {
     const outputDir = path.join(outputRoot, target);
     const manifest = readManifest(manifestFile);
+    fs.rmSync(outputDir, { recursive: true, force: true });
     fs.mkdirSync(outputDir, { recursive: true });
     fs.writeFileSync(
       path.join(outputDir, "manifest.json"),

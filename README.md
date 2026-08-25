@@ -138,6 +138,29 @@ Secret creation is available only together with embedding. It generates 24 rando
 
 The generated files under `extension/dist/` contain the provisioning credential and must remain private. Do not publish, commit, archive, or distribute that build.
 
+Docker Compose provides a manual `extension-builder` service that uses the same provisioning-secret configuration and `./data:/app/data` mount as `m365bridge`. It packages both browser targets into `extension/dist/` and then exits:
+
+```bash
+docker compose run --rm --build extension-builder \
+  --embed-provision-secret \
+  --create-secret-if-missing
+```
+
+The service belongs to the `tools` profile, so `docker compose up` does not start it. It also has no default packaging flags. Running it explicitly activates the service only for that command, while the supplied flags opt in to embedding and secret creation.
+
+When using the Compose-managed provisioning secret, include the same override while packaging:
+
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.provision-secret.yml \
+  run --rm --build extension-builder \
+  --embed-provision-secret \
+  --create-secret-if-missing
+```
+
+The override mounts the same secret at `/run/secrets/m365_provision_secret` in both services. Without the override, both services resolve the secret through the shared `data/provision-secret` file.
+
 > **Note:** Prefer not to install a browser extension, or want to build from source instead of using Docker? The upstream project documents both: a manual, extension-free token setup using a browser console snippet and its own setup wizard ([Connecting your Microsoft 365 account](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#connecting-your-microsoft-365-account)), and a from-source build ([Option C: Build from source](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#option-c-build-from-source)).
 
 #### Step 3: Install the extension
