@@ -4,6 +4,7 @@
 package setup
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -33,6 +34,79 @@ const (
 	// this only catches example text left in place of a real value.
 	minRefreshTokenLength = 100
 )
+
+// guidPattern matches the form Entra writes a tenant id and an object id in.
+var guidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// isFillerGUID reports whether every hex digit of a GUID is the same character,
+// as in 22222222-2222-2222-2222-222222222222. Entra issues no such id, so a
+// value of this shape is filler text someone typed in place of a real one.
+//
+// This is a function rather than a pattern because RE2, which is Go's regexp
+// engine, has no backreference to say "the same digit again".
+func isFillerGUID(value string) bool {
+	var first rune
+	for _, r := range value {
+		if r == '-' {
+			continue
+		}
+		if first == 0 {
+			first = r
+			continue
+		}
+		if r != first {
+			return false
+		}
+	}
+	return first != 0
+}
+
+// validateGUIDField reports why field cannot be the id it claims to be.
+//
+// Both ids are checked before anything is stored, the same way the refresh
+// token's length is. A filler tenant reaches Microsoft and comes back as
+// AADSTS90002, which reads like a broken install rather than a wrong value in
+// a file; a filler oid never reaches Microsoft at all, so nothing else in the
+// wizard can catch it and the install fails later, on a chat request.
+func validateGUIDField(field, value string) error {
+	if !guidPattern.MatchString(value) {
+		return fmt.Errorf("%s is %q, which is not a GUID; copy the value the browser console printed", field, value)
+	}
+	if isFillerGUID(value) {
+		return fmt.Errorf("%s is %q, which is filler text rather than a real id; copy the value the browser console printed", field, value)
+	}
+	return nil
+}
+
+// accessTokenClaims reads the tenant id and object id an access token was
+// issued for.
+//
+// The claims are authoritative: Microsoft wrote them into the token it just
+// returned, while the values in the setup file are whatever someone typed. No
+// signature is verified and none needs to be, because the token arrived over
+// TLS from the token endpoint in this same exchange and is never trusted as a
+// credential here.
+func accessTokenClaims(accessToken string) (tid, oid string, err error) {
+	parts := strings.Split(accessToken, ".")
+	if len(parts) != 3 {
+		return "", "", fmt.Errorf("access token is not a JWT")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", fmt.Errorf("failed to decode the access token claims: %w", err)
+	}
+	var claims struct {
+		TID string `json:"tid"`
+		OID string `json:"oid"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", "", fmt.Errorf("failed to parse the access token claims: %w", err)
+	}
+	if claims.TID == "" || claims.OID == "" {
+		return "", "", fmt.Errorf("the access token carries no tid or oid claim")
+	}
+	return claims.TID, claims.OID, nil
+}
 
 // Run executes the setup wizard with the given file path.
 // If filePath is empty, defaults to data/setup.json.
@@ -76,12 +150,15 @@ func Run(filePath string) error {
 	}
 
 	// Step 3: Verify token (will fall back to SSO re-auth if refresh token expired)
-	if err := verifyToken(tenant, oid, refreshToken); err != nil {
+	// The redeemed token names the identity it was issued for, and those are the
+	// values saved, not the ones the file carried.
+	verifiedTenant, verifiedOID, err := verifyToken(tenant, oid, refreshToken)
+	if err != nil {
 		return err
 	}
 
 	// Step 4: Save environment configuration
-	if err := saveEnv(tenant, oid); err != nil {
+	if err := saveEnv(verifiedTenant, verifiedOID); err != nil {
 		return err
 	}
 
@@ -284,6 +361,12 @@ func getConfigFromFile(path string) (string, string, string, []auth.SSOCookie, e
 	if parsed.Tenant == "" || parsed.OID == "" {
 		return "", "", "", nil, fmt.Errorf("missing tenant or oid in JSON")
 	}
+	if err := validateGUIDField("tenant", parsed.Tenant); err != nil {
+		return "", "", "", nil, err
+	}
+	if err := validateGUIDField("oid", parsed.OID); err != nil {
+		return "", "", "", nil, err
+	}
 	if parsed.RefreshToken == "" || parsed.RefreshToken == "NOT_FOUND" {
 		return "", "", "", nil, fmt.Errorf("missing or invalid refresh_token in JSON")
 	}
@@ -320,7 +403,8 @@ func getConfigFromFile(path string) (string, string, string, []auth.SSOCookie, e
 	return parsed.Tenant, parsed.OID, refreshToken, parsed.SSOCookies, nil
 }
 
-// verifyToken redeems the refresh token and stores it only once that succeeds.
+// verifyToken redeems the refresh token, stores it only once that succeeds, and
+// returns the tenant id and object id the redeemed access token was issued for.
 //
 // The token is redeemed rather than merely loaded, and it is staged in a file
 // of its own until the exchange returns. Verifying through TokenManager.Get()
@@ -329,7 +413,12 @@ func getConfigFromFile(path string) (string, string, string, []auth.SSOCookie, e
 // previous run's cache was still warm. Writing the permanent file first was the
 // other half of that failure: an unusable value replaced a working token before
 // anything had tried it.
-func verifyToken(tenant, oid, refreshToken string) error {
+//
+// The returned ids come from the token's own claims rather than from the setup
+// file. The oid never takes part in the exchange, so nothing else in the wizard
+// can tell a wrong one from a right one, and a wrong one breaks the install
+// later on an ordinary chat request.
+func verifyToken(tenant, oid, refreshToken string) (string, string, error) {
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Println("  Step 3: Verify Token")
 	fmt.Println(strings.Repeat("=", 60))
@@ -338,18 +427,18 @@ func verifyToken(tenant, oid, refreshToken string) error {
 	// Ensure data directory exists
 	dataDir := filepath.Dir(defaultRefreshTokenFile)
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
-		return fmt.Errorf("failed to create data directory: %w", err)
+		return "", "", fmt.Errorf("failed to create data directory: %w", err)
 	}
 
 	// Encrypt and stage the refresh token beside its permanent file.
 	encryptedToken, err := crypto.Encrypt(refreshToken)
 	if err != nil {
-		return fmt.Errorf("failed to encrypt token: %w", err)
+		return "", "", fmt.Errorf("failed to encrypt token: %w", err)
 	}
 
 	stagedFile := defaultRefreshTokenFile + ".verify"
 	if err := atomicfile.Write(stagedFile, []byte(encryptedToken), 0600); err != nil {
-		return fmt.Errorf("failed to stage refresh token: %w", err)
+		return "", "", fmt.Errorf("failed to stage refresh token: %w", err)
 	}
 	defer func() { _ = os.Remove(stagedFile) }()
 
@@ -363,20 +452,31 @@ func verifyToken(tenant, oid, refreshToken string) error {
 	tokenManager := auth.NewTokenManager(tenant, models.DefaultClientID, models.DefaultScope, stagedFile, defaultCacheFile)
 	accessToken, err := tokenManager.Refresh()
 	if err != nil {
-		return fmt.Errorf("token verification failed: %w\n\nThe stored token was left untouched", err)
+		return "", "", fmt.Errorf("token verification failed: %w\n\nThe stored token was left untouched", err)
 	}
 
 	verified, err := os.ReadFile(stagedFile)
 	if err != nil {
-		return fmt.Errorf("failed to read the verified refresh token: %w", err)
+		return "", "", fmt.Errorf("failed to read the verified refresh token: %w", err)
 	}
 	if err := atomicfile.Write(defaultRefreshTokenFile, verified, 0600); err != nil {
-		return fmt.Errorf("failed to save refresh token: %w", err)
+		return "", "", fmt.Errorf("failed to save refresh token: %w", err)
 	}
 	fmt.Println("  Refresh token redeemed, encrypted and saved")
 
 	fmt.Printf("  Token verification successful (access_token length: %d)\n", len(accessToken))
-	return nil
+
+	claimTenant, claimOID, err := accessTokenClaims(accessToken)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read the identity the token was issued for: %w", err)
+	}
+	if claimTenant != tenant {
+		fmt.Printf("  Tenant in the setup file was %s; the token was issued for %s, which is what gets saved\n", tenant, claimTenant)
+	}
+	if claimOID != oid {
+		fmt.Printf("  OID in the setup file was %s; the token was issued for %s, which is what gets saved\n", oid, claimOID)
+	}
+	return claimTenant, claimOID, nil
 }
 
 // saveEnv saves the environment configuration to .env file.
