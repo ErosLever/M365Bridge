@@ -121,6 +121,30 @@ func (tm *TokenManager) Refresh() (string, error) {
 	return tm.refreshLocked()
 }
 
+// refreshTokenRejected reports whether a token endpoint error says the stored
+// refresh token itself cannot be redeemed, which is the case the SSO cookies
+// recover from. Microsoft answers `invalid_grant` for every one of them: an
+// expired token, a revoked one, a superseded one, and a value that is not a
+// token at all. An error of another class, such as a throttle or an
+// interaction requirement, is not something a cookie exchange would fix.
+func refreshTokenRejected(body string) bool {
+	return strings.Contains(body, "invalid_grant")
+}
+
+// aadstsCode picks the AADSTS number out of a token endpoint error body, so a
+// log line names the reason without carrying the whole response.
+func aadstsCode(body string) string {
+	_, digits, found := strings.Cut(body, "AADSTS")
+	if !found {
+		return "no AADSTS code"
+	}
+	end := strings.IndexFunc(digits, func(r rune) bool { return r < '0' || r > '9' })
+	if end < 0 {
+		end = len(digits)
+	}
+	return "AADSTS" + digits[:end]
+}
+
 // refreshLocked performs the refresh token exchange. Callers must hold
 // refreshMu, which keeps the single-use refresh token from being redeemed by
 // two goroutines at once.
@@ -165,9 +189,15 @@ func (tm *TokenManager) refreshLocked() (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		errMsg := string(body)
-		// If refresh token expired (AADSTS700084), try SSO cookie re-auth as fallback
-		if strings.Contains(errMsg, "AADSTS700084") && hasSSOCookies() {
-			logging.Warn("TokenManager.Refresh: refresh token expired (AADSTS700084), falling back to SSO cookie re-auth")
+		// Microsoft answers `invalid_grant` whenever the stored refresh token
+		// cannot be redeemed: AADSTS700084 for an expired one, AADSTS9002313 for
+		// a value that is not a token at all, and several more for a revoked or
+		// superseded one. The SSO cookies re-authenticate in every one of those
+		// cases, so the fallback keys on the OAuth error rather than on one
+		// AADSTS number, which left a recoverable install reporting a hard
+		// authentication failure.
+		if refreshTokenRejected(errMsg) && hasSSOCookies() {
+			logging.Warnf("TokenManager.Refresh: refresh token rejected (%s), falling back to SSO cookie re-auth", aadstsCode(errMsg))
 			return tm.reauthWithSSO()
 		}
 		logging.Errorf("TokenManager.Refresh: token refresh failed status=%d: %s", resp.StatusCode, errMsg[:min(200, len(errMsg))])

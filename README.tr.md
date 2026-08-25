@@ -294,14 +294,16 @@ docker exec -it m365bridge ./bin/m365-bridge setup-wizard
 .\m365-bridge.exe setup-wizard
 ```
 
-Sihirbaz önce tarayıcı adımlarını hatırlatma amacıyla tekrar yazdırır, sonra `data/setup.json` dosyasını okur, refresh token'ı ve iki cookie kümesini AES-256-GCM ile şifreler, token'ı bir access token ile takas ederek doğrular ve `data/.env` dosyasını yazar.
+Sihirbaz önce tarayıcı adımlarını hatırlatma amacıyla tekrar yazdırır, sonra `data/setup.json` dosyasını okur, refresh token'ı ve iki cookie kümesini AES-256-GCM ile şifreler, refresh token'ı Microsoft'a karşı bozdurur ve `data/.env` dosyasını yazar.
+
+Doğrulama bu bozdurma işlemidir. Token, Microsoft cevap verene kadar kendi dosyasında bekletilir; böylece bozdurulamayan bir değer, çalışan bir token'ın üzerine yazmaz. 100 karakterden kısa bir refresh token hiçbir şey saklanmadan reddedilir: o, gerçek değerin yerinde kalmış örnek metindir.
 
 Yalnızca çıkış koduna değil, çıktısına da bakın. Üç kimlik bilgisiyle yapılan başarılı bir çalıştırma şu üç satırı da yazdırır:
 
 ```
 SSO cookies encrypted and saved
 M365 web cookies encrypted and saved
-Refresh token encrypted and saved
+Refresh token redeemed, encrypted and saved
 ```
 
 Sihirbaz cookie'leri okuduğunu söylediği hâlde ilk iki satır çıkmıyorsa, `domain` alanlarınız eksik ya da yanlış yazılmıştır. `data/setup.json` dosyasını düzeltip sihirbazı tekrar çalıştırın.
@@ -352,6 +354,8 @@ Login cookie'leri de bir gün dolar; tenant politikası veya parola değişikli�
 | Belirti | Sebep |
 |---|---|
 | Sihirbaz `refresh_token` eksik veya geçersiz diyor | `data/setup.json` yok, boş, ya da gerçek JSON yerine örnek metni içeriyor. |
+| Sihirbaz `refresh_token` gerçek bir token olamayacak kadar kısa diyor | `data/setup.json` içinde hâlâ örnek değer duruyor. Gerçeği binlerce karakterdir. |
+| Her istek `upstream_auth_failed` dönüyor ve logda `AADSTS90002: Tenant not found` yazıyor | `data/.env` içinde placeholder bir tenant var. Gerçek değerler `data/tokens/token_cache.json` içindeki token'ın `tid` ve `oid` claim'lerinde durur. |
 | Sihirbaz cookie okuduğunu söylüyor ama hiçbirini kaydetmiyor | Cookie kayıtlarında `domain` alanı yok. Adım 4'e bakın. |
 | Sunucu token refresh hatasıyla kapanıyor | Refresh token doldu ve kullanılabilir login cookie'si yok. Adım 1'den 5'e tekrarlayın. |
 | Kurulum başarılı olduğu hâlde sunucu token bulamıyor | Sunucuyu başka bir dizinden başlattınız. `data/` dizininin bulunduğu yerden çalıştırın. |

@@ -294,14 +294,16 @@ docker exec -it m365bridge ./bin/m365-bridge setup-wizard
 .\m365-bridge.exe setup-wizard
 ```
 
-The wizard prints the browser instructions again for reference, then reads `data/setup.json`, encrypts the refresh token and both cookie sets with AES-256-GCM, verifies the token by exchanging it for an access token, and writes `data/.env`.
+The wizard prints the browser instructions again for reference, then reads `data/setup.json`, encrypts the refresh token and both cookie sets with AES-256-GCM, redeems the refresh token against Microsoft, and writes `data/.env`.
+
+The redemption is the verification. The token is staged in a file of its own until Microsoft answers, so a value that cannot be redeemed never replaces a token that works, and a refresh token shorter than 100 characters is refused before anything is stored: it is the example text left in place of a real value.
 
 Read its output rather than only its exit. A successful run with all three credentials prints all of these:
 
 ```
 SSO cookies encrypted and saved
 M365 web cookies encrypted and saved
-Refresh token encrypted and saved
+Refresh token redeemed, encrypted and saved
 ```
 
 If the first two lines are missing while the wizard still reports cookies as captured, your `domain` fields are missing or misspelled. Fix `data/setup.json` and run the wizard again.
@@ -352,6 +354,8 @@ The login cookies themselves expire eventually, and a tenant policy or a passwor
 | Symptom | Cause |
 |---|---|
 | The wizard reports a missing or invalid `refresh_token` | `data/setup.json` is missing, empty, or holds the placeholder text instead of the real JSON. |
+| The wizard says the `refresh_token` is too short to be a real token | The example value is still in `data/setup.json`. A real one runs to thousands of characters. |
+| Every request answers `upstream_auth_failed` and the log shows `AADSTS90002: Tenant not found` | `data/.env` holds a placeholder tenant. The `tid` and `oid` claims of the token in `data/tokens/token_cache.json` carry the real ones. |
 | The wizard reports cookies as captured but saves none | Cookie entries have no `domain` field. See Step 4. |
 | The server exits with a token refresh error | The refresh token expired and there are no usable login cookies. Repeat Steps 1 to 5. |
 | The server reports a missing token even after setup succeeded | You launched it from a different directory. Run it where `data/` lives. |

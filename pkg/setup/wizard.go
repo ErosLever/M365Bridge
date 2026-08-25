@@ -28,6 +28,10 @@ const (
 	defaultEnvFile = "data/.env"
 	// defaultSetupFile is the default file to read setup JSON from.
 	defaultSetupFile = "data/setup.json"
+	// minRefreshTokenLength is the shortest value the wizard treats as a
+	// refresh token. Microsoft issues one of several thousand characters, so
+	// this only catches example text left in place of a real value.
+	minRefreshTokenLength = 100
 )
 
 // Run executes the setup wizard with the given file path.
@@ -283,6 +287,15 @@ func getConfigFromFile(path string) (string, string, string, []auth.SSOCookie, e
 	if parsed.RefreshToken == "" || parsed.RefreshToken == "NOT_FOUND" {
 		return "", "", "", nil, fmt.Errorf("missing or invalid refresh_token in JSON")
 	}
+	// A Microsoft refresh token runs to thousands of characters. A short value
+	// is the example text left in place of a real one, and it is refused here
+	// rather than stored, because the token endpoint answers a placeholder with
+	// "request is malformed", which reads like a broken install.
+	if len(parsed.RefreshToken) < minRefreshTokenLength {
+		return "", "", "", nil, fmt.Errorf(
+			"refresh_token in %s is %d characters, which is too short to be a real token; copy the value the browser console printed",
+			path, len(parsed.RefreshToken))
+	}
 
 	// If refresh_token is a JSON object, try extracting secret/value/data fields
 	// If none found, use the entire JSON string as-is
@@ -307,7 +320,15 @@ func getConfigFromFile(path string) (string, string, string, []auth.SSOCookie, e
 	return parsed.Tenant, parsed.OID, refreshToken, parsed.SSOCookies, nil
 }
 
-// verifyToken validates the refresh token by exchanging it for an access token.
+// verifyToken redeems the refresh token and stores it only once that succeeds.
+//
+// The token is redeemed rather than merely loaded, and it is staged in a file
+// of its own until the exchange returns. Verifying through TokenManager.Get()
+// proved nothing, because Get returns a cached access token without ever
+// reading the refresh token, so a placeholder passed the check whenever the
+// previous run's cache was still warm. Writing the permanent file first was the
+// other half of that failure: an unusable value replaced a working token before
+// anything had tried it.
 func verifyToken(tenant, oid, refreshToken string) error {
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Println("  Step 3: Verify Token")
@@ -320,27 +341,39 @@ func verifyToken(tenant, oid, refreshToken string) error {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
-	// Encrypt and save refresh token
+	// Encrypt and stage the refresh token beside its permanent file.
 	encryptedToken, err := crypto.Encrypt(refreshToken)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt token: %w", err)
 	}
 
-	if err := atomicfile.Write(defaultRefreshTokenFile, []byte(encryptedToken), 0600); err != nil {
-		return fmt.Errorf("failed to save refresh token: %w", err)
+	stagedFile := defaultRefreshTokenFile + ".verify"
+	if err := atomicfile.Write(stagedFile, []byte(encryptedToken), 0600); err != nil {
+		return fmt.Errorf("failed to stage refresh token: %w", err)
 	}
-	fmt.Println("  Refresh token encrypted and saved")
+	defer func() { _ = os.Remove(stagedFile) }()
 
 	// Set environment variables for verification
 	_ = os.Setenv("M365_TENANT_ID", tenant)
 	_ = os.Setenv("M365_USER_OID", oid)
 
-	// Create token manager and verify
-	tokenManager := auth.NewTokenManager(tenant, models.DefaultClientID, models.DefaultScope, defaultRefreshTokenFile, defaultCacheFile)
-	accessToken, err := tokenManager.Get()
+	// Refresh, never Get: the exchange is the only thing that proves the token
+	// works, and it also rotates it, so the staged file ends up holding the
+	// token the next run must use.
+	tokenManager := auth.NewTokenManager(tenant, models.DefaultClientID, models.DefaultScope, stagedFile, defaultCacheFile)
+	accessToken, err := tokenManager.Refresh()
 	if err != nil {
-		return fmt.Errorf("token verification failed: %w (refresh token may be expired)", err)
+		return fmt.Errorf("token verification failed: %w\n\nThe stored token was left untouched", err)
 	}
+
+	verified, err := os.ReadFile(stagedFile)
+	if err != nil {
+		return fmt.Errorf("failed to read the verified refresh token: %w", err)
+	}
+	if err := atomicfile.Write(defaultRefreshTokenFile, verified, 0600); err != nil {
+		return fmt.Errorf("failed to save refresh token: %w", err)
+	}
+	fmt.Println("  Refresh token redeemed, encrypted and saved")
 
 	fmt.Printf("  Token verification successful (access_token length: %d)\n", len(accessToken))
 	return nil
