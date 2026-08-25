@@ -58,8 +58,40 @@ function pushRoute(sessionID: string, replace = false): void {
   history.pushState(null, '', url)
 }
 
+// A version 4 UUID built from getRandomValues, which carries no secure-context
+// restriction of its own. The two masked bytes are the version and the variant.
+function uuidFromRandomBytes(source: Crypto): string {
+  const bytes = new Uint8Array(16)
+  source.getRandomValues(bytes)
+  const hex = Array.from(bytes, (byte, index) => {
+    // Byte 6 carries the version nibble and byte 8 carries the variant bits.
+    // The mapper reads each byte as an argument, because an indexed read of a
+    // typed array is possibly undefined under noUncheckedIndexedAccess.
+    if (index === 6) {
+      return (((byte & 0x0f) | 0x40)).toString(16).padStart(2, '0')
+    }
+    if (index === 8) {
+      return (((byte & 0x3f) | 0x80)).toString(16).padStart(2, '0')
+    }
+    return byte.toString(16).padStart(2, '0')
+  }).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+// crypto.randomUUID exists only in a secure context, so a gateway reached over
+// plain http on anything but localhost does not carry it and calling it throws.
+// getRandomValues survives there and is still a real CSPRNG, so it is the first
+// fallback. The timestamp form is the last resort for a runtime carrying
+// neither, and it is the only branch that is not cryptographically random.
 function newSessionId(): string {
-  return `ui-${crypto.randomUUID()}`
+  const source = globalThis.crypto
+  if (typeof source?.randomUUID === 'function') {
+    return `ui-${source.randomUUID()}`
+  }
+  if (typeof source?.getRandomValues === 'function') {
+    return `ui-${uuidFromRandomBytes(source)}`
+  }
+  return `ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`
 }
 
 function firstLine(text: string): string {

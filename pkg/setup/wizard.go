@@ -113,98 +113,108 @@ func printBrowserInstructions() {
 	fmt.Println()
 	fmt.Println(strings.Repeat("-", 60))
 
-	jsSnippet := `(() => {
-const k = Object.keys(localStorage).find(k => k.startsWith('msal.') && k.includes('|'));
-if (!k) return 'NOT_FOUND';
-const p = k.split('|')[1].split('.');
-const oid = p[0], tenant = p[1];
+	jsSnippet := `(async () => {
+// 1. Get oid/tenant from the signed-in account
+let oid, tenant;
+for (const key of Object.keys(localStorage)) {
+  if (!key.includes('active-account-filters')) continue;
+  try {
+    const val = JSON.parse(localStorage.getItem(key));
+    if (val?.homeAccountId?.includes('.')) { [oid, tenant] = val.homeAccountId.split('.'); break; }
+  } catch(e) {}
+}
+if (!oid) {
+  const mk = Object.keys(localStorage).find(k => k.startsWith('msal.') && k.includes('|'));
+  if (mk) { const p = mk.split('|')[1]; if (p?.includes('.')) [oid, tenant] = p.split('.'); }
+}
+if (!oid || !tenant) return 'ERROR: No signed-in account found. Log in to m365.cloud.microsoft and run this again.';
 
+// 2. Watch every token exchange for the one this gateway uses
+const targetClientID = '4765445b-32c6-49b0-83e6-1d93765276ca';
 const origFetch = window.fetch;
+let done;
+const captured = new Promise(resolve => { done = resolve; });
 window.fetch = async function(...args) {
   const resp = await origFetch.apply(this, args);
-  const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
-  if (url.includes('login.microsoftonline.com') && url.includes('oauth2/v2.0/token')) {
+  const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+  if (url.includes('oauth2/v2.0/token')) {
     try {
-      const clone = resp.clone();
-      const data = await clone.json();
-      if (data.refresh_token) {
-        console.log('===== COPY THE COMPLETE JSON LINE BELOW =====');
-        console.log(JSON.stringify({oid, tenant, refresh_token: data.refresh_token}));
+      let bodyStr = '';
+      const init = args[1];
+      if (typeof init?.body === 'string') bodyStr = init.body;
+      else if (init?.body instanceof URLSearchParams) bodyStr = init.body.toString();
+      else if (init?.body instanceof ArrayBuffer || ArrayBuffer.isView(init?.body)) bodyStr = new TextDecoder().decode(init.body);
+      else if (args[0] instanceof Request) bodyStr = await args[0].clone().text();
+      // The sign-in exchange puts a broker id in client_id and carries the real
+      // target in brk_client_id, so both are accepted.
+      const params = new URLSearchParams(bodyStr);
+      const isTarget = params.get('client_id') === targetClientID
+                    || params.get('brk_client_id') === targetClientID;
+      if (isTarget) {
+        const data = await resp.clone().json();
+        if (data.refresh_token) {
+          console.log('===== COPY THE COMPLETE JSON BELOW =====');
+          console.log(JSON.stringify({oid, tenant, refresh_token: data.refresh_token}, null, 2));
+          done(true);
+        }
       }
     } catch(e) {}
   }
   return resp;
 };
 
-const origXHROpen = XMLHttpRequest.prototype.open;
-const origXHRSend = XMLHttpRequest.prototype.send;
-XMLHttpRequest.prototype.open = function(method, url) {
-  this._url = url;
-  return origXHROpen.apply(this, arguments);
-};
-XMLHttpRequest.prototype.send = function(body) {
-  this.addEventListener('load', function() {
-    if (this._url && this._url.includes('oauth2/v2.0/token')) {
-      try {
-        const data = JSON.parse(this.responseText);
-        if (data.refresh_token) {
-          console.log('===== COPY THE COMPLETE JSON LINE BELOW =====');
-          console.log(JSON.stringify({oid, tenant, refresh_token: data.refresh_token}));
-        }
-      } catch(e) {}
-    }
-  });
-  return origXHRSend.apply(this, arguments);
-};
-
-// Force MSAL to refresh by clearing all access tokens from localStorage
-// MSAL will then silently refresh them, triggering our interceptors
-const keys = Object.keys(localStorage);
-let cleared = 0;
-for (const key of keys) {
-  if (key.includes('accesstoken') || key.includes('idtoken')) {
-    localStorage.removeItem(key);
-    cleared++;
-  }
+// 3. Make the app ask for a token
+// The page keeps its MSAL instance out of reach of the console, so the refresh
+// cannot be requested directly. Moving to another route makes the app request
+// one; the original page is restored afterwards.
+const startPath = location.pathname;
+let moved = false;
+for (const href of ['/search', '/library', '/teach', '/chat/all', '/chat']) {
+  if (href === startPath) continue;
+  const link = document.querySelector('a[href="' + href + '"]');
+  if (link) { link.click(); moved = true; break; }
 }
 
-// Trigger silent token acquisition by dispatching events MSAL listens to
-window.dispatchEvent(new Event('load'));
-if (window.msal) {
-  try {
-    const accounts = window.msal.getAllAccounts();
-    if (accounts.length > 0) {
-      window.msal.acquireTokenSilent({
-        account: accounts[0],
-        scopes: ['https://substrate.office.com/sydney/.default']
-      }).catch(() => {});
-    }
-  } catch(e) {}
-}
+// 4. Wait for the exchange, then put everything back
+const ok = await Promise.race([captured, new Promise(r => setTimeout(() => r(false), 20000))]);
+if (moved) history.back();
+window.fetch = origFetch;
 
-return 'Interceptors installed and ' + cleared + ' access tokens cleared. MSAL should refresh automatically. Watch the console for the JSON output.';
+return ok
+  ? 'Done. Copy the JSON printed above.'
+  : 'No token exchange seen; the app is still using a token it refreshed a moment ago. Reload the page and run this again.';
 })()`
 
 	fmt.Println(jsSnippet)
 	fmt.Println(strings.Repeat("-", 60))
 	fmt.Println()
-	fmt.Println("  After running the code, MSAL will auto-refresh tokens")
-	fmt.Println("  Watch the console for: ===== COPY THE COMPLETE JSON LINE BELOW =====")
-	fmt.Println("  (If nothing appears, interact with the page to trigger token refresh)")
+	fmt.Println("  The code moves to another page and back to make the app ask")
+	fmt.Println("  for a token, then restores the page.")
+	fmt.Println("  Watch the console for: ===== COPY THE COMPLETE JSON BELOW =====")
+	fmt.Println("  (If it reports no token exchange, reload the page and run it again)")
 	fmt.Println()
 	fmt.Println("  Save the JSON output to data/setup.json (or pass --file <path>)")
 	fmt.Println()
 
 	// Browser cookie instructions for auto-renewal and conversation management.
+	// This step is required rather than optional: the refresh token alone
+	// expires after 24 hours, and without the login cookies the service cannot
+	// sign itself back in.
 	fmt.Println(strings.Repeat("=", 60))
-	fmt.Println("  Step 2 (Optional): Capture browser cookies")
+	fmt.Println("  Step 2 (Required): Capture browser cookies")
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Println()
-	fmt.Println("  Login cookies enable token auto-renewal after the 24-hour refresh")
-	fmt.Println("  token expiry. M365 web app cookies enable conversation management.")
+	fmt.Println("  The refresh token expires after 24 hours. Login cookies let the")
+	fmt.Println("  service renew it on its own; without them setup stops working")
+	fmt.Println("  the next day. M365 web app cookies enable conversation management.")
 	fmt.Println("  Capture cookies from both domains in DevTools -> Application -> Cookies:")
 	fmt.Println("    - https://login.microsoftonline.com")
 	fmt.Println("    - https://m365.cloud.microsoft")
+	fmt.Println()
+	fmt.Println("  Give every cookie its domain field. Each one is routed by that")
+	fmt.Println("  field, and a cookie without it is discarded even though the count")
+	fmt.Println("  below still reports it as read.")
+	fmt.Println()
 	fmt.Println("  Add each cookie to data/setup.json with its domain:")
 	fmt.Println()
 	fmt.Println("  {")

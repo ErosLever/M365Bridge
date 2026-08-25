@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.4.9] - 2026-08-24
+
+### Changed
+- Keep every technical term in its original form in the Turkish documentation and in the Turkish interface catalog. `README.tr.md` translated terms the same document keeps in English elsewhere, so one term appeared under two names, and `web/src/locales/tr.json` showed the gate screen and the auth notice as `API anahtarı` while the same catalog kept `gateway`, `cookie` and `transcript`
+- Rename the two `README.tr.md` headings that a link points at, so neither starts with `İ`. That letter lowercases to `i` plus the combining mark U+0307, which an anchor written with a plain `i` never reaches
+
+### Fixed
+- Correct two `README.tr.md` sentences that stated the wrong fact: the `M365_CLIENT_ID` row said the access tokens are arranged rather than issued to the client, and the broker refresh token step read as "returned by the refresher" where the token is rotated by it
+
+## [1.4.8] - 2026-08-24
+
+### Added
+- Route a Codex `compaction_trigger` item in a `/v1/responses` input to `/v1/responses/compact`. Codex sends that item when it wants a conversation compacted; without the routing the request was answered as an ordinary turn, which consumed a message from the conversation quota and returned an answer instead of a summary. The item is also skipped during message conversion, so a stray trigger never reaches the prompt
+
+### Changed
+- Rewrite `README.md` and `README.tr.md` around one setup chapter
+
+### Fixed
+- Print the same browser snippet in the setup wizard that both READMEs document
+
+## [1.4.7] - 2026-08-24
+
+### Fixed
+- Start a conversation in the browser interface when the gateway is reached over plain `http` on a LAN address. `crypto.randomUUID` carries `[SecureContext]` in the Web Cryptography IDL, so a browser outside a trusted origin does not carry it and naming a new session threw. The interface worked behind TLS and on `localhost`, which is why the failure only appeared on a deployment. The session id now comes from `getRandomValues`, the one member of `Crypto` an insecure context still offers, and falls back to a timestamp only where neither exists
+
 ## [1.4.6] - 2026-08-23
 
 ### Added
