@@ -100,27 +100,43 @@ The MCP surface exposes `ask_copilot` and `describe_image`. Separately, the opt-
 
 ## Installation
 
-#### Step 1: Create the provisioning secret
+#### Step 1: Provisioning secret
 
-Generate a high-entropy secret inside the `data/` directory:
+M365Bridge automatically generates a high-entropy provisioning secret on first startup and stores it at `data/provision-secret` with mode `0600`. Keep this file private. The browser extension uses its value to encrypt and authenticate session provisioning requests.
+
+To create the secret before startup instead, use:
 
 ```bash
 mkdir -p data
-head -c 24 /dev/urandom | base64 > data/provision-secret
+openssl rand -base64 24 > data/provision-secret
 chmod 600 data/provision-secret
 ```
-
-Keep `data/provision-secret` private. The browser extension uses this secret to encrypt and authenticate session provisioning requests.
 
 Alternatively, `docker-compose.provision-secret.yml` reads the secret from a `M365_PROVISION_SECRET` shell variable instead of a file, via a [Compose secret](https://docs.docker.com/compose/how-tos/use-secrets/). Layer it in with `-f` (see [Encrypting cached tokens at rest](docs/token-encryption.md) for the same pattern applied to the master passphrase).
 
 #### Step 2: Build M365Bridge and package the extension
 
-Package the browser extension:
+Package the browser extension normally without embedding the provisioning credential:
 
 ```bash
 node extension/package.js
 ```
+
+To build an installation-specific extension that pre-fills the provisioning secret, opt in explicitly:
+
+```bash
+node extension/package.js --embed-provision-secret
+```
+
+The opt-in build resolves the secret using the same precedence as the server: `M365_PROVISION_SECRET_FILE`, then `M365_PROVISION_SECRET`, then `data/provision-secret`. To create `data/provision-secret` securely when it does not exist and embed that same value, run:
+
+```bash
+node extension/package.js --embed-provision-secret --create-secret-if-missing
+```
+
+Secret creation is available only together with embedding. It generates 24 random bytes, stores the Base64 value at `data/provision-secret` with mode `0600`, and fails if another process creates the file first. The repository's `data` bind mount makes this the same file used by the container.
+
+The generated files under `extension/dist/` contain the provisioning credential and must remain private. Do not publish, commit, archive, or distribute that build.
 
 > **Note:** Prefer not to install a browser extension, or want to build from source instead of using Docker? The upstream project documents both: a manual, extension-free token setup using a browser console snippet and its own setup wizard ([Connecting your Microsoft 365 account](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#connecting-your-microsoft-365-account)), and a from-source build ([Option C: Build from source](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#option-c-build-from-source)).
 
@@ -134,10 +150,9 @@ The Chromium package supports Google Chrome, Microsoft Edge, and other compatibl
 
 #### Step 4: Configure and start M365Bridge
 
-Create a project-level `.env` file:
+Create a project-level `.env` file only when overriding the defaults, for example:
 
 ```dotenv
-M365_PROVISION_SECRET_FILE=/app/data/provision-secret
 M365_PROVISION_AUTHORITY=organizations
 ```
 
@@ -149,7 +164,7 @@ The repository includes a ready-to-use [`docker-compose.yml`](docker-compose.yml
 docker compose up --build -d
 ```
 
-The bridge and provisioning endpoint are now available at `http://localhost:8230`. Browser provisioning requires either `M365_PROVISION_SECRET` or `M365_PROVISION_SECRET_FILE`. If neither is configured, `/provision/v1/session` returns `404 Not Found` and the extension cannot authenticate M365Bridge. The existing `8230:8000` mapping serves both API and provisioning requests.
+The bridge and provisioning endpoint are now available at `http://localhost:8230`. When neither `M365_PROVISION_SECRET_FILE` nor `M365_PROVISION_SECRET` is configured, M365Bridge creates and uses `data/provision-secret`. An explicitly configured secret file must exist and contain at least 32 bytes. The existing `8230:8000` mapping serves both API and provisioning requests.
 
 `M365_PROVISION_AUTHORITY` controls the Microsoft identity authority used for the initial browser provisioning flow. It defaults to `organizations`; set it to `common` or an exact tenant ID when required. The tenant ID derived from the resulting access token still becomes the runtime authority after provisioning.
 
@@ -185,7 +200,6 @@ docker build -t m365bridge:local .
 docker run -d \
   --name m365bridge \
   -p 8230:8000 \
-  -e M365_PROVISION_SECRET_FILE=/app/data/provision-secret \
   -e M365_PROVISION_AUTHORITY=organizations \
   -v "$(pwd)/data:/app/data" \
   --restart unless-stopped \
@@ -223,8 +237,8 @@ The following variables are specific to this fork:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `M365_PROVISION_SECRET` | unset | Shared secret used to authenticate browser-extension provisioning. |
-| `M365_PROVISION_SECRET_FILE` | unset | File containing the provisioning secret, suitable for container secrets. |
+| `M365_PROVISION_SECRET` | unset | Shared secret used to authenticate browser-extension provisioning. Used when no secret file is configured. |
+| `M365_PROVISION_SECRET_FILE` | unset | File containing the provisioning secret. Takes precedence over `M365_PROVISION_SECRET`; when both are unset, `data/provision-secret` is loaded or generated. |
 | `M365_PROVISION_ORIGINS` | unset | Comma-separated extension origins allowed to provision. Unset accepts extension origins; `*` disables origin filtering. |
 | `M365_PROVISION_AUTHORITY` | `organizations` | Microsoft identity authority used during provisioning. |
 | `M365_MASTER_PASSPHRASE_VALUE` | unset | Master passphrase used to wrap the credential-encryption key. Takes precedence over the file setting. |

@@ -3,6 +3,7 @@ package servers
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,8 @@ const (
 	provisionFailureWindow   = time.Minute
 	provisionFreshnessWindow = 2 * time.Minute
 	provisionAdditionalData  = "m365bridge-provision-v1"
+	provisionSecretDefault   = "data/provision-secret"
+	provisionSecretRandomLen = 24
 )
 
 type provisionFailure struct {
@@ -63,18 +67,9 @@ func newProvisioningHandler(config *models.Config, provision func([]auth.SSOCook
 		handler.origins[origin] = struct{}{}
 	}
 
-	secret := config.ProvisionSecret
-	if config.ProvisionSecretFile != "" {
-		data, err := os.ReadFile(config.ProvisionSecretFile)
-		if err != nil {
-			return nil, fmt.Errorf("read provisioning secret file: %w", err)
-		}
-		secret = strings.TrimSpace(string(data))
-	}
-	if secret == "" {
-		logging.Warn("provisioning: M365_PROVISION_SECRET and M365_PROVISION_SECRET_FILE are both unset; " +
-			"/provision/v1/session is disabled and requests to it return 404 Not Found")
-		return handler, nil
+	secret, err := resolveProvisionSecret(config, provisionSecretDefault)
+	if err != nil {
+		return nil, err
 	}
 	if len(secret) < provisionSecretMinLength {
 		return nil, fmt.Errorf("provisioning secret must contain at least %d bytes", provisionSecretMinLength)
@@ -84,6 +79,67 @@ func newProvisioningHandler(config *models.Config, provision func([]auth.SSOCook
 	key := sha256.Sum256([]byte(secret))
 	handler.secret = key[:]
 	return handler, nil
+}
+
+func resolveProvisionSecret(config *models.Config, defaultPath string) (string, error) {
+	if config.ProvisionSecretFile != "" {
+		return readProvisionSecret(config.ProvisionSecretFile)
+	}
+	if config.ProvisionSecret != "" {
+		return config.ProvisionSecret, nil
+	}
+
+	secret, err := readProvisionSecret(defaultPath)
+	if err == nil {
+		return secret, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(defaultPath), 0700); err != nil {
+		return "", fmt.Errorf("create provisioning secret directory: %w", err)
+	}
+	random := make([]byte, provisionSecretRandomLen)
+	if _, err := rand.Read(random); err != nil {
+		return "", fmt.Errorf("generate provisioning secret: %w", err)
+	}
+	secret = base64.StdEncoding.EncodeToString(random)
+	file, err := os.OpenFile(defaultPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("create provisioning secret file: another process created %s first", defaultPath)
+		}
+		return "", fmt.Errorf("create provisioning secret file: %w", err)
+	}
+	if _, err := file.WriteString(secret + "\n"); err != nil {
+		_ = file.Close()
+		_ = os.Remove(defaultPath)
+		return "", fmt.Errorf("write provisioning secret file: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(defaultPath)
+		return "", fmt.Errorf("sync provisioning secret file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(defaultPath)
+		return "", fmt.Errorf("close provisioning secret file: %w", err)
+	}
+	logging.Infof("provisioning: generated secret at %s", defaultPath)
+	return secret, nil
+}
+
+func readProvisionSecret(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read provisioning secret file %s: %w", path, err)
+	}
+	secret := strings.TrimSpace(string(data))
+	if len(secret) < provisionSecretMinLength {
+		return "", fmt.Errorf("provisioning secret file %s must contain at least %d bytes", path, provisionSecretMinLength)
+	}
+	return secret, nil
 }
 
 func validExtensionOrigin(origin string) bool {

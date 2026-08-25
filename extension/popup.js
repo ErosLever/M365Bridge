@@ -71,7 +71,11 @@ async function encryptProvisioningPayload(secret, cookies) {
 async function restoreSettings() {
   const saved = await extensionAPI.storage.local.get(["endpoint", "provisionSecret"]);
   if (saved.endpoint) endpointInput.value = saved.endpoint;
-  if (saved.provisionSecret) secretInput.value = saved.provisionSecret;
+  if (saved.provisionSecret) {
+    secretInput.value = saved.provisionSecret;
+  } else if (globalThis.M365BRIDGE_BUILD_CONFIG?.provisionSecret) {
+    secretInput.value = globalThis.M365BRIDGE_BUILD_CONFIG.provisionSecret;
+  }
   updateDestination();
 }
 

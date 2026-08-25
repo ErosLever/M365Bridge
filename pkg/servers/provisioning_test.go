@@ -55,13 +55,89 @@ func encryptedProvisioningBody(t *testing.T, secret string, issuedAt time.Time, 
 	return string(envelope)
 }
 
-func TestNewProvisioningHandlerDisabledWithoutSecret(t *testing.T) {
-	handler, err := newProvisioningHandler(&models.Config{}, func([]auth.SSOCookie) error { return nil })
+func TestResolveProvisionSecretGeneratesDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data", "provision-secret")
+	secret, err := resolveProvisionSecret(&models.Config{}, path)
 	if err != nil {
-		t.Fatalf("newProvisioningHandler() error = %v", err)
+		t.Fatalf("resolveProvisionSecret() error = %v", err)
 	}
-	if handler.enabled {
-		t.Fatal("newProvisioningHandler() enabled provisioning without a secret")
+	if len(secret) != provisionSecretMinLength {
+		t.Fatalf("generated secret length = %d, want %d", len(secret), provisionSecretMinLength)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read generated secret: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != secret {
+		t.Fatal("persisted secret does not match generated secret")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat generated secret: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("generated secret mode = %o, want 600", got)
+	}
+}
+
+func TestResolveProvisionSecretUsesExistingDefault(t *testing.T) {
+	secret := strings.Repeat("d", provisionSecretMinLength)
+	path := filepath.Join(t.TempDir(), "provision-secret")
+	if err := os.WriteFile(path, []byte(secret+"\n"), 0600); err != nil {
+		t.Fatalf("write default secret: %v", err)
+	}
+	got, err := resolveProvisionSecret(&models.Config{}, path)
+	if err != nil {
+		t.Fatalf("resolveProvisionSecret() error = %v", err)
+	}
+	if got != secret {
+		t.Fatalf("resolved secret does not match existing default")
+	}
+}
+
+func TestResolveProvisionSecretEnvironmentAvoidsDefaultFile(t *testing.T) {
+	secret := strings.Repeat("e", provisionSecretMinLength)
+	path := filepath.Join(t.TempDir(), "provision-secret")
+	got, err := resolveProvisionSecret(&models.Config{ProvisionSecret: secret}, path)
+	if err != nil {
+		t.Fatalf("resolveProvisionSecret() error = %v", err)
+	}
+	if got != secret {
+		t.Fatal("resolved secret does not match environment secret")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("default secret file was created: %v", err)
+	}
+}
+
+func TestResolveProvisionSecretRejectsInvalidFiles(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		content string
+	}{
+		{name: "empty"},
+		{name: "short", content: strings.Repeat("x", provisionSecretMinLength-1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "provision-secret")
+			if err := os.WriteFile(path, []byte(test.content), 0600); err != nil {
+				t.Fatalf("write secret file: %v", err)
+			}
+			if _, err := resolveProvisionSecret(&models.Config{}, path); err == nil {
+				t.Fatal("resolveProvisionSecret() accepted an invalid persisted secret")
+			}
+		})
+	}
+}
+
+func TestResolveProvisionSecretExplicitMissingFileFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing-secret")
+	_, err := resolveProvisionSecret(&models.Config{
+		ProvisionSecret:     strings.Repeat("e", provisionSecretMinLength),
+		ProvisionSecretFile: path,
+	}, filepath.Join(t.TempDir(), "default-secret"))
+	if err == nil {
+		t.Fatal("resolveProvisionSecret() ignored a missing explicit secret file")
 	}
 }
 
@@ -131,19 +207,6 @@ func TestNewProvisioningHandlerValidatesExtensionOrigins(t *testing.T) {
 func TestProvisioningHandlerHTTPBoundary(t *testing.T) {
 	const allowedOrigin = "chrome-extension://abcdefghijklmnop"
 	secret := strings.Repeat("s", provisionSecretMinLength)
-
-	disabled, err := newProvisioningHandler(&models.Config{}, func([]auth.SSOCookie) error { return nil })
-	if err != nil {
-		t.Fatalf("create disabled handler: %v", err)
-	}
-	recorder := httptest.NewRecorder()
-	disabled.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/provision/v1/session", nil))
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("disabled handler status = %d, want %d", recorder.Code, http.StatusNotFound)
-	}
-	if recorder.Header().Get("Cache-Control") != "no-store" {
-		t.Fatal("disabled handler response is missing Cache-Control: no-store")
-	}
 
 	handler, err := newProvisioningHandler(&models.Config{
 		ProvisionSecret:  secret,
