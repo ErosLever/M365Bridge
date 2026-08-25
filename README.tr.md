@@ -664,6 +664,8 @@ Anthropic'in üst seviye `system` alanı hem string hem de metin bloğu dizisi o
 | `GET /v1/conversations/{id}/messages` | Upstream'de duran bir konuşmanın turlarını okur                |
 | `GET /v1/models`                      | Model listesi, iki wire format birden                           |
 | `GET /v1/quota`                       | Son görülen M365 konuşma mesaj kotası                          |
+| `GET /v1/personalization`             | Hesabın Copilot memory ayarları                                |
+| `PATCH /v1/personalization`           | Hesabın Copilot memory'sini açar veya kapatır                  |
 | `GET /v1/sessions`                    | Oturum-konuşma eşlemelerini listeler                            |
 | `GET /v1/sessions/{id}`               | Bir oturumun conversation ID'sini okur                          |
 | `PUT /v1/sessions/{id}`               | Oturumu var olan bir konuşmaya bağlar                           |
@@ -812,6 +814,21 @@ M365, konuşma başına bir mesaj üst sınırı uygular ve sayaçları update f
 ```
 
 Proxy'nin tanımadığı sayaçlar atılmak yerine `extra` altında döndürülür. Bir istek boş upstream yanıtı ürettiğinde ve son sayaçlar üst sınıra ulaşıldığını gösterdiğinde, proxy genel bir boş yanıt hatası yerine `429` ve `upstream_throttled` döndürür. Devam etmek için yeni bir oturum başlatın.
+
+### Copilot memory
+
+M365 Copilot hesap düzeyinde bir memory tutar ve bu, turun hangi konuşmaya ait olduğuna bakmadan bu proxy'nin sunduğu her tura ulaşır. Canlı backend'e karşı ölçüldü: yepyeni bir konuşma, ilgisiz önceki oturumlardan gelen içeriği listeledi ve onlardan birinin sakladığı bir yazım tarzı tercihini uyguladı. Konuşma yalıtımı session-conversation eşlemesi üzerinden yürür, bu ayar ise onun altından geçer.
+
+`GET /v1/personalization` hesabın ayarlarını döndürür, `PATCH /v1/personalization` ile `{"memory_enabled": false}` gövdesi memory anahtarını değiştirir. Tarayıcı arayüzü aynı anahtarı sidebar'ının altında gösterir.
+
+```json
+{"object":"personalization","memory_enabled":false,"insights_from_history_enabled":false,
+ "custom_instruction_enabled":true,"graph_content_enabled":false,"personalization_allowed_by_tenant":true}
+```
+
+Memory'yi kapatmak konuşma geçmişinden gelen insights'ı da kapatır; backend ikisini birlikte hareket ettirir. Yazma işlemi bir okumayla doğrulanır, bu yüzden dönen değer istenen değil hesabın bildirdiği durumdur.
+
+**Bu sizin gerçek M365 hesap ayarınızdır.** M365 web ve mobil Copilot için de geçerlidir ve buradaki hiçbir şey onu kendiliğinden değiştirmez: proxy, biri anahtarı çevirene kadar yalnızca raporlar. Personalization'a izin vermeyen bir tenant `409 personalization_disabled_by_tenant` döndürür.
 
 ### Token kullanımı
 

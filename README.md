@@ -664,6 +664,8 @@ Anthropic's top-level `system` field is accepted as a string or as an array of t
 | `GET /v1/conversations/{id}/messages` | Read the turns of a conversation held upstream         |
 | `GET /v1/models`                      | Model list, in both wire formats                       |
 | `GET /v1/quota`                       | Last observed M365 conversation message quota          |
+| `GET /v1/personalization`             | The account's Copilot memory settings                  |
+| `PATCH /v1/personalization`           | Turns the account's Copilot memory on or off           |
 | `GET /v1/sessions`                    | List the session-to-conversation mappings              |
 | `GET /v1/sessions/{id}`               | Read one session's conversation ID                     |
 | `PUT /v1/sessions/{id}`               | Bind a session to an existing conversation             |
@@ -812,6 +814,21 @@ M365 enforces a per-conversation message ceiling and reports the counters on its
 ```
 
 Counters the proxy does not recognize are returned under `extra` instead of being dropped. When a request produces an empty upstream response and the last counters show the ceiling was reached, the proxy answers `429` with code `upstream_throttled` rather than a generic empty-response error. Start a new session to continue.
+
+### Copilot memory
+
+M365 Copilot keeps a memory on the account, and it reaches every turn this proxy serves whatever conversation the turn belongs to. Measured against the live backend, a brand-new conversation listed content from unrelated earlier sessions and applied a writing-style preference stored by one of them. Conversation isolation runs through the session-to-conversation mapping, and this setting passes underneath it.
+
+`GET /v1/personalization` reports the account's settings, and `PATCH /v1/personalization` with `{"memory_enabled": false}` changes the memory switch. The browser interface shows the same switch at the bottom of its sidebar.
+
+```json
+{"object":"personalization","memory_enabled":false,"insights_from_history_enabled":false,
+ "custom_instruction_enabled":true,"graph_content_enabled":false,"personalization_allowed_by_tenant":true}
+```
+
+Turning memory off also turns off insights from conversation history; the backend moves the two together. The write is verified with a read, so the answer is the state the account reports rather than the value that was asked for.
+
+**This is your real M365 account setting.** It applies to the M365 web and mobile Copilot too, and nothing here changes it on its own: the proxy only reports it until someone moves the switch. A tenant that forbids personalization answers `409 personalization_disabled_by_tenant`.
 
 ### Token usage
 
