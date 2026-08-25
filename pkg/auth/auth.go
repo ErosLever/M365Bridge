@@ -128,12 +128,30 @@ func (tm *TokenManager) currentTokenURL() string {
 	return tm.tokenURL
 }
 
+// applyIdentityFromAccessToken restores the user OID and tenant ID from an
+// access token's claims. It is called whenever a cached or freshly-refreshed
+// access token is returned, so identity survives a process restart even
+// though it is otherwise held only in memory: the encrypted refresh token and
+// cache on disk carry everything needed to derive it again, without another
+// browser provisioning round trip. Failures are non-fatal — the token is
+// still usable for M365 Copilot itself and only the identity-derived
+// x-anchormailbox header / chat URL are affected.
+func (tm *TokenManager) applyIdentityFromAccessToken(accessToken string) {
+	oid, tenant, err := identityFromAccessToken(accessToken)
+	if err != nil {
+		logging.Debugf("applyIdentityFromAccessToken: %v", err)
+		return
+	}
+	tm.setIdentity(oid, tenant)
+}
+
 // Get returns a valid access token, refreshing if necessary.
 // Returns cached token if valid, otherwise performs token refresh.
 func (tm *TokenManager) Get() (string, error) {
 	// Try to load from cache first
 	if token, err := tm.loadFromCache(); err == nil {
 		logging.Debug("TokenManager.Get: cache hit")
+		tm.applyIdentityFromAccessToken(token)
 		return token, nil
 	}
 
@@ -146,6 +164,7 @@ func (tm *TokenManager) Get() (string, error) {
 	// rotated refresh token for nothing.
 	if token, err := tm.loadFromCache(); err == nil {
 		logging.Debug("TokenManager.Get: cache filled while waiting for refresh lock")
+		tm.applyIdentityFromAccessToken(token)
 		return token, nil
 	}
 
@@ -243,6 +262,8 @@ func (tm *TokenManager) refreshLocked() (string, error) {
 		logging.Errorf("TokenManager.Refresh: failed to write cache: %v", err)
 		return "", fmt.Errorf("%w: failed to write cache", ErrRefreshFailed)
 	}
+
+	tm.applyIdentityFromAccessToken(result.AccessToken)
 
 	logging.Infof("TokenManager.Refresh: success, expires_in=%d expires_at=%s", result.ExpiresIn, expiresAt.Format(time.RFC3339))
 	return result.AccessToken, nil
