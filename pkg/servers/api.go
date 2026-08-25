@@ -399,6 +399,7 @@ func (api *APIServer) Start(port int) error {
 	// Quota counters expose account usage, so this route stays behind the API
 	// key middleware unlike the public /v1/models and /health routes.
 	mux.HandleFunc("/v1/quota", api.withAuth(api.handleQuota))
+	mux.HandleFunc("/v1/personalization", api.withAuth(api.handlePersonalization))
 	mux.HandleFunc("/health", api.handleHealth)
 
 	// Registered last on purpose: "/" is the pattern the mux falls back to,
