@@ -177,6 +177,37 @@ export async function fetchGeneratedImage(path: string): Promise<Blob> {
   return await res.blob()
 }
 
+/** What M365 Copilot is allowed to remember about the account. */
+export interface Personalization {
+  memory_enabled: boolean
+  insights_from_history_enabled: boolean
+  custom_instruction_enabled: boolean
+  graph_content_enabled: boolean
+  personalization_allowed_by_tenant: boolean
+}
+
+export async function fetchPersonalization(): Promise<Personalization> {
+  return await getJSON<Personalization>('/v1/personalization')
+}
+
+/**
+ * Turns the account's Copilot memory on or off.
+ *
+ * This changes the operator's real M365 account, so it runs only when someone
+ * moves the control. The gateway verifies the change upstream and answers with
+ * the state the account reports, which is what the caller should render rather
+ * than the value it asked for.
+ */
+export async function setMemoryEnabled(enabled: boolean): Promise<Personalization> {
+  const res = await fetch('/v1/personalization', {
+    method: 'PATCH',
+    headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ memory_enabled: enabled }),
+  })
+  if (!res.ok) throw await toError(res)
+  return (await res.json()) as Personalization
+}
+
 export interface StreamDelta {
   content?: string
   reasoning?: string

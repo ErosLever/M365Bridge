@@ -434,6 +434,31 @@ body {
   border-radius: 8px;
 }
 
+/* The account settings that belong to the whole gateway rather than to one
+   conversation. It sits below the list and stays visible while the list
+   scrolls. */
+.sidebar-foot {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  flex-shrink: 0;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.settings-row input:disabled {
+  cursor: not-allowed;
+}
+
+.sidebar-foot .sidebar-note {
+  margin: 6px 0 0;
+}
+
 /* What the turn is waiting on. It sits above the empty answer body and is
    replaced by the first content that arrives. */
 .notice-line {

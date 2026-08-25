@@ -7,13 +7,34 @@ interface Props {
   rows: ConversationRow[]
   activeId: string
   remoteListFailed: boolean
+  /** Null until the account's setting has been read, or when reading it failed. */
+  memory: MemoryState | null
   onOpen: (row: ConversationRow) => void
   onNew: () => void
   onDelete: (row: ConversationRow) => void
   onRename: (row: ConversationRow, name: string) => void
+  onMemoryChange: (enabled: boolean) => void
 }
 
-export function Sidebar({ rows, activeId, remoteListFailed, onOpen, onNew, onDelete, onRename }: Props) {
+/** The account's Copilot memory setting as the sidebar needs it. */
+export interface MemoryState {
+  enabled: boolean
+  allowedByTenant: boolean
+  /** True while a change is in flight, so the control cannot be moved twice. */
+  saving: boolean
+}
+
+export function Sidebar({
+  rows,
+  activeId,
+  remoteListFailed,
+  memory,
+  onOpen,
+  onNew,
+  onDelete,
+  onRename,
+  onMemoryChange,
+}: Props) {
   const { t } = useI18n()
 
   return (
@@ -81,6 +102,29 @@ export function Sidebar({ rows, activeId, remoteListFailed, onOpen, onNew, onDel
         })}
         {rows.length === 0 && <li className="empty">{t('sidebar.empty')}</li>}
       </ul>
+
+      {/* The account's Copilot memory reaches every turn this gateway serves,
+          whatever conversation it belongs to. It is the operator's own M365
+          setting, so it is shown and changed here rather than turned off on
+          their behalf. The block stays hidden when the setting could not be
+          read, because a control that cannot report the truth is worse than
+          none. */}
+      {memory && (
+        <div className="sidebar-foot">
+          <label className="settings-row">
+            <input
+              type="checkbox"
+              checked={memory.enabled}
+              disabled={memory.saving || !memory.allowedByTenant}
+              onChange={(event) => onMemoryChange(event.target.checked)}
+            />
+            <span>{t('settings.memory')}</span>
+          </label>
+          <p className="sidebar-note">
+            {memory.allowedByTenant ? t('settings.memoryHint') : t('settings.memoryTenantOff')}
+          </p>
+        </div>
+      )}
     </aside>
   )
 }
