@@ -38,6 +38,7 @@ type provisioningHandler struct {
 	enabled   bool
 	secret    []byte
 	origins   map[string]struct{}
+	anyOrigin bool
 	provision func([]auth.SSOCookie) error
 	mu        sync.Mutex
 	failures  map[string]provisionFailure
@@ -52,6 +53,10 @@ func newProvisioningHandler(config *models.Config, provision func([]auth.SSOCook
 		requests:  make(map[string]time.Time),
 	}
 	for _, origin := range config.ProvisionOrigins {
+		if origin == "*" {
+			handler.anyOrigin = true
+			continue
+		}
 		if !validExtensionOrigin(origin) {
 			return nil, fmt.Errorf("invalid M365_PROVISION_ORIGINS entry")
 		}
@@ -104,12 +109,16 @@ func (handler *provisioningHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 
 	origin := r.Header.Get("Origin")
 	if origin != "" {
-		if _, allowed := handler.origins[origin]; !allowed {
-			handler.sendError(w, http.StatusForbidden, "origin_not_allowed")
-			return
+		if handler.anyOrigin || len(handler.origins) == 0 {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else {
+			if _, allowed := handler.origins[origin]; !allowed {
+				handler.sendError(w, http.StatusForbidden, "origin_not_allowed")
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
 		}
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Vary", "Origin")
 	}
 
 	if r.Method == http.MethodOptions {

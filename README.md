@@ -78,7 +78,7 @@ go build -o bin/m365-bridge ./cmd/cli
 
 > **Note:** Prefer not to install a browser extension, or want to build from source instead of using Docker? The upstream project documents both: a manual, extension-free token setup using a browser console snippet and its own setup wizard ([Connecting your Microsoft 365 account](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#connecting-your-microsoft-365-account)), and a from-source build ([Option C: Build from source](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#option-c-build-from-source)).
 
-#### Step 3: Install the extension and record its origin
+#### Step 3: Install the extension and optionally record its origin
 
 The Chromium package supports Google Chrome, Microsoft Edge, and other compatible Chromium-based browsers. Load the same `extension/dist/chromium` directory in either browser:
 
@@ -86,7 +86,7 @@ The Chromium package supports Google Chrome, Microsoft Edge, and other compatibl
 - **Microsoft Edge:** Open `edge://extensions`, enable **Developer mode**, select **Load unpacked**, and choose `extension/dist/chromium`.
 - **Firefox:** Open `about:debugging#/runtime/this-firefox`, select **Load Temporary Add-on**, and choose `extension/dist/firefox/manifest.json`.
 
-Record the origin assigned by the browser. It will look like `chrome-extension://<extension-id>` or `moz-extension://<extension-id>`. M365Bridge uses this exact origin to restrict provisioning requests.
+For defense in depth, you can record the origin assigned by the browser. It will look like `chrome-extension://<extension-id>` or `moz-extension://<extension-id>`. M365Bridge can use this exact origin to restrict browser provisioning requests.
 
 Chrome and Edge assign extension IDs independently, even when they load the same package. If you use the extension in both browsers, add both exact origins to `M365_PROVISION_ORIGINS` as a comma-separated list:
 
@@ -96,15 +96,14 @@ M365_PROVISION_ORIGINS=chrome-extension://<chrome-extension-id>,chrome-extension
 
 #### Step 4: Configure and start M365Bridge
 
-Create a project-level `.env` file using the extension origin from Step 3:
+Create a project-level `.env` file. `M365_PROVISION_ORIGINS` is optional:
 
 ```dotenv
 M365_PROVISION_SECRET_FILE=/app/data/provision-secret
-M365_PROVISION_ORIGINS=chrome-extension://<extension-id>
 M365_PROVISION_AUTHORITY=organizations
 ```
 
-Multiple exact extension origins can be supplied as a comma-separated list. Arbitrary web origins are rejected.
+When `M365_PROVISION_ORIGINS` is unset or empty, browser requests from any origin are allowed by CORS. Set it to a comma-separated list of exact extension origins to enable origin filtering, or to `*` to explicitly allow every origin. General wildcard patterns such as `chrome-extension://abc*` are not supported. Origin filtering is defense in depth; every provisioning request must still contain a payload authenticated with the provisioning secret.
 
 Create a `docker-compose.yml` file in your project directory:
 
@@ -167,14 +166,13 @@ docker run -d \
   --name m365bridge \
   -p 8230:8000 \
   -e M365_PROVISION_SECRET_FILE=/app/data/provision-secret \
-  -e M365_PROVISION_ORIGINS=chrome-extension://<extension-id> \
   -e M365_PROVISION_AUTHORITY=organizations \
   -v "$(pwd)/data:/app/data" \
   --restart unless-stopped \
   m365bridge:local
 ```
 
-Replace `chrome-extension://<extension-id>` with the exact origin recorded in Step 3, then continue with Steps 5 and 6 above.
+To restrict browser origins, add `-e M365_PROVISION_ORIGINS=chrome-extension://<extension-id>` using the exact origin recorded in Step 3. Then continue with Steps 5 and 6 above.
 
 `docker run` has no equivalent to Compose's env-sourced secrets; see [Encrypting cached tokens at rest](docs/token-encryption.md) for the `docker run` alternative.
 

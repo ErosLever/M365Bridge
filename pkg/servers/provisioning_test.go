@@ -97,6 +97,7 @@ func TestNewProvisioningHandlerSecretFileTakesPrecedence(t *testing.T) {
 
 func TestNewProvisioningHandlerValidatesExtensionOrigins(t *testing.T) {
 	valid := []string{
+		"*",
 		"chrome-extension://abcdefghijklmnop",
 		"moz-extension://12345678-1234-1234-1234-123456789abc",
 	}
@@ -202,6 +203,40 @@ func TestProvisioningHandlerHTTPBoundary(t *testing.T) {
 			t.Fatalf("denied origin was reflected as %q", got)
 		}
 	})
+}
+
+func TestProvisioningHandlerOptionalAndWildcardOrigins(t *testing.T) {
+	secret := strings.Repeat("s", provisionSecretMinLength)
+
+	for _, test := range []struct {
+		name    string
+		origins []string
+	}{
+		{name: "unset"},
+		{name: "wildcard", origins: []string{"*"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler, err := newProvisioningHandler(&models.Config{
+				ProvisionSecret:  secret,
+				ProvisionOrigins: test.origins,
+			}, func([]auth.SSOCookie) error { return nil })
+			if err != nil {
+				t.Fatalf("create handler: %v", err)
+			}
+
+			request := httptest.NewRequest(http.MethodOptions, "/provision/v1/session", nil)
+			request.Header.Set("Origin", "https://example.com")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusNoContent, recorder.Body.String())
+			}
+			if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+				t.Fatalf("Access-Control-Allow-Origin = %q, want *", got)
+			}
+		})
+	}
 }
 
 func TestProvisioningHandlerEncryptedPayload(t *testing.T) {
