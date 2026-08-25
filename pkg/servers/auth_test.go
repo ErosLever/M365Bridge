@@ -183,7 +183,7 @@ func TestAuthVerifyLocksOutRepeatedInvalidCredentials(t *testing.T) {
 		return rec.Code
 	}
 
-	for i := 0; i < authFailureLimit; i++ {
+	for i := range authFailureLimit {
 		if got := wrongAttempt(); got != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: status = %d, want 401", i, got)
 		}

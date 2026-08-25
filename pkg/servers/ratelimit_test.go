@@ -4,7 +4,7 @@ import "testing"
 
 func TestFailureLimiterLimitsAfterTheThreshold(t *testing.T) {
 	var limiter failureLimiter
-	for i := 0; i < authFailureLimit; i++ {
+	for i := range authFailureLimit {
 		if limiter.limited("1.2.3.4") {
 			t.Fatalf("limited before %d failures were recorded", i)
 		}
@@ -17,7 +17,7 @@ func TestFailureLimiterLimitsAfterTheThreshold(t *testing.T) {
 
 func TestFailureLimiterTracksKeysIndependently(t *testing.T) {
 	var limiter failureLimiter
-	for i := 0; i < authFailureLimit; i++ {
+	for range authFailureLimit {
 		limiter.recordFailure("1.2.3.4")
 	}
 	if limiter.limited("5.6.7.8") {
@@ -27,7 +27,7 @@ func TestFailureLimiterTracksKeysIndependently(t *testing.T) {
 
 func TestFailureLimiterClearResetsTheCount(t *testing.T) {
 	var limiter failureLimiter
-	for i := 0; i < authFailureLimit; i++ {
+	for range authFailureLimit {
 		limiter.recordFailure("1.2.3.4")
 	}
 	limiter.clear("1.2.3.4")
