@@ -63,19 +63,6 @@ Package the browser extension:
 node extension/package.js
 ```
 
-Build the docker image locally:
-
-```bash
-docker compose build
-```
-
-For a native installation, build the binary instead:
-
-```bash
-go mod download
-go build -o bin/m365-bridge ./cmd/cli
-```
-
 > **Note:** Prefer not to install a browser extension, or want to build from source instead of using Docker? The upstream project documents both: a manual, extension-free token setup using a browser console snippet and its own setup wizard ([Connecting your Microsoft 365 account](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#connecting-your-microsoft-365-account)), and a from-source build ([Option C: Build from source](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#option-c-build-from-source)).
 
 #### Step 3: Install the extension
@@ -97,28 +84,10 @@ M365_PROVISION_AUTHORITY=organizations
 
 `M365_PROVISION_ORIGINS` can optionally restrict browser provisioning requests by exact extension origin. See [Provisioning origin filtering](docs/provisioning-origin-filtering.md) for configuration and security details.
 
-Create a `docker-compose.yml` file in your project directory:
-
-```yaml
-services:
-  m365bridge:
-    image: ghcr.io/kilimcininkoroglu/m365bridge:latest
-    container_name: m365bridge
-    ports:
-      - "8230:8000"
-    environment:
-      M365_PROVISION_SECRET_FILE: ${M365_PROVISION_SECRET_FILE:-}
-      M365_PROVISION_ORIGINS: ${M365_PROVISION_ORIGINS:-}
-      M365_PROVISION_AUTHORITY: ${M365_PROVISION_AUTHORITY:-organizations}
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
-```
-
-Start the container:
+The repository includes a ready-to-use [`docker-compose.yml`](docker-compose.yml) that builds the image from the current checkout. Build and start M365Bridge:
 
 ```bash
-docker compose up -d
+docker compose up --build -d
 ```
 
 The bridge and provisioning endpoint are now available at `http://localhost:8230`. Browser provisioning requires either `M365_PROVISION_SECRET` or `M365_PROVISION_SECRET_FILE`. If neither is configured, `/provision/v1/session` returns `404 Not Found` and the extension cannot authenticate M365Bridge. The existing `8230:8000` mapping serves both API and provisioning requests.
@@ -174,7 +143,6 @@ Optional origin filtering is documented in [Provisioning origin filtering](docs/
 - Port `8230` (host) maps to port `8000` (container). Change the host port in `docker-compose.yml` or the `-p` flag if needed.
 - The container starts with `serve --port 8000` by default.
 - Browser provisioning uses the existing server port and does not require another published port.
-- To build the image from source instead of using the pre-built one: `docker compose up --build -d`
 - Without a master passphrase configured, `data/tokens/encryption.key` is a plaintext AES key; anyone who can read the `data/` directory can decrypt cached tokens. See [Encrypting cached tokens at rest](docs/token-encryption.md).
 
 ## Usage
