@@ -716,7 +716,16 @@ func (c *M365Client) ChatConversationStreamGenContext(
 														// streaming filter, and stays comparable with
 														// the accumulation that was already filtered.
 														newText = stripCitations(newText)
-														if chunk, advanced := snapshotDelta(acc.baseline(), newText); advanced {
+														chunk, advanced := snapshotDelta(acc.baseline(), newText)
+														if !advanced {
+															// A diverging snapshot is normally a
+															// re-encoding of text already delivered,
+															// which is why it is dropped. Count it so a
+															// turn that really did lose content is not
+															// invisible: two drops on an ordinary turn
+															// is the measured norm, and a spike is not.
+															acc.dropSnapshot()
+														} else {
 															acc.replaceAnswer(newText)
 															if chunk != "" {
 																if !emit(StreamChunk{Text: chunk, IsFinal: false}) {
@@ -780,7 +789,8 @@ func (c *M365Client) ChatConversationStreamGenContext(
 					if len(toolCalls) > 0 {
 						finishReason = "tool_calls"
 					}
-					logging.Infof("ChatConversationStreamGen: completed finishReason=%s toolCalls=%d", finishReason, len(toolCalls))
+					logging.Infof("ChatConversationStreamGen: completed finishReason=%s toolCalls=%d bytes=%d droppedSnapshots=%d",
+						finishReason, len(toolCalls), acc.emittedBytes(), acc.droppedSnapshots)
 					emit(StreamChunk{Text: "", IsFinal: true, ConversationID: finalConvID, ToolCalls: toolCalls, FinishReason: finishReason, Throttling: throttling})
 					return
 				} else if msgType, ok := data["type"].(float64); ok && int(msgType) == -1 {
@@ -886,6 +896,15 @@ type answerAccumulator struct {
 	// noticedImage records that the caller was already told a picture is being
 	// generated, because M365 repeats the announcement.
 	noticedImage bool
+	// droppedSnapshots counts the snapshots snapshotDelta refused. They are
+	// dropped on purpose, but silently, so a turn that lost answer text looked
+	// exactly like a turn that lost nothing.
+	droppedSnapshots int
+}
+
+// dropSnapshot records a snapshot that could not extend the answer.
+func (a *answerAccumulator) dropSnapshot() {
+	a.droppedSnapshots++
 }
 
 // appendAnswer records answer text that went out as a delta.

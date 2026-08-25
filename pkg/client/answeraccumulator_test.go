@@ -119,6 +119,32 @@ func TestSnapshotIsLostWhenInjectedTextEntersTheBaseline(t *testing.T) {
 	}
 }
 
+// A dropped snapshot is normally a re-encoding of text already delivered, so it
+// is dropped on purpose. It was dropped silently, which made a turn that really
+// lost answer text look exactly like a turn that lost nothing. Two drops on an
+// ordinary turn is the measured norm, so the count is what tells the two apart.
+func TestAccumulatorCountsTheSnapshotsItRefuses(t *testing.T) {
+	var acc answerAccumulator
+	if acc.droppedSnapshots != 0 {
+		t.Fatalf("droppedSnapshots = %d on a fresh turn", acc.droppedSnapshots)
+	}
+
+	acc.appendAnswer("Buyur, turuncu kedi")
+	// The same answer re-encoded: it ends with delivered text but is not a
+	// prefix extension, which is exactly what snapshotDelta refuses.
+	if _, advanced := snapshotDelta(acc.baseline(), "Buyur, [1] turuncu kedi"); advanced {
+		t.Fatal("the fixture no longer produces a dropped snapshot")
+	}
+	acc.dropSnapshot()
+
+	if acc.droppedSnapshots != 1 {
+		t.Fatalf("droppedSnapshots = %d, want 1", acc.droppedSnapshots)
+	}
+	if acc.baseline() != "Buyur, turuncu kedi" {
+		t.Fatalf("a dropped snapshot moved the baseline to %q", acc.baseline())
+	}
+}
+
 func TestAccumulatorTracksAnswerAndInjectedTextTogether(t *testing.T) {
 	var acc answerAccumulator
 	acc.appendAnswer("Buy")
