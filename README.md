@@ -298,6 +298,8 @@ The wizard prints the browser instructions again for reference, then reads `data
 
 The redemption is the verification. The token is staged in a file of its own until Microsoft answers, so a value that cannot be redeemed never replaces a token that works, and a refresh token shorter than 100 characters is refused before anything is stored: it is the example text left in place of a real value.
 
+`tenant` and `oid` are checked before anything is stored too. A value that is not a GUID, and a GUID whose every digit is the same character such as `22222222-2222-2222-2222-222222222222`, is refused with the field named, because Entra issues no such id and a value of that shape is filler someone typed in place of a real one. What lands in `data/.env` afterwards is not what the file said either: the ids are read from the claims of the access token Microsoft just returned. That is the only check the `oid` can get, since it takes no part in the token exchange, and a wrong one otherwise breaks the install much later, on an ordinary chat request.
+
 Read its output rather than only its exit. A successful run with all three credentials prints all of these:
 
 ```
@@ -355,6 +357,7 @@ The login cookies themselves expire eventually, and a tenant policy or a passwor
 |---|---|
 | The wizard reports a missing or invalid `refresh_token` | `data/setup.json` is missing, empty, or holds the placeholder text instead of the real JSON. |
 | The wizard says the `refresh_token` is too short to be a real token | The example value is still in `data/setup.json`. A real one runs to thousands of characters. |
+| The wizard says `tenant` or `oid` is not a GUID, or is filler text | That field in `data/setup.json` was never replaced with the value the browser console printed. |
 | Every request answers `upstream_auth_failed` and the log shows `AADSTS90002: Tenant not found` | `data/.env` holds a placeholder tenant. The `tid` and `oid` claims of the token in `data/tokens/token_cache.json` carry the real ones. |
 | The wizard reports cookies as captured but saves none | Cookie entries have no `domain` field. See Step 4. |
 | The server exits with a token refresh error | The refresh token expired and there are no usable login cookies. Repeat Steps 1 to 5. |
@@ -1202,6 +1205,14 @@ The address M365 puts in that link cannot be fetched by whoever reads the answer
 ```
 
 The path is root-relative, so a client resolves it against the base URL it already uses, and it sits behind the API key like every other `/v1` route. The reference is minted by the proxy and lives in memory: a restart drops it, and it expires on its own after twelve hours, which is also roughly how long the address behind it stays valid. A reference the proxy no longer holds answers `404 image_not_found`, and the browser interface shows a short note in place of the image. An address the [host allowlist](#host-allowlist) refuses is removed from the answer rather than passed on, for the reason a generated URL is never handed to a client directly.
+
+Generating a picture takes about a minute, and M365 sends no answer text while it works. It does announce the start, so a streaming response carries an SSE comment as soon as that announcement arrives:
+
+```
+: notice image_generating
+```
+
+A comment enters no field contract, so every OpenAI and Anthropic client ignores it exactly as it ignores the keepalive comment. The browser interface reads it and shows a line saying the image is being generated; the first content of the answer replaces that line, and because the notice was never answer text, nothing has to be taken back and nothing reaches the transcript. The read timeout is raised to three minutes for the rest of a turn that started generating an image.
 
 The separate Images API endpoints stay one-shot and return the image data itself:
 

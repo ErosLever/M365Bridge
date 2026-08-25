@@ -298,6 +298,8 @@ Sihirbaz önce tarayıcı adımlarını hatırlatma amacıyla tekrar yazdırır,
 
 Doğrulama bu bozdurma işlemidir. Token, Microsoft cevap verene kadar kendi dosyasında bekletilir; böylece bozdurulamayan bir değer, çalışan bir token'ın üzerine yazmaz. 100 karakterden kısa bir refresh token hiçbir şey saklanmadan reddedilir: o, gerçek değerin yerinde kalmış örnek metindir.
 
+`tenant` ve `oid` de hiçbir şey saklanmadan denetlenir. GUID olmayan bir değer ve her hanesi aynı karakter olan bir GUID (örneğin `22222222-2222-2222-2222-222222222222`) alan adı söylenerek reddedilir; Entra böyle bir id vermez, bu biçimdeki bir değer gerçeğinin yerine yazılmış doldurma metnidir. Sonrasında `data/.env` dosyasına yazılan da dosyadaki değer değildir: id'ler Microsoft'un az önce döndürdüğü access token'ın claim'lerinden okunur. `oid` token exchange'e girmediği için alabileceği tek denetim budur; yanlış bir `oid` aksi halde kurulumu çok sonra, sıradan bir sohbet isteğinde bozar.
+
 Yalnızca çıkış koduna değil, çıktısına da bakın. Üç kimlik bilgisiyle yapılan başarılı bir çalıştırma şu üç satırı da yazdırır:
 
 ```
@@ -355,6 +357,7 @@ Login cookie'leri de bir gün dolar; tenant politikası veya parola değişikli�
 |---|---|
 | Sihirbaz `refresh_token` eksik veya geçersiz diyor | `data/setup.json` yok, boş, ya da gerçek JSON yerine örnek metni içeriyor. |
 | Sihirbaz `refresh_token` gerçek bir token olamayacak kadar kısa diyor | `data/setup.json` içinde hâlâ örnek değer duruyor. Gerçeği binlerce karakterdir. |
+| Sihirbaz `tenant` ya da `oid` GUID değil veya doldurma metni diyor | `data/setup.json` içindeki o alan, tarayıcı console'unun yazdırdığı değerle hiç değiştirilmemiş. |
 | Her istek `upstream_auth_failed` dönüyor ve logda `AADSTS90002: Tenant not found` yazıyor | `data/.env` içinde placeholder bir tenant var. Gerçek değerler `data/tokens/token_cache.json` içindeki token'ın `tid` ve `oid` claim'lerinde durur. |
 | Sihirbaz cookie okuduğunu söylüyor ama hiçbirini kaydetmiyor | Cookie kayıtlarında `domain` alanı yok. Adım 4'e bakın. |
 | Sunucu token refresh hatasıyla kapanıyor | Refresh token doldu ve kullanılabilir login cookie'si yok. Adım 1'den 5'e tekrarlayın. |
@@ -1202,6 +1205,14 @@ M365'in o bağlantıya koyduğu adresi, cevabı okuyan taraf indiremez: indirme 
 ```
 
 Yol kök göreli olduğu için istemci onu zaten kullandığı base URL ile çözer ve her `/v1` route'u gibi API key'in arkasındadır. Referansı proxy üretir ve bellekte tutar: yeniden başlatma onu düşürür, on iki saat sonra da kendiliğinden dolar; arkasındaki adres de yaklaşık o kadar geçerli kalır. Proxy'nin artık tutmadığı bir referans `404 image_not_found` alır ve tarayıcı arayüzü görselin yerine kısa bir not gösterir. [Host allowlist'inin](#host-allowlisti) kabul etmediği bir adres, iletilmek yerine cevaptan çıkarılır; üretilen bir adresin istemciye hiç verilmemesinin sebebi budur.
+
+Görsel üretimi yaklaşık bir dakika sürer ve M365 bu sırada hiç cevap metni göndermez. Ancak işe başladığını bildirir, bu yüzden streaming cevap o bildirim gelir gelmez bir SSE comment taşır:
+
+```
+: notice image_generating
+```
+
+Comment hiçbir alan sözleşmesine girmez, yani her OpenAI ve Anthropic istemcisi onu keepalive comment'ını yok saydığı gibi yok sayar. Tarayıcı arayüzü onu okur ve görselin oluşturulduğunu söyleyen bir satır gösterir; cevabın ilk içeriği o satırın yerini alır. Notice hiçbir zaman cevap metni olmadığı için geri alınacak bir şey yoktur ve transcript'e hiçbir şey yazılmaz. Görsel üretimi başlayan bir turda okuma timeout'u turun geri kalanı için üç dakikaya çıkar.
 
 Ayrı Images API endpoint'leri tek seferliktir ve görselin verisini döndürür:
 

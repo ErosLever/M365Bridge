@@ -2080,7 +2080,7 @@ func (api *APIServer) streamAnthropicComplete(ctx context.Context, w http.Respon
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, func() error { return writeAnthropicKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, flusher, func() error { return writeAnthropicKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -2224,7 +2224,7 @@ func (api *APIServer) streamChatCompletions(ctx context.Context, w http.Response
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, flusher, func() error { return writeSSEKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -2701,7 +2701,7 @@ func (api *APIServer) streamAnthropicMessages(ctx context.Context, w http.Respon
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, func() error { return writeAnthropicKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, flusher, func() error { return writeAnthropicKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -3238,7 +3238,7 @@ func (api *APIServer) streamCompletions(ctx context.Context, w http.ResponseWrit
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, flusher, func() error { return writeSSEKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -3921,6 +3921,22 @@ func writeSSEKeepalive(w http.ResponseWriter, flusher http.Flusher) error {
 	return nil
 }
 
+// writeSSENotice emits a state of the turn as an SSE comment.
+//
+// A comment is the only channel that reaches an interested client without
+// entering any field contract: every client ignores a comment line, so this
+// cannot change what an OpenAI or Anthropic SDK parses. The notice is a machine
+// token rather than a sentence, because the reader owns the wording and its
+// language. Nothing here is answer text, so it never reaches a transcript and
+// there is nothing to take back once the turn produces content.
+func writeSSENotice(w http.ResponseWriter, flusher http.Flusher, notice string) error {
+	if _, err := fmt.Fprintf(w, ": notice %s\n\n", notice); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
 // writeAnthropicKeepalive emits the ping event the Anthropic wire format
 // defines for this purpose. An SSE comment would work too, but the SDK already
 // knows ping and dispatches it at any point in the stream.
@@ -3938,10 +3954,15 @@ func writeAnthropicKeepalive(w http.ResponseWriter, flusher http.Flusher) error 
 // canceled, or a keepalive write fails; the last two are how a stream to a gone
 // client ends while it sits idle.
 //
+// A chunk that carries a notice is written here as an SSE comment and never
+// returned, so every streaming responder reports one without a line of its own
+// and none of them can forget. A notice carries no text, so nothing is lost by
+// consuming it.
+//
 // The keepalive shares the caller's goroutine on purpose: http.ResponseWriter
 // tolerates no concurrent writes, so a background ticker goroutine would
 // interleave frames with the chunk loop.
-func nextStreamChunk(ctx context.Context, ch <-chan client.StreamChunk, keepalive *time.Ticker, w http.ResponseWriter, write func() error) (client.StreamChunk, bool) {
+func nextStreamChunk(ctx context.Context, ch <-chan client.StreamChunk, keepalive *time.Ticker, w http.ResponseWriter, flusher http.Flusher, write func() error) (client.StreamChunk, bool) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -3950,6 +3971,13 @@ func nextStreamChunk(ctx context.Context, ch <-chan client.StreamChunk, keepaliv
 			if ok {
 				keepalive.Reset(sseKeepaliveInterval)
 				refreshStreamDeadline(w)
+				if chunk.Notice != "" {
+					if err := writeSSENotice(w, flusher, chunk.Notice); err != nil {
+						logging.Debugf("nextStreamChunk: notice write failed, ending stream: %v", err)
+						return client.StreamChunk{}, false
+					}
+					continue
+				}
 			}
 			return chunk, ok
 		case <-keepalive.C:
@@ -6553,7 +6581,7 @@ func (api *APIServer) streamResponses(
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, flusher, func() error { return writeSSEKeepalive(w, flusher) })
 		if !more {
 			break
 		}
@@ -7268,7 +7296,7 @@ func (api *APIServer) streamResponsesCompact(ctx context.Context, w http.Respons
 	keepalive := time.NewTicker(sseKeepaliveInterval)
 	defer keepalive.Stop()
 	for {
-		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, func() error { return writeSSEKeepalive(w, flusher) })
+		chunk, more := nextStreamChunk(ctx, ch, keepalive, w, flusher, func() error { return writeSSEKeepalive(w, flusher) })
 		if !more {
 			break
 		}

@@ -37,8 +37,17 @@ const (
 	defaultRecvTimeout = 45 * time.Second
 	// defaultRecvFinalTimeout is the timeout for final message in streaming.
 	defaultRecvFinalTimeout = 60 * time.Second
+	// defaultImageRecvTimeout is the read timeout that applies once image
+	// generation has started. M365 answers a picture prompt by going quiet for
+	// a minute or more, and it normally holds the connection open with SignalR
+	// type 6 pings about every fifteen seconds. This is the bound for a turn
+	// where that ping flow stops too.
+	defaultImageRecvTimeout = 180 * time.Second
 	// progressMessageType marks a status message rather than answer text.
 	progressMessageType = "Progress"
+	// NoticeImageGenerating tells the caller M365 started generating a picture
+	// and the turn will stay silent until it finishes.
+	NoticeImageGenerating = "image_generating"
 	// uploadResponseMax caps an upload response. The body is a small JSON
 	// object naming the stored file, so a body near this size is a redirected
 	// or hostile endpoint rather than an upload result.
@@ -74,6 +83,7 @@ type M365Client struct {
 	handshakeTimeout time.Duration
 	recvTimeout      time.Duration
 	recvFinalTimeout time.Duration
+	imageRecvTimeout time.Duration
 	// throttlingObserver is configuration set once before serving, not
 	// per-request state. It reports quota counters from both the streaming and
 	// the aggregating paths, which discard the final chunk.
@@ -106,6 +116,7 @@ func NewM365Client(tokenManager *auth.TokenManager) *M365Client {
 		handshakeTimeout: defaultHandshakeTimeout,
 		recvTimeout:      defaultRecvTimeout,
 		recvFinalTimeout: defaultRecvFinalTimeout,
+		imageRecvTimeout: defaultImageRecvTimeout,
 	}
 }
 
@@ -297,10 +308,15 @@ func (c *M365Client) ChatStream(text, tone, gptOverride, conversationID, userOID
 
 // StreamChunk represents a chunk of streamed response.
 type StreamChunk struct {
-	Text           string
-	Thinking       string
-	IsFinal        bool
-	Error          error
+	Text     string
+	Thinking string
+	IsFinal  bool
+	Error    error
+	// Notice names a state of the turn the caller may show while it waits. It
+	// is a machine token, never text to display, and it is not part of the
+	// answer: nothing that carries it also carries Text, and it never reaches
+	// a transcript.
+	Notice         string
 	ConversationID string          // set on final chunk
 	ToolCalls      []ToolCall      // set on final chunk
 	FinishReason   string          // set on final chunk
@@ -562,7 +578,15 @@ func (c *M365Client) ChatConversationStreamGenContext(
 		var throttling *ThrottlingInfo
 
 		for {
-			_ = conn.SetReadDeadline(time.Now().Add(c.recvFinalTimeout))
+			// Image generation moves the read deadline out for the rest of the
+			// turn. The backend goes quiet for a minute or more while it draws,
+			// and its own pings normally carry the connection through that; this
+			// is what keeps the turn alive when they stop.
+			readTimeout := c.recvFinalTimeout
+			if acc.noticedImage {
+				readTimeout = c.imageRecvTimeout
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
 			msgType, message, err := conn.ReadMessage()
 			if err != nil {
 				if ctx.Err() != nil {
@@ -859,6 +883,9 @@ type answerAccumulator struct {
 	answer strings.Builder
 	// injected counts bytes emitted that no snapshot restates.
 	injected int
+	// noticedImage records that the caller was already told a picture is being
+	// generated, because M365 repeats the announcement.
+	noticedImage bool
 }
 
 // appendAnswer records answer text that went out as a delta.
@@ -885,10 +912,19 @@ func (a *answerAccumulator) inject(n int) {
 // The link is recorded with inject rather than appendAnswer. A snapshot restates
 // the answer alone and never this link, so a baseline holding it makes the first
 // snapshot diverge and the answer's opening words are dropped with it.
+//
+// M365 announces the work before it does it: the first ImageGeneration message
+// of a turn carries an empty ImageReferenceUrls list and a pollUrl, and the one
+// that carries the address arrives a minute or more later. That first message
+// becomes a notice, so a caller has something to show through the silence.
 func (a *answerAccumulator) emitGeneratedImage(msg map[string]any, seenImages map[string]bool, emit func(StreamChunk) bool) bool {
 	imgMD := extractImageGenerationMarkdown(msg, seenImages)
 	if imgMD == "" {
-		return true
+		if a.noticedImage {
+			return true
+		}
+		a.noticedImage = true
+		return emit(StreamChunk{Notice: NoticeImageGenerating})
 	}
 	a.inject(len(imgMD))
 	return emit(StreamChunk{Text: imgMD, IsFinal: false})

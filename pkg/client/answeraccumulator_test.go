@@ -11,11 +11,18 @@ import (
 const generatedImageMarkdown = "\n\n![image](https://designerapp.officeapps.live.com/i.png?fileToken=x)\n\n"
 
 // imageProgressMessage decodes a Progress message in the shape the backend
-// sends once a generated image is ready.
+// sends while it generates a picture. An empty url produces the announcement
+// frame, whose ImageReferenceUrls list is empty; a url produces the frame that
+// carries the finished picture.
 func imageProgressMessage(t *testing.T, url string) map[string]any {
 	t.Helper()
+	urls := `[]`
+	if url != "" {
+		urls = `["` + url + `"]`
+	}
 	raw := `{"contentOrigin":"ImageGeneration",
-		"contentGenerationProgressList":[{"ImageReferenceUrls":["` + url + `"]}]}`
+		"contentGenerationProgressList":[{"ImageReferenceUrls":` + urls + `,
+		"contentType":"image","fileToken":"d6b7191c","orientation":"Square"}]}`
 	var msg map[string]any
 	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
 		t.Fatalf("decode fixture: %v", err)
@@ -57,24 +64,49 @@ func TestEmitGeneratedImageKeepsTheAnswersFirstSnapshot(t *testing.T) {
 	}
 }
 
-// A Progress message without an image must emit nothing and let the stream go
-// on, because most Progress messages carry no image at all.
-func TestEmitGeneratedImageIgnoresAMessageWithoutAnImage(t *testing.T) {
+// M365 announces the work before it does it. The first ImageGeneration message
+// of a turn carries an empty ImageReferenceUrls list, and the one carrying the
+// address arrives a minute or more later. That first message becomes the notice
+// a reader shows through the silence, and it is not answer content.
+func TestEmitGeneratedImageAnnouncesAPictureBeforeItArrives(t *testing.T) {
 	var acc answerAccumulator
-	emit := func(StreamChunk) bool {
-		t.Error("a message without an image produced a chunk")
+	var chunks []StreamChunk
+	emit := func(chunk StreamChunk) bool {
+		chunks = append(chunks, chunk)
 		return true
 	}
+	seen := map[string]bool{}
 
-	var msg map[string]any
-	if err := json.Unmarshal([]byte(`{"contentOrigin":"ImageGeneration"}`), &msg); err != nil {
-		t.Fatalf("decode fixture: %v", err)
+	// The announcement, then M365 repeating itself while it draws.
+	started := imageProgressMessage(t, "")
+	for range 3 {
+		if !acc.emitGeneratedImage(started, seen, emit) {
+			t.Fatal("the announcement stopped the stream")
+		}
 	}
-	if !acc.emitGeneratedImage(msg, map[string]bool{}, emit) {
-		t.Fatal("a message without an image stopped the stream")
+	if len(chunks) != 1 {
+		t.Fatalf("emitted %d chunks, want one notice", len(chunks))
+	}
+	if chunks[0].Notice != NoticeImageGenerating {
+		t.Fatalf("notice = %q, want %q", chunks[0].Notice, NoticeImageGenerating)
+	}
+	if chunks[0].Text != "" {
+		t.Fatalf("the notice carried text %q; it is not answer content", chunks[0].Text)
 	}
 	if acc.emittedBytes() != 0 {
-		t.Fatalf("emittedBytes = %d, want 0", acc.emittedBytes())
+		t.Fatalf("emittedBytes = %d, want 0; a notice is not content", acc.emittedBytes())
+	}
+
+	// The address arrives and goes out as the image itself.
+	const url = "https://designerapp.officeapps.live.com/i.png?fileToken=x"
+	if !acc.emitGeneratedImage(imageProgressMessage(t, url), seen, emit) {
+		t.Fatal("the image stopped the stream")
+	}
+	if len(chunks) != 2 || !strings.Contains(chunks[1].Text, url) {
+		t.Fatalf("chunks = %+v, want the image after the notice", chunks)
+	}
+	if acc.baseline() != "" {
+		t.Fatalf("baseline = %q, want empty", acc.baseline())
 	}
 }
 
