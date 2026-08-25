@@ -74,6 +74,11 @@ func Write(path string, data []byte, mode os.FileMode) (returnErr error) {
 // contents are already synced, some platforms refuse to open a directory for
 // sync at all, and failing a write that succeeded would be the worse outcome.
 func syncDir(dir string) {
+	// dir is filepath.Dir of the path Write was given, and every caller holds
+	// that path as a constant under the gitignored data/ tree. The handle is
+	// opened only to Sync the directory: nothing is read from it and nothing is
+	// written through it, so it carries no file contents either way.
+	// #nosec G304
 	handle, err := os.Open(dir)
 	if err != nil {
 		return
