@@ -25,6 +25,7 @@
   "chat.stop": "Stop",
   "chat.importHistory": "Load the history",
   "chat.importing": "Loading…",
+  "chat.notice.image_generating": "Generating the image, this takes about a minute…",
 
   "message.you": "you",
   "message.assistant": "assistant",
@@ -49,5 +50,8 @@
 
   "notice.authRequired": "This gateway requires an API key.",
   "notice.foreignConversation": "This conversation started outside this gateway. You can continue it here, or load its history from the M365 page.",
-  "notice.renameBeforeSend": "This conversation has not been sent yet. Write a message before naming it."
+  "notice.renameBeforeSend": "This conversation has not been sent yet. Write a message before naming it.",
+
+  "error.noBody": "The gateway answered without a body.",
+  "error.streamFailed": "The stream failed before the answer was complete."
 }

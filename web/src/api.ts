@@ -180,6 +180,12 @@ export async function fetchGeneratedImage(path: string): Promise<Blob> {
 export interface StreamDelta {
   content?: string
   reasoning?: string
+  /**
+   * A state of the turn the gateway reports while it waits, such as
+   * `image_generating`. It arrives on an SSE comment, so it is not content and
+   * never reaches a transcript.
+   */
+  notice?: string
 }
 
 /**
@@ -209,7 +215,9 @@ export async function* streamChat(
     }),
   })
   if (!res.ok) throw await toError(res)
-  if (!res.body) throw new ApiError(res.status, 'no_body', 'The response carried no body')
+  if (!res.body) {
+    throw new ApiError(res.status, 'no_body', 'The response carried no body', 'error.noBody')
+  }
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -232,9 +240,19 @@ export async function* streamChat(
   }
 }
 
+/** The comment prefix the gateway reports a state of the turn on. */
+const noticePrefix = ': notice '
+
 /** Parses one SSE frame into a delta, 'done' for the terminator, or null. */
 function parseFrame(frame: string): StreamDelta | 'done' | null {
   for (const line of frame.split('\n')) {
+    // A notice rides on an SSE comment, which every other client ignores. The
+    // keepalive comment falls through this and stays ignored here too.
+    if (line.startsWith(noticePrefix)) {
+      const notice = line.slice(noticePrefix.length).trim()
+      if (notice) return { notice }
+      continue
+    }
     if (!line.startsWith('data:')) continue
     const payload = line.slice('data:'.length).trim()
     if (payload === '[DONE]') return 'done'
@@ -255,7 +273,14 @@ function parseFrame(frame: string): StreamDelta | 'done' | null {
     // A stream that fails mid-turn reports it in the frame itself; the HTTP
     // status was already sent and cannot be changed.
     if (chunk.error) {
-      throw new ApiError(502, chunk.error.code ?? 'stream_error', chunk.error.message ?? 'The stream failed')
+      // The gateway's own message is preferred and stays as it arrived; the
+      // catalog key covers only the case where it sent none.
+      throw new ApiError(
+        502,
+        chunk.error.code ?? 'stream_error',
+        chunk.error.message ?? 'The stream failed',
+        chunk.error.message ? undefined : 'error.streamFailed',
+      )
     }
 
     const delta = chunk.choices?.[0]?.delta

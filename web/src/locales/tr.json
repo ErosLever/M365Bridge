@@ -25,6 +25,7 @@
   "chat.stop": "Durdur",
   "chat.importHistory": "Geçmişi yükle",
   "chat.importing": "Yükleniyor…",
+  "chat.notice.image_generating": "Görsel oluşturuluyor, bu yaklaşık bir dakika sürer…",
 
   "message.you": "sen",
   "message.assistant": "asistan",
@@ -49,5 +50,8 @@
 
   "notice.authRequired": "Bu gateway bir API key istiyor.",
   "notice.foreignConversation": "Bu konuşma bu gateway dışında başlamış. Buradan devam edebilirsin, ya da geçmişini M365 sayfasından yükleyebilirsin.",
-  "notice.renameBeforeSend": "Bu konuşma henüz gönderilmedi, adlandırmak için önce bir mesaj yaz."
+  "notice.renameBeforeSend": "Bu konuşma henüz gönderilmedi, adlandırmak için önce bir mesaj yaz.",
+
+  "error.noBody": "Gateway gövdesiz cevap döndürdü.",
+  "error.streamFailed": "Stream, cevap tamamlanmadan koptu."
 }

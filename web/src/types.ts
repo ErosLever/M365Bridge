@@ -43,16 +43,29 @@ export interface ChatMessage {
   createdAt?: number
   /** Set when the turn failed, so the row renders as an error instead of an answer. */
   error?: string
+  /**
+   * The gateway's notice token naming what the turn is waiting on, such as
+   * `image_generating`. It comes from the stream rather than from a transcript,
+   * so it is gone after a reload and after the first content arrives.
+   */
+  notice?: string
 }
 
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
+  /**
+   * A catalog key for failures this interface raises itself. A failure the
+   * gateway reported carries none, because its message arrives already written
+   * and in one language.
+   */
+  readonly key?: string
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, key?: string) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
+    this.key = key
   }
 }

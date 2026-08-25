@@ -153,6 +153,10 @@ export function App() {
         setNotice({ key: 'notice.authRequired' })
         return
       }
+      if (err.key) {
+        setNotice({ key: err.key })
+        return
+      }
       setNotice({ text: `${err.code}: ${err.message}` })
       return
     }
@@ -493,6 +497,9 @@ export function App() {
               ...last,
               content: delta.content ? last.content + delta.content : last.content,
               thinking: delta.reasoning ? (last.thinking ?? '') + delta.reasoning : last.thinking,
+              // A notice covers the wait, so the first content replaces it.
+              // Nothing has to be taken back: it was never part of the answer.
+              notice: delta.content ? undefined : (delta.notice ?? last.notice),
             }
             return next
           })
