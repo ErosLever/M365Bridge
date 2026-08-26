@@ -97,7 +97,7 @@ jobs:
       # version regardless of the setup-go patch release.
       - name: Run gopls modernize analyzer
         env:
-          GOTOOLCHAIN: go1.26.5
+          GOTOOLCHAIN: go1.26.6
         run: go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@v0.23.0 ./...
 
   docker:
