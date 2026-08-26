@@ -6,6 +6,10 @@
   "sidebar.rename": "Rename",
   "sidebar.delete": "Delete",
   "sidebar.deleteConfirm": "Delete \"{title}\"?",
+  "settings.memory": "Copilot memory",
+  "settings.memoryHint": "M365 keeps this memory on your account, and it reaches every conversation, including new ones. Turning it off changes the setting on your real M365 account.",
+  "settings.memoryTenantOff": "Your tenant does not allow Copilot personalization, so this cannot be changed here.",
+
   "sidebar.empty": "No conversations yet.",
   "sidebar.remoteListFailed": "The M365 conversation list could not be read, so only the conversations opened through this gateway are shown. The full list needs M365 web cookies.",
 
@@ -25,12 +29,16 @@
   "chat.stop": "Stop",
   "chat.importHistory": "Load the history",
   "chat.importing": "Loading…",
+  "chat.notice.image_generating": "Generating the image, this takes about a minute…",
 
   "message.you": "you",
   "message.assistant": "assistant",
   "message.error": "error",
   "message.showThinking": "Show the thinking",
   "message.hideThinking": "Hide the thinking",
+
+  "image.loading": "Loading the image…",
+  "image.missing": "This image is no longer available.",
 
   "model.unknown": "{model} (not in the list)",
   "model.thinks": " · thinks",
@@ -46,5 +54,8 @@
 
   "notice.authRequired": "This gateway requires an API key.",
   "notice.foreignConversation": "This conversation started outside this gateway. You can continue it here, or load its history from the M365 page.",
-  "notice.renameBeforeSend": "This conversation has not been sent yet. Write a message before naming it."
+  "notice.renameBeforeSend": "This conversation has not been sent yet. Write a message before naming it.",
+
+  "error.noBody": "The gateway answered without a body.",
+  "error.streamFailed": "The stream failed before the answer was complete."
 }

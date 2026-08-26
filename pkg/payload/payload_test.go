@@ -3,6 +3,7 @@ package payload
 import (
 	"encoding/json"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -32,6 +33,26 @@ func TestBuildURLUsesEduStarterRoute(t *testing.T) {
 	}
 	if got := query.Get("scenario"); got != "OfficeWebIncludedCopilot" {
 		t.Fatalf("scenario = %q, want OfficeWebIncludedCopilot", got)
+	}
+}
+
+// The flag is measured rather than copied from a browser capture: without it a
+// long answer arrived as about 840 writeAtCursor deltas, with it as about 130,
+// carrying the same bytes. Losing it costs six times more SSE frames per turn
+// for the same content, and nothing in the answer would look wrong.
+func TestBuildURLAsksTheBackendToMergePureDeltas(t *testing.T) {
+	raw, _, _, err := BuildURL("token", "0123456789abcdef0123456789abcdef", "", "user", "tenant")
+	if err != nil {
+		t.Fatalf("BuildURL returned error: %v", err)
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("BuildURL returned invalid URL: %v", err)
+	}
+
+	flags := strings.Split(parsed.Query().Get("variants"), ",")
+	if !slices.Contains(flags, "feature.EnableMergingPureDeltas") {
+		t.Fatalf("variants does not carry feature.EnableMergingPureDeltas: %v", flags)
 	}
 }
 

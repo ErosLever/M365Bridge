@@ -37,8 +37,17 @@ const (
 	defaultRecvTimeout = 45 * time.Second
 	// defaultRecvFinalTimeout is the timeout for final message in streaming.
 	defaultRecvFinalTimeout = 60 * time.Second
+	// defaultImageRecvTimeout is the read timeout that applies once image
+	// generation has started. M365 answers a picture prompt by going quiet for
+	// a minute or more, and it normally holds the connection open with SignalR
+	// type 6 pings about every fifteen seconds. This is the bound for a turn
+	// where that ping flow stops too.
+	defaultImageRecvTimeout = 180 * time.Second
 	// progressMessageType marks a status message rather than answer text.
 	progressMessageType = "Progress"
+	// NoticeImageGenerating tells the caller M365 started generating a picture
+	// and the turn will stay silent until it finishes.
+	NoticeImageGenerating = "image_generating"
 	// uploadResponseMax caps an upload response. The body is a small JSON
 	// object naming the stored file, so a body near this size is a redirected
 	// or hostile endpoint rather than an upload result.
@@ -74,6 +83,7 @@ type M365Client struct {
 	handshakeTimeout time.Duration
 	recvTimeout      time.Duration
 	recvFinalTimeout time.Duration
+	imageRecvTimeout time.Duration
 	// throttlingObserver is configuration set once before serving, not
 	// per-request state. It reports quota counters from both the streaming and
 	// the aggregating paths, which discard the final chunk.
@@ -106,6 +116,7 @@ func NewM365Client(tokenManager *auth.TokenManager) *M365Client {
 		handshakeTimeout: defaultHandshakeTimeout,
 		recvTimeout:      defaultRecvTimeout,
 		recvFinalTimeout: defaultRecvFinalTimeout,
+		imageRecvTimeout: defaultImageRecvTimeout,
 	}
 }
 
@@ -303,10 +314,15 @@ func (c *M365Client) ChatStream(text, tone, gptOverride, conversationID, userOID
 
 // StreamChunk represents a chunk of streamed response.
 type StreamChunk struct {
-	Text           string
-	Thinking       string
-	IsFinal        bool
-	Error          error
+	Text     string
+	Thinking string
+	IsFinal  bool
+	Error    error
+	// Notice names a state of the turn the caller may show while it waits. It
+	// is a machine token, never text to display, and it is not part of the
+	// answer: nothing that carries it also carries Text, and it never reaches
+	// a transcript.
+	Notice         string
 	ConversationID string          // set on final chunk
 	ToolCalls      []ToolCall      // set on final chunk
 	FinishReason   string          // set on final chunk
@@ -559,10 +575,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 
 		toolCalls := []ToolCall{}
 		seenImages := map[string]bool{}
-		// accText is a Builder because a turn arrives as hundreds of appends,
-		// but a snapshot replaces the whole accumulation rather than extending
-		// it, which is why Reset appears alongside WriteString.
-		var accText strings.Builder
+		var acc answerAccumulator
 		var accThinking strings.Builder
 		// citations holds back a citation run that has not finished arriving,
 		// because a delta already emitted cannot be retracted.
@@ -571,7 +584,15 @@ func (c *M365Client) ChatConversationStreamGenContext(
 		var throttling *ThrottlingInfo
 
 		for {
-			_ = conn.SetReadDeadline(time.Now().Add(c.recvFinalTimeout))
+			// Image generation moves the read deadline out for the rest of the
+			// turn. The backend goes quiet for a minute or more while it draws,
+			// and its own pings normally carry the connection through that; this
+			// is what keeps the turn alive when they stop.
+			readTimeout := c.recvFinalTimeout
+			if acc.noticedImage {
+				readTimeout = c.imageRecvTimeout
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
 			msgType, message, err := conn.ReadMessage()
 			if err != nil {
 				if ctx.Err() != nil {
@@ -672,11 +693,8 @@ func (c *M365Client) ChatConversationStreamGenContext(
 														}
 														// Extract generated image URLs from contentGenerationProgressList
 														if co, _ := msgMap["contentOrigin"].(string); co == "ImageGeneration" {
-															if imgMD := extractImageGenerationMarkdown(msgMap, seenImages); imgMD != "" {
-																accText.WriteString(imgMD)
-																if !emit(StreamChunk{Text: imgMD, IsFinal: false}) {
-																	return
-																}
+															if !acc.emitGeneratedImage(msgMap, seenImages, emit) {
+																return
 															}
 														}
 														// Extract web search tool calls from searchQueries field
@@ -704,9 +722,17 @@ func (c *M365Client) ChatConversationStreamGenContext(
 														// streaming filter, and stays comparable with
 														// the accumulation that was already filtered.
 														newText = stripCitations(newText)
-														if chunk, advanced := snapshotDelta(accText.String(), newText); advanced {
-															accText.Reset()
-															accText.WriteString(newText)
+														chunk, advanced := snapshotDelta(acc.baseline(), newText)
+														if !advanced {
+															// A diverging snapshot is normally a
+															// re-encoding of text already delivered,
+															// which is why it is dropped. Count it so a
+															// turn that really did lose content is not
+															// invisible: two drops on an ordinary turn
+															// is the measured norm, and a spike is not.
+															acc.dropSnapshot()
+														} else {
+															acc.replaceAnswer(newText)
 															if chunk != "" {
 																if !emit(StreamChunk{Text: chunk, IsFinal: false}) {
 																	return
@@ -723,7 +749,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 										// filter holds the tail back rather than emitting
 										// text it would have to retract.
 										if emitText := citations.push(writeAtCursor); emitText != "" {
-											accText.WriteString(emitText)
+											acc.appendAnswer(emitText)
 											if !emit(StreamChunk{Text: emitText, IsFinal: false}) {
 												return
 											}
@@ -744,8 +770,8 @@ func (c *M365Client) ChatConversationStreamGenContext(
 							// Text already on the wire cannot be retracted, so a
 							// partial answer is delivered rather than replaced by
 							// an error.
-							if accText.Len() > 0 {
-								logging.Warnf("ChatConversationStreamGen: %v, keeping the %d bytes already emitted", failure, accText.Len())
+							if acc.emittedBytes() > 0 {
+								logging.Warnf("ChatConversationStreamGen: %v, keeping the %d bytes already emitted", failure, acc.emittedBytes())
 							} else {
 								logging.Errorf("ChatConversationStreamGen: %v", failure)
 								emit(StreamChunk{Error: failure})
@@ -760,7 +786,7 @@ func (c *M365Client) ChatConversationStreamGenContext(
 					if held := citations.flush(); held != "" {
 						logging.Warnf("ChatConversationStreamGen: dropped %d bytes of an unterminated citation marker", len(held))
 					}
-					if emptyTurn(accText.String(), toolCalls) {
+					if acc.emptyTurn(toolCalls) {
 						logging.Errorf("ChatConversationStreamGen: %v (thinking=%d bytes)", ErrEmptyTurn, accThinking.Len())
 						emit(StreamChunk{Error: ErrEmptyTurn})
 						return
@@ -769,7 +795,8 @@ func (c *M365Client) ChatConversationStreamGenContext(
 					if len(toolCalls) > 0 {
 						finishReason = "tool_calls"
 					}
-					logging.Infof("ChatConversationStreamGen: completed finishReason=%s toolCalls=%d", finishReason, len(toolCalls))
+					logging.Infof("ChatConversationStreamGen: completed finishReason=%s toolCalls=%d bytes=%d droppedSnapshots=%d",
+						finishReason, len(toolCalls), acc.emittedBytes(), acc.droppedSnapshots)
 					emit(StreamChunk{Text: "", IsFinal: true, ConversationID: finalConvID, ToolCalls: toolCalls, FinishReason: finishReason, Throttling: throttling})
 					return
 				} else if msgType, ok := data["type"].(float64); ok && int(msgType) == -1 {
@@ -860,11 +887,89 @@ func (c *M365Client) sendRecv(conn *websocket.Conn, payload string) (string, err
 	}
 }
 
+// answerAccumulator tracks what a turn has already put on the wire.
+//
+// It keeps two things apart on purpose. The answer is what the backend itself
+// restates in a snapshot, and it is the only thing snapshotDelta may compare
+// against. Injected text is what this package adds, today the generated-image
+// markdown, and a snapshot never carries it: counting it into the baseline made
+// the first snapshot diverge, and the opening words of the answer went with it.
+type answerAccumulator struct {
+	// answer is a Builder because a turn arrives as hundreds of appends.
+	answer strings.Builder
+	// injected counts bytes emitted that no snapshot restates.
+	injected int
+	// noticedImage records that the caller was already told a picture is being
+	// generated, because M365 repeats the announcement.
+	noticedImage bool
+	// droppedSnapshots counts the snapshots snapshotDelta refused. They are
+	// dropped on purpose, but silently, so a turn that lost answer text looked
+	// exactly like a turn that lost nothing.
+	droppedSnapshots int
+}
+
+// dropSnapshot records a snapshot that could not extend the answer.
+func (a *answerAccumulator) dropSnapshot() {
+	a.droppedSnapshots++
+}
+
+// appendAnswer records answer text that went out as a delta.
+func (a *answerAccumulator) appendAnswer(text string) {
+	a.answer.WriteString(text)
+}
+
+// replaceAnswer adopts a snapshot as the new baseline, because a snapshot
+// restates the whole answer rather than extending it.
+func (a *answerAccumulator) replaceAnswer(text string) {
+	a.answer.Reset()
+	a.answer.WriteString(text)
+}
+
+// inject records bytes this package emitted that no snapshot restates.
+func (a *answerAccumulator) inject(n int) {
+	a.injected += n
+}
+
+// emitGeneratedImage forwards the generated-image link a message carries, if it
+// carries one this turn has not sent yet. It reports whether the caller may keep
+// streaming.
+//
+// The link is recorded with inject rather than appendAnswer. A snapshot restates
+// the answer alone and never this link, so a baseline holding it makes the first
+// snapshot diverge and the answer's opening words are dropped with it.
+//
+// M365 announces the work before it does it: the first ImageGeneration message
+// of a turn carries an empty ImageReferenceUrls list and a pollUrl, and the one
+// that carries the address arrives a minute or more later. That first message
+// becomes a notice, so a caller has something to show through the silence.
+func (a *answerAccumulator) emitGeneratedImage(msg map[string]any, seenImages map[string]bool, emit func(StreamChunk) bool) bool {
+	imgMD := extractImageGenerationMarkdown(msg, seenImages)
+	if imgMD == "" {
+		if a.noticedImage {
+			return true
+		}
+		a.noticedImage = true
+		return emit(StreamChunk{Notice: NoticeImageGenerating})
+	}
+	a.inject(len(imgMD))
+	return emit(StreamChunk{Text: imgMD, IsFinal: false})
+}
+
+// baseline returns the text a snapshot must be compared against.
+func (a *answerAccumulator) baseline() string {
+	return a.answer.String()
+}
+
+// emittedBytes returns everything that went out, injected text included.
+func (a *answerAccumulator) emittedBytes() int {
+	return a.answer.Len() + a.injected
+}
+
 // emptyTurn reports whether a finished turn produced nothing the caller can
-// use. Generated images and web-search queries both reach accText, so text is
-// the only content channel that has to be checked alongside the tool calls.
-func emptyTurn(accText string, toolCalls []ToolCall) bool {
-	return accText == "" && len(toolCalls) == 0
+// use. A turn that answered with an image and no words still produced
+// something, which is why the injected count is read here.
+func (a *answerAccumulator) emptyTurn(toolCalls []ToolCall) bool {
+	return a.emittedBytes() == 0 && len(toolCalls) == 0
 }
 
 // parseTurnResult reports the backend's verdict on a finished turn, or nil when

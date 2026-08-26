@@ -7,6 +7,7 @@ import { useI18n } from './i18n'
 import { ApiKeyGate } from './components/ApiKeyGate'
 import { ChatPane } from './components/ChatPane'
 import { Sidebar } from './components/Sidebar'
+import type { MemoryState } from './components/Sidebar'
 
 /** How many session-only rows get a title fetched from their transcript. */
 const titleHydrationLimit = 30
@@ -120,6 +121,11 @@ export function App() {
   // otherwise show the stored value as one the catalog does not carry.
   const [model, setModel] = useState(() => readCookie(modelCookie) || 'gpt-5.5-reasoning')
 
+  // The account's Copilot memory setting. Null until it has been read, and it
+  // stays null when the read failed, so the control is absent rather than
+  // showing a state it cannot vouch for.
+  const [memory, setMemory] = useState<MemoryState | null>(null)
+
   const [rows, setRows] = useState<ConversationRow[]>([])
   const [rowsLoaded, setRowsLoaded] = useState(false)
   const [activeId, setActiveId] = useState('')
@@ -151,6 +157,10 @@ export function App() {
       if (err.status === 401) {
         setAuthRequired(true)
         setNotice({ key: 'notice.authRequired' })
+        return
+      }
+      if (err.key) {
+        setNotice({ key: err.key })
         return
       }
       setNotice({ text: `${err.code}: ${err.message}` })
@@ -310,6 +320,55 @@ export function App() {
     if (!unlocked) return
     void refreshRows()
   }, [refreshRows, unlocked])
+
+  useEffect(() => {
+    if (!unlocked) return
+    api
+      .fetchPersonalization()
+      .then((flags) =>
+        setMemory({
+          enabled: flags.memory_enabled,
+          allowedByTenant: flags.personalization_allowed_by_tenant,
+          saving: false,
+        }),
+      )
+      // The gateway works without this setting, so a failed read hides the
+      // control and reports itself rather than blocking the interface.
+      .catch(report)
+  }, [report, unlocked])
+
+  const changeMemory = useCallback(
+    (enabled: boolean) => {
+      setMemory((previous) => (previous ? { ...previous, saving: true } : previous))
+      api
+        .setMemoryEnabled(enabled)
+        // The gateway verifies the change upstream, so what it answers is the
+        // state to render, not the value that was asked for.
+        .then((flags) =>
+          setMemory({
+            enabled: flags.memory_enabled,
+            allowedByTenant: flags.personalization_allowed_by_tenant,
+            saving: false,
+          }),
+        )
+        .catch((err) => {
+          // A failed change must not leave the control showing the value it
+          // failed to set, so the read decides what is true.
+          report(err)
+          api
+            .fetchPersonalization()
+            .then((flags) =>
+              setMemory({
+                enabled: flags.memory_enabled,
+                allowedByTenant: flags.personalization_allowed_by_tenant,
+                saving: false,
+              }),
+            )
+            .catch(() => setMemory(null))
+        })
+    },
+    [report],
+  )
 
   const openRow = useCallback(
     async (row: ConversationRow) => {
@@ -493,6 +552,9 @@ export function App() {
               ...last,
               content: delta.content ? last.content + delta.content : last.content,
               thinking: delta.reasoning ? (last.thinking ?? '') + delta.reasoning : last.thinking,
+              // A notice covers the wait, so the first content replaces it.
+              // Nothing has to be taken back: it was never part of the answer.
+              notice: delta.content ? undefined : (delta.notice ?? last.notice),
             }
             return next
           })
@@ -633,10 +695,12 @@ export function App() {
         rows={rows}
         activeId={activeId}
         remoteListFailed={remoteListFailed}
+        memory={memory}
         onOpen={openRow}
         onNew={startNew}
         onDelete={removeRow}
         onRename={renameRow}
+        onMemoryChange={changeMemory}
       />
       <ChatPane
         messages={messages}

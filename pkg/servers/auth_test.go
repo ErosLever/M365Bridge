@@ -217,3 +217,58 @@ func TestAPasswordAloneLeavesTheAPIOpen(t *testing.T) {
 		t.Error("a request with no credential was refused while no API key is configured")
 	}
 }
+
+// flushCountingWriter counts the flushes that reach the writer the server hands
+// the middleware, rather than one a wrapper in front of it may have swallowed.
+type flushCountingWriter struct {
+	*httptest.ResponseRecorder
+	flushes int
+}
+
+func (w *flushCountingWriter) Flush() {
+	w.flushes++
+	w.ResponseRecorder.Flush()
+}
+
+// Every streaming handler asserts http.Flusher on the writer it was given and
+// answers 500 "Streaming not supported" when the assertion fails, so wrapping
+// the writer in a middleware type without a Flush method takes down all seven
+// SSE routes at once. withAuth reaches its handler through three separate
+// paths, and the writer has to arrive intact on each of them.
+func TestWithAuthPreservesTheSSEFlusher(t *testing.T) {
+	cases := []struct {
+		name   string
+		api    *APIServer
+		method string
+		key    string
+	}{
+		{"no credential configured", authServer(""), http.MethodPost, ""},
+		{"valid credential", authServer("", "k1"), http.MethodPost, "k1"},
+		{"preflight", authServer("", "k1"), http.MethodOptions, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &flushCountingWriter{ResponseRecorder: httptest.NewRecorder()}
+			handler := tc.api.withAuth(func(w http.ResponseWriter, _ *http.Request) {
+				flusher, ok := w.(http.Flusher)
+				if !ok {
+					t.Fatal("withAuth removed http.Flusher from the writer")
+				}
+				_, _ = w.Write([]byte("data: first\n\n"))
+				flusher.Flush()
+				_, _ = w.Write([]byte("data: second\n\n"))
+				flusher.Flush()
+			})
+
+			req := httptest.NewRequest(tc.method, "/v1/chat/completions", nil)
+			if tc.key != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.key)
+			}
+			handler(rec, req)
+
+			if rec.flushes != 2 {
+				t.Errorf("Flush reached the underlying writer %d times, want 2", rec.flushes)
+			}
+		})
+	}
+}

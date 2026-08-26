@@ -6,6 +6,10 @@
   "sidebar.rename": "Yeniden adlandır",
   "sidebar.delete": "Sil",
   "sidebar.deleteConfirm": "\"{title}\" silinsin mi?",
+  "settings.memory": "Copilot memory",
+  "settings.memoryHint": "M365 bu memory'yi hesabınızda tutar ve yeni olanlar dahil her konuşmaya ulaşır. Kapatmak, gerçek M365 hesabınızdaki ayarı değiştirir.",
+  "settings.memoryTenantOff": "Tenant'ınız Copilot personalization'a izin vermiyor, bu yüzden buradan değiştirilemez.",
+
   "sidebar.empty": "Henüz konuşma yok.",
   "sidebar.remoteListFailed": "M365 konuşma listesi okunamadı, bu yüzden yalnızca bu gateway üzerinden açılan konuşmalar görünüyor. Listenin tamamı için M365 web cookie'leri gerekiyor.",
 
@@ -25,12 +29,16 @@
   "chat.stop": "Durdur",
   "chat.importHistory": "Geçmişi yükle",
   "chat.importing": "Yükleniyor…",
+  "chat.notice.image_generating": "Görsel oluşturuluyor, bu yaklaşık bir dakika sürer…",
 
   "message.you": "sen",
   "message.assistant": "asistan",
   "message.error": "hata",
   "message.showThinking": "Düşünceyi göster",
   "message.hideThinking": "Düşünceyi gizle",
+
+  "image.loading": "Görsel yükleniyor…",
+  "image.missing": "Bu görsele artık ulaşılamıyor.",
 
   "model.unknown": "{model} (listede yok)",
   "model.thinks": " · düşünür",
@@ -46,5 +54,8 @@
 
   "notice.authRequired": "Bu gateway bir API key istiyor.",
   "notice.foreignConversation": "Bu konuşma bu gateway dışında başlamış. Buradan devam edebilirsin, ya da geçmişini M365 sayfasından yükleyebilirsin.",
-  "notice.renameBeforeSend": "Bu konuşma henüz gönderilmedi, adlandırmak için önce bir mesaj yaz."
+  "notice.renameBeforeSend": "Bu konuşma henüz gönderilmedi, adlandırmak için önce bir mesaj yaz.",
+
+  "error.noBody": "Gateway gövdesiz cevap döndürdü.",
+  "error.streamFailed": "Stream, cevap tamamlanmadan koptu."
 }

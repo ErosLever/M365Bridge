@@ -23,6 +23,8 @@ var RenameFile = os.Rename
 // The data goes to a temporary file in the same directory, which is synced and
 // closed before the rename. A rename within one directory either happens or
 // does not, so a reader sees the old file or the new one and never a mixture.
+// The directory is synced after the rename, because syncing the file commits
+// its contents and not the name that points at them.
 func Write(path string, data []byte, mode os.FileMode) (returnErr error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -58,5 +60,29 @@ func Write(path string, data []byte, mode os.FileMode) (returnErr error) {
 	if err := RenameFile(temporaryPath, path); err != nil {
 		return fmt.Errorf("failed to replace file: %w", err)
 	}
+	// The rename itself lives in the directory, and syncing the file does not
+	// commit it. Without this a power cut just after a successful write can
+	// leave the directory entry pointing at the old file, so the write is lost
+	// rather than torn. A filesystem that refuses to sync a directory is not a
+	// failed write, so the error is logged by the caller's absence of one: the
+	// data is already on disk either way.
+	syncDir(dir)
 	return nil
+}
+
+// syncDir commits a rename in dir. The error is deliberately dropped: the file
+// contents are already synced, some platforms refuse to open a directory for
+// sync at all, and failing a write that succeeded would be the worse outcome.
+func syncDir(dir string) {
+	// dir is filepath.Dir of the path Write was given, and every caller holds
+	// that path as a constant under the gitignored data/ tree. The handle is
+	// opened only to Sync the directory: nothing is read from it and nothing is
+	// written through it, so it carries no file contents either way.
+	// #nosec G304
+	handle, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	defer func() { _ = handle.Close() }()
+	_ = handle.Sync()
 }

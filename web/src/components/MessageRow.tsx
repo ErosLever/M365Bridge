@@ -42,6 +42,13 @@ export function MessageRow({ message, streaming }: Props) {
       )}
       {/* Only an answer is markdown. What the user typed is shown exactly as
           they typed it, because an asterisk in a question is an asterisk. */}
+      {/* What the turn is waiting on, while it has nothing to show yet. M365
+          answers a picture prompt by going quiet for a minute or more. The line
+          is not part of the answer and needs no removing: the first content
+          delta clears it. */}
+      {message.notice && !message.content && (
+        <div className="notice-line">{t(`chat.notice.${message.notice}`)}</div>
+      )}
       <div className="body">
         {message.role === 'assistant' ? <Markdown text={message.content} /> : message.content}
         {streaming && !message.content && <span className="cursor">▍</span>}
