@@ -1,4 +1,4 @@
-# [M365Bridge](https://github.com/KilimcininKorOglu/M365Bridge) + Auth tokens via Browser Extension
+# [M365Bridge](https://github.com/KilimcininKorOglu/M365Bridge) + Auth tokens provisioning UI
 
 A Go implementation that converts Microsoft 365 Copilot's WebSocket interface to OpenAI/Anthropic compatible HTTP API. Point any client that speaks either protocol at this service and it works: Claude Code, Codex, Cursor, Cline, the OpenAI and Anthropic SDKs, or your own code.
 On top of the original [M365Bridge](https://github.com/KilimcininKorOglu/M365Bridge), here a browser extension helps securely transferring auth tokens from the user's browser (logged in on M365) to the M365Bridge running process.
