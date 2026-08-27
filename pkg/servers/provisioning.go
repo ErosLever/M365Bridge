@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,6 +156,43 @@ func validExtensionOrigin(origin string) bool {
 	return extensionID != "" && !strings.ContainsAny(extensionID, "/\r\n?#")
 }
 
+// validRelayReferer reports whether referer names a page under
+// microsoft.com, microsoftonline.com, or the microsoft TLD (e.g.
+// m365.cloud.microsoft) over HTTPS. This is a courtesy check against other
+// pages opening the relay, not the security boundary — the encrypted
+// envelope's own AEAD authentication is what actually protects
+// /provision/v1/session.
+func validRelayReferer(referer string) bool {
+	u, err := url.Parse(referer)
+	if err != nil || u.Scheme != "https" {
+		return false
+	}
+	host := u.Hostname()
+	for _, domain := range []string{"microsoft.com", "microsoftonline.com", "microsoft"} {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameOrigin reports whether origin (from a request's Origin header) names
+// this same server. Browsers attach Origin even to same-origin POSTs, and
+// the relay page's fetch to /provision/v1/session is exactly that — it must
+// not be judged against the M365_PROVISION_ORIGINS extension allowlist,
+// which governs cross-origin callers only.
+func sameOrigin(r *http.Request, origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return u.Scheme == scheme && u.Host == r.Host
+}
+
 func (handler *provisioningHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -164,7 +202,7 @@ func (handler *provisioningHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 	}
 
 	origin := r.Header.Get("Origin")
-	if origin != "" {
+	if origin != "" && !sameOrigin(r, origin) {
 		if handler.anyOrigin || len(handler.origins) == 0 {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 		} else {
@@ -277,6 +315,71 @@ func (handler *provisioningHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 	handler.clearFailures(r.RemoteAddr)
 	logging.Info("M365 browser session provisioned successfully")
 	handler.sendJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// relayHTML is a same-origin bounce page. The bookmarklet on
+// login.microsoftonline.com can't fetch this server directly over HTTPS
+// without hitting mixed-content blocking, so it opens this page in a new
+// tab instead: same-origin http -> http, no mixed content, no CORS needed.
+// The encrypted envelope travels only in the URL fragment (never sent to
+// any server on navigation) and is cleared from history before the POST
+// fires.
+const relayHTML = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>M365Bridge</title></head>
+<body>
+<h1 style="text-align:center">Provisioning&hellip;</h1>
+<script>
+(async () => {
+  const params = new URLSearchParams(location.hash.slice(1));
+  const nonce = params.get("n");
+  const ciphertext = params.get("c");
+  history.replaceState(null, "", location.pathname);
+  let ok = false, status = 0;
+  try {
+    const res = await fetch("/provision/v1/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 1, nonce, ciphertext })
+    });
+    ok = res.ok;
+    status = res.status;
+  } catch (e) {
+    status = 0;
+  }
+  window.opener?.postMessage({ source: "m365bridge-relay", ok, status }, "*");
+  window.close();
+})();
+</script>
+</body></html>`
+
+const relayRefererErrorHTML = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>M365Bridge</title></head>
+<body>Open this page from the M365Bridge bookmarklet on login.microsoftonline.com.</body></html>`
+
+// ServeRelay serves the same-origin bounce page the bookmarklet opens in a
+// new tab to work around mixed-content blocking. See relayHTML.
+func (handler *provisioningHandler) ServeRelay(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if !handler.enabled {
+		handler.sendError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		handler.sendError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	if !validRelayReferer(r.Header.Get("Referer")) {
+		logging.Warnf("Relay request rejected: Referer=%q Origin=%q", r.Header.Get("Referer"), r.Header.Get("Origin"))
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(relayRefererErrorHTML))
+		return
+	}
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(relayHTML))
 }
 
 func (handler *provisioningHandler) rejectEncryptedRequest(w http.ResponseWriter, r *http.Request, reason string) {

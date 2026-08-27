@@ -266,6 +266,132 @@ func TestProvisioningHandlerHTTPBoundary(t *testing.T) {
 			t.Fatalf("denied origin was reflected as %q", got)
 		}
 	})
+
+	t.Run("same-origin POST bypasses the extension allowlist", func(t *testing.T) {
+		// The relay page's own fetch to /provision/v1/session is
+		// same-origin, but browsers still attach Origin to it. That Origin
+		// must not be judged against M365_PROVISION_ORIGINS, which governs
+		// cross-origin extension callers only — otherwise the relay can
+		// never provision anything.
+		request := httptest.NewRequest(http.MethodPost, "http://example.com/provision/v1/session", strings.NewReader("{}"))
+		request.Header.Set("Origin", "http://example.com")
+		request.Header.Set("Content-Type", "text/plain")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code == http.StatusForbidden {
+			t.Fatalf("same-origin request rejected as origin_not_allowed: %s", recorder.Body.String())
+		}
+		if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "" {
+			t.Fatalf("same-origin request got a CORS header %q, want none", got)
+		}
+	})
+}
+
+func TestValidRelayReferer(t *testing.T) {
+	valid := []string{
+		"https://login.microsoftonline.com/common/oauth2/authorize",
+		"https://account.microsoftonline.com/",
+		"https://login.microsoft.com/",
+		"https://microsoft.com/",
+		"https://microsoftonline.com/",
+		"https://m365.cloud.microsoft/chat",
+		"https://microsoft/",
+	}
+	for _, referer := range valid {
+		if !validRelayReferer(referer) {
+			t.Errorf("validRelayReferer(%q) = false, want true", referer)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"not a url",
+		"http://login.microsoftonline.com/",
+		"https://evil.example/",
+		"https://microsoftonline.com.evil.example/",
+		"https://notmicrosoft.com/",
+		"https://microsoft.evil.example/",
+		"https://evilmicrosoft/",
+	}
+	for _, referer := range invalid {
+		if validRelayReferer(referer) {
+			t.Errorf("validRelayReferer(%q) = true, want false", referer)
+		}
+	}
+}
+
+func TestProvisioningHandlerServeRelay(t *testing.T) {
+	secret := strings.Repeat("s", provisionSecretMinLength)
+	handler, err := newProvisioningHandler(&models.Config{ProvisionSecret: secret}, func([]auth.SSOCookie) error { return nil })
+	if err != nil {
+		t.Fatalf("create enabled handler: %v", err)
+	}
+
+	t.Run("valid referer", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/provision/v1/relay", nil)
+		request.Header.Set("Referer", "https://login.microsoftonline.com/common/oauth2/authorize")
+		recorder := httptest.NewRecorder()
+		handler.ServeRelay(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+		}
+		if !strings.Contains(recorder.Body.String(), "/provision/v1/session") {
+			t.Fatal("relay body does not reference /provision/v1/session")
+		}
+	})
+
+	t.Run("missing referer", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/provision/v1/relay", nil)
+		recorder := httptest.NewRecorder()
+		handler.ServeRelay(recorder, request)
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+		}
+		if strings.Contains(recorder.Body.String(), "/provision/v1/session") {
+			t.Fatal("relay script served despite missing referer")
+		}
+	})
+
+	t.Run("non-https referer", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/provision/v1/relay", nil)
+		request.Header.Set("Referer", "http://login.microsoftonline.com/")
+		recorder := httptest.NewRecorder()
+		handler.ServeRelay(recorder, request)
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+		}
+	})
+
+	t.Run("unrelated host referer", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/provision/v1/relay", nil)
+		request.Header.Set("Referer", "https://evil.example/")
+		recorder := httptest.NewRecorder()
+		handler.ServeRelay(recorder, request)
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+		}
+	})
+
+	t.Run("wrong method", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodPost, "/provision/v1/relay", nil)
+		request.Header.Set("Referer", "https://login.microsoftonline.com/")
+		recorder := httptest.NewRecorder()
+		handler.ServeRelay(recorder, request)
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+		}
+	})
+
+	t.Run("disabled handler", func(t *testing.T) {
+		disabled := &provisioningHandler{}
+		request := httptest.NewRequest(http.MethodGet, "/provision/v1/relay", nil)
+		request.Header.Set("Referer", "https://login.microsoftonline.com/")
+		recorder := httptest.NewRecorder()
+		disabled.ServeRelay(recorder, request)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+		}
+	})
 }
 
 func TestProvisioningHandlerOptionalAndWildcardOrigins(t *testing.T) {

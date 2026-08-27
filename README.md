@@ -13,6 +13,8 @@ On top of the original [M365Bridge](https://github.com/KilimcininKorOglu/M365Bri
 flowchart LR
     Browser[Browser signed in to Microsoft 365]
     Extension[M365Bridge browser extension]
+    Bookmarklet[Extension-free bookmarklet]
+    Relay[Same-origin relay tab GET /provision/v1/relay]
     Secret[Provisioning secret]
     Origin[Optional origin allowlist]
     Endpoint[POST /provision/v1/session]
@@ -20,8 +22,12 @@ flowchart LR
     Disk[(Local data directory)]
 
     Browser -->|Microsoft login cookies| Extension
+    Browser -->|Cookies copied from DevTools| Bookmarklet
     Secret -->|Derives AES-GCM key| Extension
+    Secret -->|Derives AES-GCM key| Bookmarklet
     Extension -->|Encrypted cookies, timestamp, request ID| Endpoint
+    Bookmarklet -->|Opens with the encrypted envelope in the URL fragment| Relay
+    Relay -->|Same-origin POST: encrypted cookies, timestamp, request ID| Endpoint
     Origin -.->|Optional CORS defense in depth| Endpoint
     Secret -->|Authenticates and decrypts payload| Endpoint
     Endpoint -->|Validated cookies and derived identity| Runtime
@@ -29,7 +35,7 @@ flowchart LR
     Disk -->|Provisioning secret and encrypted token cache| Endpoint
 ```
 
-The provisioned browser cookies and derived identity remain in memory. Local persistent data can include the provisioning secret, encrypted token cache, cache data, transcripts, and the token-encryption key. Exact extension origins are an optional browser-facing restriction; the provisioning secret remains the authorization boundary.
+The provisioned browser cookies and derived identity remain in memory. Local persistent data can include the provisioning secret, encrypted token cache, cache data, transcripts, and the token-encryption key. Exact extension origins are an optional browser-facing restriction; the provisioning secret remains the authorization boundary. The bookmarklet's relay tab exists only to route around mixed-content blocking (the sign-in page is HTTPS, the bridge is normally plain HTTP) — it carries the same already-encrypted envelope, and only responds to requests referred from a Microsoft website (where the `ESTSAUTH`/`ESTSAUTHPERSISTENT` cookies are visible).
 
 ### API and MCP calls
 
@@ -161,7 +167,7 @@ docker compose \
 
 The override mounts the same secret at `/run/secrets/m365_provision_secret` in both services. Without the override, both services resolve the secret through the shared `data/provision-secret` file.
 
-> **Note:** Prefer not to install a browser extension, or want to build from source instead of using Docker? The upstream project documents both: a manual, extension-free token setup using a browser console snippet and its own setup wizard ([Connecting your Microsoft 365 account](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#connecting-your-microsoft-365-account)), and a from-source build ([Option C: Build from source](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#option-c-build-from-source)).
+> **Note:** Want to build from source instead of using Docker? The upstream project documents this: a from-source build ([Option C: Build from source](https://github.com/KilimcininKorOglu/M365Bridge/blob/main/README.md#option-c-build-from-source)).
 
 #### Step 3: Install the extension
 
@@ -170,6 +176,33 @@ The Chromium package supports Google Chrome, Microsoft Edge, and other compatibl
 - **Google Chrome:** Open `chrome://extensions`, enable **Developer mode**, select **Load unpacked**, and choose `extension/dist/chromium`.
 - **Microsoft Edge:** Open `edge://extensions`, enable **Developer mode**, select **Load unpacked**, and choose `extension/dist/chromium`.
 - **Firefox:** Open `about:debugging#/runtime/this-firefox`, select **Load Temporary Add-on**, and choose `extension/dist/firefox/manifest.json`.
+
+#### Alternative: extension-free bookmarklet
+
+Prefer not to install a browser extension? Create a bookmark whose URL
+is `javascript:` followed by the contents of
+[`extension/bookmarklet.min.js`](extension/bookmarklet.min.js) (most
+browsers keep the `javascript:` prefix if you paste the code into an
+existing bookmark's URL field — check that it's still there before
+saving). Sign in to
+[https://m365.cloud.microsoft](https://m365.cloud.microsoft), click the
+bookmark, and an on-page overlay walks you through the same
+provisioning flow as the extension: copy the `ESTSAUTH` /
+`ESTSAUTHPERSISTENT` cookies from DevTools > Application > Cookies (the
+overlay auto-detects and fills each one as you copy it) and the
+provisioning secret from `data/provision-secret`, then submit.
+
+Because the bridge normally runs on plain `http://` and the Microsoft
+sign-in page is `https://`, the bookmarklet can't `fetch()` the
+provisioning endpoint directly — browsers block that as mixed content.
+It works around this by opening a small same-origin relay tab on the
+bridge itself (`GET /provision/v1/relay`) that performs the POST and
+reports the result back; only the already AES-GCM-encrypted envelope
+ever travels in that tab's URL, and the relay only responds to requests
+referred from a page under `microsoft.com`, `microsoftonline.com`, or
+the `.microsoft` TLD (e.g. `m365.cloud.microsoft`). See
+[`extension/MINIFICATION.md`](extension/MINIFICATION.md) for how the
+bookmarklet is built from readable source down to that one-line file.
 
 #### Step 4: Configure and start M365Bridge
 
@@ -718,7 +751,7 @@ pkg/
     cli.go                 # CLI server, interactive mode
     errors.go              # The one error shape every route reports
     mcp.go                 # JSON-RPC 2.0 Model Context Protocol server
-    provisioning.go        # Browser extension session provisioning (/provision/v1/session)
+    provisioning.go        # Session provisioning (/provision/v1/session) and the bookmarklet's mixed-content relay (/provision/v1/relay)
     sessions.go            # The session to conversation mapping routes
     stopsequence.go        # Stop sequence cutting, including the streaming writer
     transcripts.go         # The only place message content reaches disk
@@ -728,7 +761,7 @@ pkg/
   toolcalling/             # Simulated caller-defined tool calling, its parsers and detectors
   webui/embed.go           # The built interface, compiled into the binary
 go.mod                     # Module: github.com/KilimcininKorOglu/M365Bridge, Go 1.26
-extension/                 # Browser extension for secure M365 session provisioning
+extension/                 # Browser extension and extension-free bookmarklet for secure M365 session provisioning
 web/                       # Vite project for the interface; make ui builds it into pkg/webui/dist
 docs/                      # Screenshots used by the READMEs
 data/                      # Runtime data (gitignored): tokens/, setup.json, cache/, provisioning secret, transcripts/

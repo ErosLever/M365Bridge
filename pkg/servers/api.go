@@ -396,6 +396,7 @@ func (api *APIServer) Start(port int) error {
 	mux.HandleFunc("/v1/sessions/", api.withAuth(api.handleSession))
 	mux.HandleFunc("/v1/models", api.handleModels)
 	mux.HandleFunc("/provision/v1/session", api.provision.ServeHTTP)
+	mux.HandleFunc("/provision/v1/relay", api.provision.ServeRelay)
 	// Codex probes /v1/health before it sends any chat request and treats a
 	// 404 as an unreachable provider. It stays public alongside /v1/models
 	// because the probe carries no credential.
