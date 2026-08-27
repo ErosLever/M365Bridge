@@ -3,14 +3,14 @@
 Three files, three jobs. Don't hand-edit `bookmarklet.min.js` — regenerate it
 from `bookmarklet.compact.js` via uglify-js instead (command at the bottom).
 
-## bookmarklet.js (10737 bytes) — source of truth
+## bookmarklet.js (10712 bytes) — source of truth
 
 Fully readable: full identifiers (`estsauth`, `estsauthpersistent`, `secret`,
 `endpoint`, `persistentSkipped`, `lastSeenClip`), comments, template-literal
 HTML with indentation. This is what you read, review, and diff. Never
 minified by hand — always the input to the next stage.
 
-## bookmarklet.compact.js (7310 bytes) — manual compaction
+## bookmarklet.compact.js (7298 bytes) — manual compaction
 
 Same logic, restructured by hand to remove *redundancy a minifier can't see*
 — things that require understanding what the code means, not just its
@@ -69,7 +69,7 @@ Verify after every hand edit: `node --check bookmarklet.compact.js`,
 then re-diff behavior against `bookmarklet.js` (same status messages, same
 field order, same visual result) before regenerating the `.min.js`.
 
-## bookmarklet.min.js (4530 bytes) — mechanical minification
+## bookmarklet.min.js (4519 bytes) — mechanical minification
 
 Generated from `bookmarklet.compact.js` by uglify-js, which does the parts
 that ARE purely mechanical and safe to automate:
@@ -99,7 +99,7 @@ alternatives — footprint and output size for each, run against
 
 | tool | unpacked footprint | deps | output size |
 |---|---:|---:|---:|
-| **uglify-js** (now used) | ~1.3 MB | 0 | **4530 bytes** |
+| **uglify-js** (now used) | ~1.3 MB | 0 | **4519 bytes** |
 | terser (previous) | ~2.3 MB | 4 | 4594 bytes |
 | google-closure-compiler, `SIMPLE_OPTIMIZATIONS` | ~70 MB (JS wrapper + native Java binary) | 5 + platform binaries | 5116 bytes |
 | esprima + escodegen | ~0.4 MB combined | 4 (escodegen's) | N/A — can't parse the file |
@@ -139,12 +139,12 @@ still parses.
 
 | file                    | bytes | bytes cut by this stage | role                             |
 |-------------------------|------:|-------------------------:|-----------------------------------|
-| bookmarklet.js          | 10737 |                        — | source of truth, hand-edited      |
-| bookmarklet.compact.js  |  7310 |     3427 (manual, from bookmarklet.js) | hand-compacted intermediate       |
-| bookmarklet.min.js      |  4530 |     2780 (uglify-js, from compact.js)  | uglify-js output, paste into a bookmark |
+| bookmarklet.js          | 10712 |                        — | source of truth, hand-edited      |
+| bookmarklet.compact.js  |  7298 |     3414 (manual, from bookmarklet.js) | hand-compacted intermediate       |
+| bookmarklet.min.js      |  4519 |     2779 (uglify-js, from compact.js)  | uglify-js output, paste into a bookmark |
 
-10737 bytes -> 4530 bytes overall: 6207 bytes removed, 57.8% smaller than
-the original. Of those 6207 bytes, manual compaction cut 3427 and
-uglify-js cut 2780 — the two stages are close to even, with manual
-compaction doing slightly more (55.2% of the 6207-byte reduction came from
-compaction, 44.8% from uglify-js).
+10712 bytes -> 4519 bytes overall: 6193 bytes removed, 57.8% smaller than
+the original. Of those 6193 bytes, manual compaction cut 3414 and
+uglify-js cut 2779 — the two stages are close to even, with manual
+compaction doing slightly more (55.1% of the 6193-byte reduction came from
+compaction, 44.9% from uglify-js).

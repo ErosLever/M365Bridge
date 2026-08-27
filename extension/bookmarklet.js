@@ -152,7 +152,7 @@
     catch { /* clipboard read denied — user can still paste manually */ }
   }, 700);
 
-  status("Copy the ESTSAUTHPERSISTENT cookie value from DevTools > Application > Cookies (or ESTSAUTH if ESTSAUTHPERSISTENT isn't present).");
+  status("Copy the ESTSAUTHPERSISTENT and optionally ESTSAUTH cookie values from DevTools > Application > Cookies.");
 
   $("#close").addEventListener("click", () => { clearInterval(poll); root.remove(); delete window.__m365bpOverlay; });
 

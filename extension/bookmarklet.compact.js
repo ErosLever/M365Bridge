@@ -135,7 +135,7 @@
     catch { }
   }, 700);
 
-  status(`Copy the ${EP} cookie value from DevTools > Application > Cookies (or ${EA} if ${EP} isn't present).`);
+  status(`Copy the ${EP} and optionally ${EA} cookie values from DevTools > Application > Cookies.`);
 
   on($("#close"), "click", () => { clearInterval(poll); root.remove(); delete W.__mbo; });
 
