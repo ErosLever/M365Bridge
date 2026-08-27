@@ -26,7 +26,7 @@ flowchart LR
     Runtime[In-memory session state]
     Disk[(Local data directory)]
 
-    Browser -->|Cookies, login or DevTools| Client
+    Browser -->|ESTSAUTH* cookies| Client
     Secret -->|Derives AES-GCM key| Client
     Extension -->|Encrypted envelope| Endpoint
     Bookmarklet -->|Envelope in URL fragment| Relay
@@ -37,6 +37,8 @@ flowchart LR
     Runtime -.->|Not persisted| Runtime
     Disk -->|Secret, encrypted cache| Endpoint
 ```
+
+Both the extension and the bookmarklet need only the `ESTSAUTH` and `ESTSAUTHPERSISTENT` cookies from the current Microsoft 365 browsing session — the extension reads the browser's cookie jar for `login.microsoftonline.com` but [filters to those two names](https://github.com/ErosLever/M365Bridge/blob/main/extension/popup.js#L107) before using anything, while the bookmarklet, a page script with no cookie API access at all, has the user copy them in manually via DevTools. Neither monitors sign-in activity or touches any other cookie.
 
 The provisioned browser cookies and derived identity remain in memory. Local persistent data can include the provisioning secret, encrypted token cache, cache data, transcripts, and the token-encryption key. Exact extension origins are an optional browser-facing restriction; the provisioning secret remains the authorization boundary. The bookmarklet's relay tab exists only to route around mixed-content blocking (the sign-in page is HTTPS, the bridge is normally plain HTTP) — it carries the same already-encrypted envelope, and only responds to requests referred from a Microsoft website (where the `ESTSAUTH`/`ESTSAUTHPERSISTENT` cookies are visible).
 
