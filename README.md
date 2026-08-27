@@ -5,6 +5,13 @@ On top of the original [M365Bridge](https://github.com/KilimcininKorOglu/M365Bri
 
 ![The browser interface answering a question with sources](docs/webui-en.png)
 
+Two ways to provision a session — the browser extension's popup (left) or the extension-free bookmarklet's on-page overlay (right):
+
+<p>
+  <img src="docs/m365-extension.png" alt="The browser extension's popup, showing the bridge endpoint, provisioning secret, and a Provision button" height="360">
+  <img src="docs/m365-bookmarklet.png" alt="The extension-free bookmarklet's on-page overlay, showing the cookie and provisioning secret fields" height="360">
+</p>
+
 ## Architecture
 
 ### Session provisioning
