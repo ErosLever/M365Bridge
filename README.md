@@ -12,27 +12,30 @@ On top of the original [M365Bridge](https://github.com/KilimcininKorOglu/M365Bri
 ```mermaid
 flowchart LR
     Browser[Browser signed in to Microsoft 365]
-    Extension[M365Bridge browser extension]
-    Bookmarklet[Extension-free bookmarklet]
-    Relay[Same-origin relay tab GET /provision/v1/relay]
     Secret[Provisioning secret]
+
+    subgraph Client [Extension or bookmarklet]
+        direction TB
+        Extension[Browser extension]
+        Bookmarklet[Extension-free bookmarklet]
+    end
+
+    Relay["Relay tab: GET /provision/v1/relay"]
     Origin[Optional origin allowlist]
-    Endpoint[POST /provision/v1/session]
+    Endpoint["POST /provision/v1/session"]
     Runtime[In-memory session state]
     Disk[(Local data directory)]
 
-    Browser -->|Microsoft login cookies| Extension
-    Browser -->|Cookies copied from DevTools| Bookmarklet
-    Secret -->|Derives AES-GCM key| Extension
-    Secret -->|Derives AES-GCM key| Bookmarklet
-    Extension -->|Encrypted cookies, timestamp, request ID| Endpoint
-    Bookmarklet -->|Opens with the encrypted envelope in the URL fragment| Relay
-    Relay -->|Same-origin POST: encrypted cookies, timestamp, request ID| Endpoint
-    Origin -.->|Optional CORS defense in depth| Endpoint
-    Secret -->|Authenticates and decrypts payload| Endpoint
-    Endpoint -->|Validated cookies and derived identity| Runtime
-    Runtime -.->|Not persisted across restarts| Runtime
-    Disk -->|Provisioning secret and encrypted token cache| Endpoint
+    Browser -->|Cookies, login or DevTools| Client
+    Secret -->|Derives AES-GCM key| Client
+    Extension -->|Encrypted envelope| Endpoint
+    Bookmarklet -->|Envelope in URL fragment| Relay
+    Relay -->|Same-origin POST| Endpoint
+    Origin -.->|CORS defense in depth| Endpoint
+    Secret -->|Decrypts payload| Endpoint
+    Endpoint -->|Validated identity| Runtime
+    Runtime -.->|Not persisted| Runtime
+    Disk -->|Secret, encrypted cache| Endpoint
 ```
 
 The provisioned browser cookies and derived identity remain in memory. Local persistent data can include the provisioning secret, encrypted token cache, cache data, transcripts, and the token-encryption key. Exact extension origins are an optional browser-facing restriction; the provisioning secret remains the authorization boundary. The bookmarklet's relay tab exists only to route around mixed-content blocking (the sign-in page is HTTPS, the bridge is normally plain HTTP) — it carries the same already-encrypted envelope, and only responds to requests referred from a Microsoft website (where the `ESTSAUTH`/`ESTSAUTHPERSISTENT` cookies are visible).
